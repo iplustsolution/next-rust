@@ -1,0 +1,6 @@
+# Every key is optional; these are the defaults made explicit.
+[app]
+directory = "app"
+
+[server]
+port = 3000

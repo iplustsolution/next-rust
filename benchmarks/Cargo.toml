@@ -1,0 +1,16 @@
+[package]
+name = "next-rust-benchmarks"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Benchmarks for Next Rust (run with `cargo run --release -p next-rust-benchmarks`)."
+
+[dependencies]
+next-rust-core = { path = "../crates/next-rust-core" }
+next-rust-router = { path = "../crates/next-rust-router" }
+next-rust-view = { path = "../crates/next-rust-view" }
+next-rust-server = { path = "../crates/next-rust-server" }
+next-rust-cache = { path = "../crates/next-rust-cache" }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "io-util", "time"] }
+bytes = "1"
+http = "1"

@@ -1,0 +1,50 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "examples/*", "benchmarks"]
+default-members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/next-rust/next-rust"
+homepage = "https://github.com/next-rust/next-rust"
+authors = ["Next Rust contributors"]
+
+[workspace.dependencies]
+# internal
+next-rust = { path = "crates/next-rust", version = "0.1.0" }
+next-rust-core = { path = "crates/next-rust-core", version = "0.1.0" }
+next-rust-router = { path = "crates/next-rust-router", version = "0.1.0" }
+next-rust-view = { path = "crates/next-rust-view", version = "0.1.0" }
+next-rust-assets = { path = "crates/next-rust-assets", version = "0.1.0" }
+next-rust-cache = { path = "crates/next-rust-cache", version = "0.1.0" }
+next-rust-server = { path = "crates/next-rust-server", version = "0.1.0", default-features = false }
+next-rust-macros = { path = "crates/next-rust-macros", version = "0.1.0" }
+next-rust-build = { path = "crates/next-rust-build", version = "0.1.0" }
+
+# external (every entry is justified in docs/dependencies.md)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_urlencoded = "0.7"
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+tokio = { version = "1", default-features = false }
+hyper = { version = "1", default-features = false }
+hyper-util = { version = "0.1", default-features = false }
+http = "1"
+http-body = "1"
+http-body-util = "0.1"
+bytes = "1"
+futures-util = { version = "0.3", default-features = false, features = ["alloc", "std"] }
+flate2 = "1"
+getrandom = "0.3"
+tokio-tungstenite = { version = "0.27", default-features = false, features = ["handshake"] }
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

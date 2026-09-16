@@ -1,0 +1,19 @@
+[package]
+name = "next-rust-view"
+description = "The Next Rust view layer: an escaping-by-default HTML DSL, components, metadata and a streaming renderer."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["next-rust", "html", "ssr", "template", "streaming"]
+categories = ["web-programming", "template-engine"]
+readme = "../../README.md"
+
+[dependencies]
+futures-util.workspace = true
+
+[dev-dependencies]
+futures-executor = "0.3"

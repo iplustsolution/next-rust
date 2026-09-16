@@ -1,0 +1,4 @@
+/target
+.next-rust/
+.env*.local
+.DS_Store

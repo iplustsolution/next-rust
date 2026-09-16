@@ -1,0 +1,22 @@
+[package]
+name = "next-rust-build"
+description = "Build-time code generation for Next Rust: turns the app directory into compiled route definitions (use from build.rs)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["next-rust", "build", "codegen", "routing"]
+categories = ["web-programming", "development-tools::build-utils"]
+readme = "../../README.md"
+
+[dependencies]
+next-rust-core.workspace = true
+next-rust-router.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+syn = { workspace = true, features = ["full", "parsing"] }
+proc-macro2 = { workspace = true, features = ["span-locations"] }
+quote.workspace = true

@@ -1,0 +1,22 @@
+[package]
+name = "next-rust-macros"
+description = "Procedural macros for Next Rust: #[client], #[server], #[server_action], css_module!, global_css!, asset!, action!."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["next-rust", "macros", "css-modules", "server-actions"]
+categories = ["web-programming"]
+readme = "../../README.md"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { workspace = true, features = ["full"] }
+quote.workspace = true
+proc-macro2.workspace = true
+next-rust-assets.workspace = true

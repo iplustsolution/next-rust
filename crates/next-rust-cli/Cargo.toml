@@ -1,0 +1,24 @@
+[package]
+name = "next-rust-cli"
+description = "The `next-rust` command-line tool: new, dev, build, start, routes, check, analyze, generate, doctor, docker."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["next-rust", "cli", "web", "framework"]
+categories = ["command-line-utilities", "web-programming"]
+readme = "../../README.md"
+
+[[bin]]
+name = "next-rust"
+path = "src/main.rs"
+
+[dependencies]
+next-rust-core.workspace = true
+next-rust-router.workspace = true
+next-rust-build.workspace = true
+serde.workspace = true
+serde_json.workspace = true

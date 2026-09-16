@@ -1,0 +1,35 @@
+[package]
+name = "next-rust"
+description = "Next Rust: a Rust-native full-stack web framework with filesystem routing, nested layouts, SSR, streaming, static generation and server actions."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+documentation = "https://docs.rs/next-rust"
+keywords = ["web", "framework", "ssr", "fullstack", "routing"]
+categories = ["web-programming", "web-programming::http-server"]
+readme = "../../README.md"
+
+[features]
+default = ["compression"]
+compression = ["next-rust-server/compression"]
+websocket = ["next-rust-server/websocket"]
+tracing = ["next-rust-server/tracing"]
+
+[dependencies]
+next-rust-core.workspace = true
+next-rust-router.workspace = true
+next-rust-view.workspace = true
+next-rust-cache.workspace = true
+next-rust-server = { workspace = true, default-features = false }
+next-rust-macros.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+bytes.workspace = true
+http.workspace = true
