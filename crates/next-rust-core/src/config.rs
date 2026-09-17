@@ -72,6 +72,8 @@ pub struct Config {
     pub headers: Vec<HeaderRule>,
     /// Free-form plugin configuration: `[plugins.my-plugin]`.
     pub plugins: BTreeMap<String, serde_json::Value>,
+    /// Tailwind CSS: `[tailwind]`.
+    pub tailwind: TailwindConfig,
 }
 
 impl Default for Config {
@@ -93,7 +95,108 @@ impl Default for Config {
             redirects: Vec::new(),
             headers: Vec::new(),
             plugins: BTreeMap::new(),
+            tailwind: TailwindConfig::default(),
         }
+    }
+}
+
+/// `[tailwind]`: Tailwind CSS generated from the classes used in the app.
+///
+/// ```toml
+/// [tailwind]
+/// enabled = true
+/// dark_mode = "class"
+/// plugins = ["@tailwindcss/typography"]
+///
+/// [tailwind.theme]                 # becomes @theme { --color-brand: …; }
+/// color-brand = "#f26b2a"
+/// font-display = "Inter, sans-serif"
+///
+/// [tailwind.utilities]             # becomes @utility …
+/// btn = "rounded-lg bg-brand px-4 py-2 font-semibold text-white"
+/// content-auto = { content-visibility = "auto" }
+///
+/// [tailwind.variants]              # becomes @custom-variant …
+/// theme-midnight = "&:where([data-theme=midnight] *)"
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct TailwindConfig {
+    /// Generate Tailwind CSS for the app. Off unless set.
+    pub enabled: bool,
+    /// Include Tailwind's base styles (Preflight).
+    pub preflight: bool,
+    /// When `dark:` applies.
+    pub dark_mode: TailwindDarkMode,
+    /// Theme variables, with or without the leading `--`:
+    /// `color-brand = "#f26b2a"`, `breakpoint-3xl = "120rem"`.
+    pub theme: BTreeMap<String, String>,
+    /// Custom utility classes: a list of Tailwind classes to combine, or CSS
+    /// declarations.
+    pub utilities: BTreeMap<String, TailwindUtility>,
+    /// Custom variants: name → selector (`&:where(…)`) or at-rule.
+    pub variants: BTreeMap<String, String>,
+    /// First-party plugins bundled with Tailwind, e.g. `@tailwindcss/typography`
+    /// and `@tailwindcss/forms`.
+    pub plugins: Vec<String>,
+    /// Classes to generate even if they don't appear in the source.
+    pub safelist: Vec<String>,
+    /// Extra directories to scan for classes, besides the app directory and `src/`.
+    pub sources: Vec<PathBuf>,
+    /// Raw CSS appended after everything else (`@keyframes`, `@layer`, …), for
+    /// what the options above can't express.
+    pub css: String,
+}
+
+impl Default for TailwindConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            preflight: true,
+            dark_mode: TailwindDarkMode::Media,
+            theme: BTreeMap::new(),
+            utilities: BTreeMap::new(),
+            variants: BTreeMap::new(),
+            plugins: Vec::new(),
+            safelist: Vec::new(),
+            sources: Vec::new(),
+            css: String::new(),
+        }
+    }
+}
+
+/// `[tailwind] dark_mode`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TailwindDarkMode {
+    /// Follow the operating system (`prefers-color-scheme`).
+    #[default]
+    Media,
+    /// When an ancestor has the `dark` class.
+    Class,
+    /// When an ancestor has `data-theme="dark"`.
+    Attribute,
+}
+
+/// A custom utility in `[tailwind.utilities]`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum TailwindUtility {
+    /// Tailwind classes combined with `@apply`: `"rounded-lg px-4 py-2"`.
+    Apply(String),
+    /// CSS declarations: `{ content-visibility = "auto" }`.
+    Declarations(BTreeMap<String, String>),
+}
+
+impl From<&str> for TailwindUtility {
+    fn from(classes: &str) -> Self {
+        Self::Apply(classes.to_owned())
+    }
+}
+
+impl From<String> for TailwindUtility {
+    fn from(classes: String) -> Self {
+        Self::Apply(classes)
     }
 }
 
@@ -245,11 +348,17 @@ pub struct AssetsConfig {
     pub optimize: bool,
     /// `Cache-Control` max-age (seconds) for files from `public/`.
     pub public_max_age: u64,
+    /// Release builds leave out CSS rules (from `global_css!` and
+    /// `css_module!`) whose classes or ids appear nowhere in the project.
+    pub prune_css: bool,
+    /// Class and id names to keep even though they don't appear in the
+    /// source, e.g. names assembled at runtime.
+    pub css_safelist: Vec<String>,
 }
 
 impl Default for AssetsConfig {
     fn default() -> Self {
-        Self { optimize: true, public_max_age: 0 }
+        Self { optimize: true, public_max_age: 0, prune_css: true, css_safelist: Vec::new() }
     }
 }
 

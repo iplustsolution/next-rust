@@ -193,6 +193,116 @@ a:focus-visible {
 }
 "####;
 
+/// `app/layout.rs` for Tailwind projects: no CSS file at all.
+pub const TW_LAYOUT_RS: &str = r####"use next_rust::prelude::*;
+
+pub fn metadata() -> Metadata {
+    Metadata::new()
+        .title("__APP_NAME__")
+        .title_template("%s · __APP_NAME__")
+        .description("Built with Next Rust.")
+        .icon("/favicon.svg")
+        .theme_color("#0e0f12")
+}
+
+// Styled with Tailwind CSS. The theme (colors, the `bg-dots` and `btn-brand`
+// utilities, the `rise` animation) is set in next-rust.toml under [tailwind].
+pub fn Layout(children: Children) -> impl View {
+    div![
+        class("grid min-h-svh place-items-center bg-stone-50 bg-dots px-5 py-8 font-sans text-zinc-900 antialiased"),
+        class("dark:bg-night dark:text-zinc-100 dark:[--dot:var(--color-zinc-800)]"),
+        children,
+    ]
+}
+"####;
+
+/// `app/page.rs` for Tailwind projects
+pub const TW_PAGE_RS: &str = r####"use next_rust::prelude::*;
+
+const STAR: &str = r#"<svg viewBox="0 0 24 24" width="18" height="18" fill="currentColor" aria-hidden="true"><path d="M12 2.8l2.8 5.7 6.3.9-4.55 4.43 1.07 6.27L12 17.13 6.38 20.1l1.07-6.27L2.9 9.4l6.3-.9z"/></svg>"#;
+
+pub fn Page() -> impl View {
+    main![
+        class("flex max-w-xl flex-col items-center text-center motion-safe:animate-rise"),
+        img![class("size-24 rounded-3xl"), src("/favicon.svg"), alt("Next Rust logo"), width(96), height(96)],
+        h1![class("mt-7 mb-2.5 text-[clamp(2.4rem,7vw,3.5rem)] leading-[1.05] font-bold tracking-tighter"), "Next Rust"],
+        p![
+            class("text-lg text-balance text-zinc-600 dark:text-zinc-400"),
+            "Folders become routes, Rust becomes HTML. Start by editing ",
+            code![
+                class("rounded-md border border-zinc-300 px-1.5 py-0.5 font-mono text-[0.88em] whitespace-nowrap text-zinc-900 dark:border-zinc-800 dark:text-zinc-100"),
+                "app/page.rs"
+            ],
+            ".",
+        ],
+        a![
+            class("btn-brand mt-9"),
+            href("https://github.com/iplustsolution/next-rust"),
+            target("_blank"),
+            rel("noopener"),
+            raw_html(STAR),
+            "Star on GitHub",
+        ],
+        p![
+            class("mt-14 font-mono text-xs tracking-wide text-zinc-500"),
+            "Created by ",
+            a![
+                class("border-b border-brand text-zinc-900 transition-colors hover:text-brand dark:text-zinc-100"),
+                href("https://www.iplust.in/"),
+                target("_blank"),
+                rel("noopener"),
+                "I Plus T Solution",
+            ],
+        ],
+    ]
+}
+"####;
+
+/// `app/not-found.rs` for Tailwind projects
+pub const TW_NOT_FOUND_RS: &str = r####"use next_rust::prelude::*;
+
+pub fn NotFound() -> impl View {
+    main![
+        class("flex flex-col items-center text-center motion-safe:animate-rise"),
+        img![class("size-16 rounded-2xl"), src("/favicon.svg"), alt(""), width(64), height(64)],
+        h1![class("mt-6 mb-2 text-6xl font-bold tracking-tighter"), "404"],
+        p![class("text-zinc-600 dark:text-zinc-400"), "There's nothing at this address."],
+        Link!(href = "/", class = "btn-brand mt-9", "Back to home"),
+    ]
+}
+"####;
+
+/// The `[tailwind]` section of `next-rust.toml` for Tailwind projects.
+pub const TW_CONFIG: &str = r####"
+# Tailwind CSS: write classes in your views and the CSS is generated from the
+# classes you use. No CSS files, no Node.js. Classes: https://tailwindcss.com/docs
+[tailwind]
+enabled = true
+# dark_mode = "media"       # media (system setting) | class (.dark) | attribute ([data-theme=dark])
+# plugins = ["@tailwindcss/typography", "@tailwindcss/forms"]
+# safelist = ["bg-red-500"] # classes your code builds from pieces at runtime
+# Anything else Tailwind supports in CSS (keyframes, @layer, …):
+css = """
+@keyframes rise {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: none; }
+}
+"""
+
+# Theme variables: color-* → bg-*/text-*/border-*, font-*, breakpoint-*, radius-*, animate-*, …
+[tailwind.theme]
+color-brand = "#f26b2a"
+color-brand-hover = "#ff7f41"
+color-brand-ink = "#120a05"
+color-night = "#0e0f12"
+animate-rise = "rise 500ms cubic-bezier(0.2, 0.8, 0.2, 1) both"
+
+# Your own classes: combine Tailwind classes, or write CSS declarations.
+[tailwind.utilities]
+btn-brand = "inline-flex min-h-11 items-center gap-2.5 rounded-lg bg-brand px-5 font-semibold text-brand-ink transition hover:-translate-y-px hover:bg-brand-hover focus-visible:outline-2 focus-visible:outline-offset-3 focus-visible:outline-brand"
+bg-dots = { background-image = "radial-gradient(var(--dot, var(--color-zinc-300)) 1px, transparent 1px)", background-size = "24px 24px" }
+"####;
+
 /// `public/favicon.svg (the Next Rust logo)`
 pub const FAVICON_SVG: &str = r####"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Next Rust logo">
   <title>Next Rust</title>
@@ -255,8 +365,21 @@ pub fn layout_rs(app_name: &str) -> String {
     LAYOUT_RS.replace("__APP_NAME__", app_name)
 }
 
+pub fn tw_layout_rs(app_name: &str) -> String {
+    TW_LAYOUT_RS.replace("__APP_NAME__", app_name)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tailwind_config_template_parses() {
+        let text = format!("{}{}", crate::templates::CONFIG, super::TW_CONFIG);
+        let config = next_rust_core::Config::from_toml_str(&text).expect("valid next-rust.toml");
+        assert!(config.tailwind.enabled);
+        assert_eq!(config.tailwind.theme["color-brand"], "#f26b2a");
+        assert!(config.tailwind.utilities.contains_key("btn-brand") && config.tailwind.css.contains("@keyframes rise"));
+    }
+
     /// `website/public/logo.svg` is the source of the logo. The CLI keeps its
     /// own copy (it is published without the website), so check they match.
     #[test]

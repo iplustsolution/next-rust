@@ -26,6 +26,8 @@
 
 pub mod analyze;
 pub mod codegen;
+pub mod css_usage;
+pub mod tailwind;
 
 use std::path::{Path, PathBuf};
 
@@ -46,12 +48,16 @@ pub trait BuildPlugin {
     }
 }
 
+/// Adjusts the `[tailwind]` configuration from `build.rs`.
+type TailwindSetup = Box<dyn FnOnce(&mut next_rust_core::config::TailwindConfig)>;
+
 /// Configurable generator.
 #[derive(Default)]
 pub struct Generator {
     plugins: Vec<Box<dyn BuildPlugin>>,
     manifest_dir: Option<PathBuf>,
     out_dir: Option<PathBuf>,
+    tailwind: Option<TailwindSetup>,
 }
 
 impl Generator {
@@ -73,6 +79,23 @@ impl Generator {
     /// Override `OUT_DIR`.
     pub fn out_dir(mut self, dir: impl Into<PathBuf>) -> Self {
         self.out_dir = Some(dir.into());
+        self
+    }
+
+    /// Configure Tailwind CSS in Rust instead of `[tailwind]` in
+    /// `next-rust.toml` (applied on top of it). In `build.rs`:
+    ///
+    /// ```no_run
+    /// next_rust_build::Generator::new()
+    ///     .tailwind(|tw| {
+    ///         tw.enabled = true;
+    ///         tw.theme.insert("color-brand".into(), "#f26b2a".into());
+    ///         tw.utilities.insert("btn".into(), "rounded-lg bg-brand px-4 py-2".into());
+    ///     })
+    ///     .run();
+    /// ```
+    pub fn tailwind(mut self, setup: impl FnOnce(&mut next_rust_core::config::TailwindConfig) + 'static) -> Self {
+        self.tailwind = Some(Box::new(setup));
         self
     }
 
@@ -100,7 +123,7 @@ impl Generator {
 
     /// Generate without printing or exiting. Returns the rendered error
     /// report on failure.
-    pub fn try_run(self) -> Result<Project, String> {
+    pub fn try_run(mut self) -> Result<Project, String> {
         let manifest_dir = self
             .manifest_dir
             .or_else(|| std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from))
@@ -108,7 +131,10 @@ impl Generator {
         let out_dir =
             self.out_dir.or_else(|| std::env::var_os("OUT_DIR").map(PathBuf::from)).ok_or("OUT_DIR is not set")?;
 
-        let config = Config::discover(&manifest_dir).map_err(|e| e.to_string())?;
+        let mut config = Config::discover(&manifest_dir).map_err(|e| e.to_string())?;
+        if let Some(setup) = self.tailwind.take() {
+            setup(&mut config.tailwind);
+        }
         emit_rerun(&config, &manifest_dir);
 
         let mut project = analyze_project(&config);
@@ -143,7 +169,26 @@ impl Generator {
                 }
             }
         }
-        let mut code = generate_code_with(&project, CodegenOptions { minify_html, embed_files });
+        // Release builds leave unused rules out of hand-written CSS: the CSS
+        // macros read the names used in the project from this file.
+        let usage_file = out_dir.join(css_usage::FILE);
+        let prune_css = match std::env::var("NEXT_RUST_PRUNE_CSS").ok().as_deref() {
+            Some("0") => false,
+            Some(_) => true,
+            None => config.assets.prune_css && std::env::var("PROFILE").is_ok_and(|p| p == "release"),
+        };
+        println!("cargo:rerun-if-env-changed=NEXT_RUST_PRUNE_CSS");
+        if prune_css {
+            let names = css_usage::collect(&config);
+            write_if_changed(&usage_file, names.join("\n").as_bytes()).map_err(|e| e.to_string())?;
+        } else {
+            let _ = std::fs::remove_file(&usage_file);
+        }
+        let tailwind = config.tailwind.enabled;
+        if tailwind {
+            generate_tailwind(&config, &out_dir, minify_html)?;
+        }
+        let mut code = generate_code_with(&project, CodegenOptions { minify_html, embed_files, tailwind });
         for p in &self.plugins {
             if let Some(extra) = p.extra_code(&project) {
                 code.push_str(&format!("\n// plugin: {}\n{extra}\n", p.name()));
@@ -154,6 +199,20 @@ impl Generator {
             .map_err(|e| e.to_string())?;
         Ok(project)
     }
+}
+
+/// Compile Tailwind CSS for the app into `$OUT_DIR` (the stylesheet and its id).
+fn generate_tailwind(config: &Config, out_dir: &Path, minify: bool) -> Result<(), String> {
+    println!("cargo:rerun-if-env-changed=NEXT_RUST_TAILWIND_BIN");
+    for dir in tailwind::scanned_dirs(config) {
+        println!("cargo:rerun-if-changed={}", dir.display());
+    }
+    // `next-rust dev` / `build` download the engine with a progress bar
+    // first; a plain `cargo build` downloads it here, silently.
+    let bin = tailwind::ensure(&mut |_, _| {})?;
+    let css = tailwind::compile(&bin, config, out_dir, minify)?;
+    let id = format!("tw-{}", &next_rust_assets::content_hash(css.as_bytes())[..10]);
+    write_if_changed(&out_dir.join("next_rust_tailwind.id"), id.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Run the default generator from `build.rs`.

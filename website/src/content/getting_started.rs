@@ -77,7 +77,7 @@ next-rust dev",
             r"my-app/
 ├── Cargo.toml          # depends on next-rust, build-depends on next-rust-build
 ├── build.rs            # fn main() { next_rust_build::generate(); }
-├── next-rust.toml      # optional configuration
+├── next-rust.toml      # configuration, including the Tailwind CSS theme
 ├── src/main.rs         # next_rust::app!();
 ├── public/
 │   ├── favicon.svg     # the Next Rust logo (replace with yours)
@@ -85,11 +85,21 @@ next-rust dev",
 ├── .env.example
 └── app/
     ├── layout.rs       # root layout and metadata
-    ├── globals.css     # styles (dark and light)
     ├── page.rs         # / — a single hero to replace with your own
     ├── not-found.rs    # 404 page
     └── api/hello/route.rs  # GET /api/hello",
         ],],
+        p![
+            "There are no CSS files: the pages are styled with ",
+            a![href("/docs/tailwind"), "Tailwind CSS"],
+            " classes, and the brand colors and custom classes are in the ",
+            code!["[tailwind]"],
+            " section of ",
+            code!["next-rust.toml"],
+            ". The first build downloads the Tailwind engine once for your machine. Prefer plain CSS? Create the project with ",
+            code!["next-rust new my-app --no-tailwind"],
+            ".",
+        ],
         p!["Three pieces connect your files to the framework:"],
         ol![
             li![

@@ -388,6 +388,15 @@ pub fn css_module(input: TokenStream) -> TokenStream {
         Err(e) => return e,
     };
     let salt = path.strip_prefix(manifest_dir()).unwrap_or(&path).to_string_lossy().replace('\\', "/");
+    let usage = CssUsage::load();
+    let text = match &usage {
+        // A class is used through its field, `styles.card_title` for `.card-title`.
+        Some(u) => next_rust_assets::css::prune(&next_rust_assets::css::minify(&text), &|name| {
+            u.names.contains(name) || u.names.contains(&name.replace('-', "_"))
+        }),
+        None => text,
+    };
+    let track = usage.as_ref().map(CssUsage::track);
     let out = next_rust_assets::css::scope(&text, &salt, true);
     let id = next_rust_assets::content_hash(out.css.as_bytes())[..12].to_owned();
     let css = out.css;
@@ -407,6 +416,7 @@ pub fn css_module(input: TokenStream) -> TokenStream {
     }
     quote! {{
         const _: &[u8] = include_bytes!(#abs);
+        #track
         static __NR_SHEET: ::next_rust::Stylesheet = ::next_rust::Stylesheet { id: #id, css: #css };
         #[allow(non_camel_case_types, dead_code)]
         #[derive(Clone, Copy)]
@@ -427,14 +437,45 @@ pub fn global_css(input: TokenStream) -> TokenStream {
         Err(e) => return e,
     };
     let css = next_rust_assets::css::minify(&text);
+    let usage = CssUsage::load();
+    let css = match &usage {
+        Some(u) => next_rust_assets::css::prune(&css, &|name| u.names.contains(name)),
+        None => css,
+    };
+    let track = usage.as_ref().map(CssUsage::track);
     let id = next_rust_assets::content_hash(css.as_bytes())[..12].to_owned();
     let abs = path.to_string_lossy().into_owned();
     quote! {{
         const _: &[u8] = include_bytes!(#abs);
+        #track
         static __NR_SHEET: ::next_rust::Stylesheet = ::next_rust::Stylesheet { id: #id, css: #css };
         &__NR_SHEET
     }}
     .into()
+}
+
+/// Names used in the project, written by `next_rust_build::generate()` for
+/// release builds. Without it (development builds, crates without a build
+/// script) stylesheets are kept whole.
+struct CssUsage {
+    names: std::collections::HashSet<String>,
+    file: String,
+}
+
+impl CssUsage {
+    fn load() -> Option<Self> {
+        let file = PathBuf::from(std::env::var_os("OUT_DIR")?).join("next_rust_css_usage.txt");
+        let text = std::fs::read_to_string(&file).ok()?;
+        Some(CssUsage { names: text.lines().map(str::to_owned).collect(), file: file.to_string_lossy().into_owned() })
+    }
+
+    /// Recompile when the list changes.
+    fn track(&self) -> proc_macro2::TokenStream {
+        let file = &self.file;
+        quote!(
+            const _: &[u8] = include_bytes!(#file);
+        )
+    }
 }
 
 /// Fingerprinted URL of a file in the project's `assets/` directory,

@@ -10,7 +10,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let a = Args::new(args);
     if a.flag(&["-h", "--help"]) {
         println!(
-            "next-rust new <name> [--git | --framework-path <path to next-rust checkout>]\n\nCreates a project with app/, public/, build.rs and next-rust.toml.\nThe project depends on next-rust from crates.io (matching this CLI's version) when it is published there;\notherwise, or with --git, on the GitHub repository."
+            "next-rust new <name> [--git | --framework-path <path to next-rust checkout>] [--no-tailwind]\n\nCreates a project with app/, public/, build.rs and next-rust.toml, styled with Tailwind CSS\n(configured in next-rust.toml, no CSS files). --no-tailwind uses a plain CSS file instead.\nThe project depends on next-rust from crates.io (matching this CLI's version) when it is published there;\notherwise, or with --git, on the GitHub repository."
         );
         return Ok(());
     }
@@ -39,6 +39,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
         None => templates::FrameworkSource::Git,
     };
 
+    let tailwind = !a.flag(&["--no-tailwind"]);
+    let config =
+        if tailwind { format!("{}{}", templates::CONFIG, starter::TW_CONFIG) } else { templates::CONFIG.into() };
+
     let started = Instant::now();
     ui::banner();
     eprintln!("   {}", ui::bold("Thank you for building with Next Rust."));
@@ -60,17 +64,29 @@ pub fn run(args: &[String]) -> Result<(), String> {
         (
             "Configuration",
             "next-rust.toml, .env.example",
-            vec![("next-rust.toml", templates::CONFIG.into()), (".env.example", templates::ENV_EXAMPLE.into())],
+            vec![("next-rust.toml", config), (".env.example", templates::ENV_EXAMPLE.into())],
         ),
-        (
-            "Theme & layout",
-            "one centered hero, dark & light",
-            vec![("app/layout.rs", starter::layout_rs(pkg)), ("app/globals.css", starter::GLOBALS_CSS.into())],
-        ),
+        if tailwind {
+            (
+                "Tailwind CSS",
+                "theme & utilities in next-rust.toml, no CSS files",
+                vec![("app/layout.rs", starter::tw_layout_rs(pkg))],
+            )
+        } else {
+            (
+                "Theme & layout",
+                "one centered hero, dark & light",
+                vec![("app/layout.rs", starter::layout_rs(pkg)), ("app/globals.css", starter::GLOBALS_CSS.into())],
+            )
+        },
         (
             "Pages",
             "home  ·  404",
-            vec![("app/page.rs", starter::PAGE_RS.into()), ("app/not-found.rs", starter::NOT_FOUND_RS.into())],
+            if tailwind {
+                vec![("app/page.rs", starter::TW_PAGE_RS.into()), ("app/not-found.rs", starter::TW_NOT_FOUND_RS.into())]
+            } else {
+                vec![("app/page.rs", starter::PAGE_RS.into()), ("app/not-found.rs", starter::NOT_FOUND_RS.into())]
+            },
         ),
         ("API route", "GET /api/hello", vec![("app/api/hello/route.rs", templates::API_RS.into())]),
         (

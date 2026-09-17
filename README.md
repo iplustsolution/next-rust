@@ -191,9 +191,154 @@ After that, rebuilds are fast.
 When you're ready to ship:
 
 ```sh
-next-rust build   # compiles and pre-renders what it can
+next-rust build   # one small, self-contained binary in .next-rust/
 next-rust start
 ```
+
+## Styling with Tailwind CSS
+
+Tailwind CSS is built in. Write Tailwind classes in your views and the CSS is
+generated for exactly the classes you use. There's nothing to install and no
+CSS file to write: no Node.js, no npm, no `tailwind.config.js`.
+
+```rust
+pub fn Page() -> impl View {
+    main![
+        class("mx-auto max-w-2xl px-6 py-24"),
+        h1![class("text-4xl font-bold tracking-tight dark:text-white"), "Hello"],
+        a![class("btn mt-8"), href("/docs"), "Read the docs"],
+    ]
+}
+```
+
+New projects use it from the start (`next-rust new my-app --no-tailwind`
+if you'd rather write plain CSS). In an existing project, turn it on in
+`next-rust.toml`:
+
+```toml
+[tailwind]
+enabled = true
+dark_mode = "media"                        # or "class" / "attribute"
+plugins = ["@tailwindcss/typography"]      # optional official plugins
+
+[tailwind.theme]                           # your design tokens
+color-brand = "#f26b2a"                    # → bg-brand, text-brand, ring-brand/50, …
+font-display = "Inter, sans-serif"         # → font-display
+
+[tailwind.utilities]                       # your own classes
+btn = "inline-flex rounded-lg bg-brand px-4 py-2 font-semibold text-white hover:bg-brand/90"
+```
+
+How it works:
+
+- The engine is the **official Tailwind CSS v4.3.3**, so every class and
+  variant in the [Tailwind docs](https://tailwindcss.com/docs) works.
+- The first time a Tailwind project builds, `next-rust dev` / `next-rust build`
+  download Tailwind's standalone engine for your system (with a progress bar),
+  check it against the published SHA-256 checksum, and cache it for every
+  project on the machine. It needs `curl`, which macOS, Windows 10+ and most
+  Linux systems already have.
+- Only the classes found in `app/` and `src/` are generated. Development
+  builds get readable CSS, release builds get it minified, and it's compiled
+  into the binary, so servers need nothing extra.
+- Offline or locked-down CI? Download the executable yourself from the
+  [v4.3.3 release](https://github.com/tailwindlabs/tailwindcss/releases/tag/v4.3.3)
+  and set `NEXT_RUST_TAILWIND_BIN=/path/to/tailwindcss`.
+
+Everything else (custom variants, safelisting classes built at runtime, raw
+keyframes) is on the Tailwind CSS page of the [documentation](#documentation).
+
+## Deploying
+
+`next-rust build` produces a single file, `.next-rust/my-app`, that contains
+your whole app: server, pages, `next-rust.toml` and everything in `public/`.
+There are two common ways to ship it.
+
+### Copy the binary to a server
+
+```sh
+next-rust build
+scp .next-rust/my-app you@your-server:/srv/my-app
+ssh you@your-server 'PORT=8080 /srv/my-app'
+```
+
+Nothing else needs to be installed on the server. Build on the same operating
+system and CPU architecture as the server (for example, a Linux x86-64 binary
+for a Linux x86-64 server). If you develop on a Mac and deploy to Linux, use
+Docker below: it builds the Linux binary for you.
+
+### Run it with Docker
+
+You need [Docker](https://docs.docker.com/get-docker/) installed and running.
+All commands run inside your project folder.
+
+**1. Create the Dockerfile**
+
+```sh
+next-rust docker
+```
+
+This writes two files:
+
+- `Dockerfile` builds your app in the official Rust image, then copies only
+  the finished binary into a minimal image
+  (`gcr.io/distroless/cc-debian12:nonroot`) that runs as a non-root user.
+- `.dockerignore` keeps `target/`, `.next-rust/`, `.git` and local `.env`
+  files out of the build.
+
+If a `Dockerfile` already exists, the command stops instead of overwriting it.
+Use `next-rust docker --force` to replace it.
+
+**2. Build the image**
+
+```sh
+docker build -t my-app .
+```
+
+The first build downloads and compiles every dependency, so it takes a few
+minutes. Later builds reuse the Cargo cache and are much faster.
+
+**3. Run the container**
+
+```sh
+docker run -p 3000:3000 my-app
+```
+
+Open http://localhost:3000. Press Ctrl+C to stop it; the server finishes the
+requests it's handling before it exits.
+
+**Everyday commands**
+
+| What you want | Command |
+|---|---|
+| Run in the background and restart after crashes or reboots | `docker run -d --name my-app --restart unless-stopped -p 3000:3000 my-app` |
+| See the logs | `docker logs -f my-app` |
+| Stop it | `docker stop my-app` |
+| Remove the stopped container | `docker rm my-app` |
+| Use another port | `docker run -p 8080:8080 -e PORT=8080 my-app` |
+| Pass secrets and settings | `docker run -p 3000:3000 -e DATABASE_URL=... -e API_KEY=... my-app` |
+| Pass them from a file | `docker run -p 3000:3000 --env-file .env.production my-app` |
+
+**Good to know**
+
+- **Rebuild after every change.** Your pages, config and `public/` files are
+  compiled into the image. After editing code, run `docker build` again, then
+  replace the running container.
+- **`.env` files are not in the image.** Pass secrets with `-e` or
+  `--env-file` when you start the container, never bake them into the image.
+- **Quiet by default.** A server running in the background prints only errors.
+  Run with `docker run -it ...` to see the Next Rust startup screen.
+- **`-p host:container`.** The left port is the one you open in the browser;
+  the right one must match `PORT` inside the container (3000 unless you change
+  it).
+- **Small images.** The image holds one size-optimized binary (about 1–2 MB
+  for a typical app) on top of the minimal base image. There is no Rust
+  toolchain, shell or package manager in it.
+- **Already have a Dockerfile from an older version?** Run
+  `next-rust docker --force` to get the current one.
+
+More options (Kubernetes, reverse proxies, TLS, platforms like Fly.io and
+Railway) are on the Deployment page of the [documentation](#documentation).
 
 ## Staying up to date
 
@@ -256,7 +401,8 @@ it:
 - **Backend:** API routes, middleware at any level of the tree, cookies,
   sessions, CORS, rate limiting, server-sent events and WebSockets.
 - **Frontend:** HTML is escaped unless you explicitly ask for raw output.
-  CSS modules are scoped at compile time. Pages ship zero JavaScript unless
+  Tailwind CSS v4 is built in (no Node.js), and CSS modules are scoped at
+  compile time. Pages ship zero JavaScript unless
   they use client navigation or an interactive island, and even then it's a
   single ~4 KB script. Navigating between pages that share layouts renders
   and sends only the part below them; the layouts stay on screen.

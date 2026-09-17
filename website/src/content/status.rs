@@ -110,6 +110,11 @@ pub fn content() -> Node {
                 tbody![
                     tr![td!["zero-JS pages by default"], td!["✅"], td!["runtime loaded only when needed"]],
                     tr![
+                        td!["Tailwind CSS v4 (official engine, theme and utilities in next-rust.toml)"],
+                        td!["✅"],
+                        td!["engine downloaded once per machine; needs curl"],
+                    ],
+                    tr![
                         td!["partial navigation: shared layouts are not rendered or sent again"],
                         td!["✅"],
                         td!["server rendering tested; swap, active links and prefetch checked in Chrome"],

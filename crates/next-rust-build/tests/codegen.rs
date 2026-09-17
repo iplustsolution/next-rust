@@ -214,11 +214,12 @@ fn generated_code_shape() {
     // Release builds embed minified HTML instead of include_str!.
     let minified = next_rust_build::generate_code_with(
         &project,
-        next_rust_build::CodegenOptions { minify_html: true, embed_files: false },
+        next_rust_build::CodegenOptions { minify_html: true, embed_files: false, tailwind: false },
     );
     assert!(minified.contains("body: __nr::PageBody::Html(\"<p>legacy</p>\")"), "{minified}");
     assert!(code.contains("embedded: None") && !code.contains("__NR_EMBEDDED"), "{code}");
     assert!(code.contains("toml: __nr::TOML") && code.contains("project_root: Some("), "{code}");
+    assert!(code.contains("stylesheets: &[],") && !code.contains("__NR_TAILWIND"), "{code}");
 
     // Deterministic output.
     assert_eq!(code, generate_code(&analyze_project(&t.config(""))));
@@ -247,7 +248,7 @@ fn release_code_embeds_config_and_static_files() {
     let project = analyze_project(&config);
     let code = next_rust_build::generate_code_with(
         &project,
-        next_rust_build::CodegenOptions { minify_html: true, embed_files: true },
+        next_rust_build::CodegenOptions { minify_html: true, embed_files: true, tailwind: true },
     );
     for needle in [
         "embedded: Some(&__NR_EMBEDDED)",
@@ -259,6 +260,8 @@ fn release_code_embeds_config_and_static_files() {
         "path: \"images/b.png\"",
         "path: \"fonts/inter.woff2\"",
         "static __NR_EMBED_CLIENT: &[__nr::EmbeddedFile] = &[\n];",
+        "css: include_str!(concat!(env!(\"OUT_DIR\"), \"/next_rust_tailwind.css\")),",
+        "stylesheets: __NR_STYLESHEETS,",
     ] {
         assert!(code.contains(needle), "missing `{needle}` in:\n{code}");
     }

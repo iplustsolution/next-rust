@@ -4,7 +4,6 @@
 pub mod content;
 pub mod docs;
 pub mod highlight;
-pub mod style;
 pub mod ui;
 
 next_rust::routes!();

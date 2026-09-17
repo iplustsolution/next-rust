@@ -50,6 +50,22 @@ pub fn run(args: &[String]) -> Result<(), String> {
         ),
     );
 
+    // Tailwind CSS: the engine must be ready before cargo runs the build script.
+    if crate::tailwind::prepare(&info)? {
+        ui::done_step(
+            "Tailwind CSS",
+            &format!(
+                "v{} · classes from {} · minified",
+                next_rust_build::tailwind::VERSION,
+                next_rust_build::tailwind::scanned_dirs(&info.config)
+                    .iter()
+                    .map(|d| d.strip_prefix(&info.root).unwrap_or(d).display().to_string() + "/")
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+        );
+    }
+
     // 2. Compile
     let compile_started = Instant::now();
     let mut live = ui::LiveLine::new();

@@ -634,7 +634,6 @@ name = "next-rust-website"
 version = "0.1.5"
 dependencies = [
  "next-rust",
- "next-rust-assets",
  "next-rust-build",
  "serde",
  "serde_json",

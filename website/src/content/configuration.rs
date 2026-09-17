@@ -39,7 +39,7 @@ pub fn content() -> Node {
         h2![id("reference"), a![class("anchor"), href("#reference"), "Reference"]],
         pre![code![
             class("language-toml"),
-            r#"[app]
+            r##"[app]
 directory = "app"            # routing directory: "src/web", "../shared/pages", "/abs/path"
 public = "public"
 base_path = ""               # mount everything under e.g. "/docs" (links and assets are not rewritten: include the prefix yourself)
@@ -69,9 +69,23 @@ concurrency = 8              # reserved: static generation currently renders pag
 optimize = "size"            # size (opt-level "z") | speed (opt-level 3)
 panic = "unwind"             # unwind: a panic fails one request | abort: smaller, a panic stops the server
 
+[tailwind]
+enabled = false              # generate Tailwind CSS from the classes in app/ and src/
+preflight = true             # Tailwind's base styles
+dark_mode = "media"          # media | class | attribute
+plugins = []                 # "@tailwindcss/typography", "@tailwindcss/forms"
+safelist = []                # classes to generate even if not found in the source
+sources = []                 # more directories to scan
+css = ""                     # extra Tailwind CSS (keyframes, @layer, …)
+# [tailwind.theme]           color-brand = "#f26b2a"  → @theme variables
+# [tailwind.utilities]       btn = "rounded-lg px-4 py-2"  → custom classes
+# [tailwind.variants]        hocus = "&:hover, &:focus"  → custom variants
+
 [assets]
 optimize = true              # reserved: CSS is always minified at compile time
 public_max_age = 0
+prune_css = true             # release builds leave out CSS rules for classes the app never uses
+css_safelist = []            # class/id names built at runtime that must keep their rules
 
 [rendering]
 default = "auto"             # auto | static | dynamic ("server" = dynamic)
@@ -115,7 +129,7 @@ source = "/api/:path*"
 headers = { "x-robots-tag" = "noindex" }
 
 [plugins.analytics]          # free-form, read by plugins
-site_id = "abc""#,
+site_id = "abc""##,
         ],],
         p![
             code!["{nonce}"],

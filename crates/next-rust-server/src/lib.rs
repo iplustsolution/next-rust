@@ -139,7 +139,7 @@ pub fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
 pub mod __private {
     pub use http::Method;
     pub use next_rust_router::Params;
-    pub use next_rust_view::{Children, IntoViewResult, Metadata, Node, Slots, View};
+    pub use next_rust_view::{Children, IntoViewResult, Metadata, Node, Slots, Stylesheet, View};
 
     pub use crate::actions::{ActionContext, ActionRef, run_action, run_action_ctx, run_action0};
     pub use crate::app::{

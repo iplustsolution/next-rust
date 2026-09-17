@@ -48,6 +48,9 @@ fn cookie_layout(_ctx: Ctx, children: Children, _slots: Slots) -> R {
 fn page_a(_ctx: Ctx) -> R {
     Box::pin(async { Ok(h1!["Page A"].into_node()) })
 }
+/// Stands in for the generated Tailwind CSS.
+static APP_CSS: Stylesheet = Stylesheet { id: "tw-app", css: ".p-4{padding:1rem}" };
+static APP_STYLESHEETS: &[&Stylesheet] = &[&APP_CSS];
 static PAGE_B_CSS: Stylesheet = Stylesheet { id: "pagebcss", css: "h1{color:red}" };
 fn page_b(_ctx: Ctx) -> R {
     Box::pin(async { Ok(fragment![&PAGE_B_CSS, h1!["Page B"]]) })
@@ -110,6 +113,7 @@ fn app(env: Environment, static_b: bool) -> App {
         ],
         root: SegmentDef { metadata: Some(root_metadata), ..seg(root_layout, "app/layout.rs") },
         build_id: "build-1",
+        stylesheets: APP_STYLESHEETS,
         ..Default::default()
     };
     let root =
@@ -307,4 +311,19 @@ async fn icons_use_versioned_urls_that_browsers_keep() {
     assert_eq!(plain.headers["cache-control"], "public, max-age=0");
     let stale = get(&app, "/logo.svg?v=0000000000", None).await;
     assert_eq!(stale.headers["cache-control"], "public, max-age=0", "an old version is not cached forever");
+}
+
+#[tokio::test]
+async fn app_stylesheets_are_on_every_page_once() {
+    let app = app(Environment::Test, false);
+    let full = get(&app, "/docs/b", None).await;
+    let head = full.body.split("</head>").next().unwrap();
+    assert_eq!(head.matches(r#"<style data-nr-css="tw-app">"#).count(), 1, "{}", full.body);
+    assert!(head.find("tw-app").unwrap() < head.find("pagebcss").unwrap(), "app styles come before page styles");
+    let missing = get(&app, "/missing", None).await;
+    assert!(missing.body.contains(r#"data-nr-css="tw-app""#), "404 pages are styled too");
+
+    let shown = keys(&get(&app, "/docs/a", None).await.body);
+    let partial = get_with_styles(&app, "/docs/b", Some(&shown), "tw-app").await;
+    assert!(!partial.body.contains("tw-app") && partial.body.contains("Page B"), "{}", partial.body);
 }

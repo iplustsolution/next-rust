@@ -123,6 +123,12 @@ pub const SECTIONS: &[Section] = &[
                 "Styling & assets",
                 "Global CSS, CSS modules, public files, hashed assets, images and fonts."
             ),
+            doc!(
+                "tailwind",
+                tailwind,
+                "Tailwind CSS",
+                "Style with Tailwind classes. Built in: no Node.js, no CSS files, your theme in next-rust.toml."
+            ),
             doc!("caching", caching, "Caching", "The data cache, the page store, revalidation and custom stores."),
         ],
     },

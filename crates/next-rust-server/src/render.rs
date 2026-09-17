@@ -472,6 +472,14 @@ fn document_response_with(
     known_styles: Vec<String>,
 ) -> Response {
     next_rust_view::attrs::mark_active_links(&mut body, ctx.path());
+    // App-wide stylesheets (Tailwind) come first, so page and module styles
+    // can override them. Like any stylesheet they are hoisted into <head>
+    // once, and not sent again on partial navigations.
+    if !inner.routes.stylesheets.is_empty() {
+        let mut nodes: Vec<Node> = inner.routes.stylesheets.iter().map(|s| Node::Style(s)).collect();
+        nodes.push(body);
+        body = Node::Fragment(nodes);
+    }
     let metadata = version_icons(inner, metadata);
     let nonce = ctx.nonce.clone();
     let mut head_extra = String::new();

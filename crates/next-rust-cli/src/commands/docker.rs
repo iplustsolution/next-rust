@@ -11,7 +11,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if path.exists() && !a.flag(&["--force"]) {
         return Err("Dockerfile already exists (use --force to overwrite)".into());
     }
-    std::fs::write(&path, templates::dockerfile(&info.bin_name)).map_err(|e| e.to_string())?;
+    std::fs::write(&path, templates::dockerfile(&info.bin_name, info.config.tailwind.enabled))
+        .map_err(|e| e.to_string())?;
     let ignore = info.root.join(".dockerignore");
     if !ignore.exists() {
         std::fs::write(&ignore, templates::DOCKERIGNORE).map_err(|e| e.to_string())?;

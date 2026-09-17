@@ -636,6 +636,9 @@ pub struct CodegenOptions {
     /// into the binary so it runs without any other files. Enabled
     /// automatically for release builds.
     pub embed_files: bool,
+    /// Include the Tailwind CSS stylesheet written to `$OUT_DIR` by the
+    /// generator (`[tailwind] enabled = true`).
+    pub tailwind: bool,
 }
 
 /// Files under `dir` as `(relative path with '/', absolute path)`, sorted.
@@ -919,9 +922,17 @@ pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String 
     } else {
         "None"
     };
+    let stylesheets = if options.tailwind {
+        out.push_str(
+            "/// Tailwind CSS generated from the classes used in the app.\nstatic __NR_TAILWIND: __nr::Stylesheet = __nr::Stylesheet {\n    id: include_str!(concat!(env!(\"OUT_DIR\"), \"/next_rust_tailwind.id\")),\n    css: include_str!(concat!(env!(\"OUT_DIR\"), \"/next_rust_tailwind.css\")),\n};\nstatic __NR_STYLESHEETS: &[&__nr::Stylesheet] = &[&__NR_TAILWIND];\n\n",
+        );
+        "__NR_STYLESHEETS"
+    } else {
+        "&[]"
+    };
     let _ = write!(
         out,
-        "/// All routes discovered in the app directory.\npub fn routes() -> ::next_rust::Routes {{\n    __nr::Routes {{\n        pages: vec![\n{}\n        ],\n        apis: vec![\n{}\n        ],\n        actions: vec![\n{}\n        ],\n        root: {},\n        middleware: {},\n        global_error: {},\n        sitemap: {},\n        robots: {},\n        project_root: {},\n        embedded: {},\n        build_id: {},\n        toml: {},\n    }}\n}}\n",
+        "/// All routes discovered in the app directory.\npub fn routes() -> ::next_rust::Routes {{\n    __nr::Routes {{\n        pages: vec![\n{}\n        ],\n        apis: vec![\n{}\n        ],\n        actions: vec![\n{}\n        ],\n        root: {},\n        middleware: {},\n        global_error: {},\n        sitemap: {},\n        robots: {},\n        project_root: {},\n        embedded: {},\n        build_id: {},\n        toml: {},\n        stylesheets: {},\n    }}\n}}\n",
         pages.join(",\n"),
         apis.join(",\n"),
         actions.join(",\n"),
@@ -936,6 +947,7 @@ pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String 
         embedded,
         lit(&build_id(&project.config)),
         if options.embed_files { "None" } else { "__nr::TOML" },
+        stylesheets,
     );
     out
 }

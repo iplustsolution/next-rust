@@ -4,6 +4,7 @@ mod commands;
 mod project;
 mod scaffold;
 mod starter;
+mod tailwind;
 mod templates;
 mod ui;
 mod update_check;

@@ -289,6 +289,273 @@ pub fn transform(input: &str, opts: &TransformOptions) -> TransformOutput {
     TransformOutput { css: css.trim().to_owned(), classes }
 }
 
+// ---------------------------------------------------------------------------
+// Unused rule removal
+// ---------------------------------------------------------------------------
+
+/// Remove rules that can never match because a class or id they require is
+/// not used anywhere. `used(name)` reports whether a class or id name (without
+/// `.` or `#`) appears in the project.
+///
+/// The input must be minified (see [`minify`]). The removal is conservative:
+///
+/// * a selector is dead only when a class or id *outside any parentheses* is
+///   unused, so `:not(.x)`, `:is(.a, .b)` and `:where(…)` never cause removal;
+/// * in a selector list (`.a, .b`) only the dead selectors are dropped;
+/// * element, attribute and pseudo selectors, `:root`, declarations,
+///   `@font-face`, `@import`, `@property` and other at-rules are kept;
+/// * `@media`, `@supports`, `@layer` and `@container` blocks are pruned
+///   inside and dropped when empty;
+/// * `@keyframes` are kept only when their name still appears in the output.
+pub fn prune(css: &str, used: &dyn Fn(&str) -> bool) -> String {
+    let pruned = prune_block(css, used);
+    remove_unused_keyframes(&pruned)
+}
+
+/// Split minified CSS into top-level statements: `prelude{body}` or `text;`.
+fn statements(css: &str) -> Vec<(&str, Option<&str>)> {
+    let b = css.as_bytes();
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut i = 0;
+    let mut paren = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'"' | b'\'' => i = skip_string(b, i),
+            b'(' => {
+                paren += 1;
+                i += 1;
+            }
+            b')' => {
+                paren = paren.saturating_sub(1);
+                i += 1;
+            }
+            b';' if paren == 0 => {
+                out.push((&css[start..i], None));
+                i += 1;
+                start = i;
+            }
+            b'{' => {
+                let body_start = i + 1;
+                let end = matching_brace(b, i);
+                out.push((&css[start..i], Some(&css[body_start..end.min(css.len())])));
+                i = end + 1;
+                start = i;
+            }
+            _ => i += 1,
+        }
+    }
+    if start < css.len() && !css[start..].trim().is_empty() {
+        out.push((&css[start..], None));
+    }
+    out
+}
+
+fn skip_string(b: &[u8], at: usize) -> usize {
+    let quote = b[at];
+    let mut j = at + 1;
+    while j < b.len() && b[j] != quote {
+        if b[j] == b'\\' {
+            j += 1;
+        }
+        j += 1;
+    }
+    (j + 1).min(b.len())
+}
+
+/// Index of the `}` matching the `{` at `open`.
+fn matching_brace(b: &[u8], open: usize) -> usize {
+    let mut depth = 0usize;
+    let mut i = open;
+    while i < b.len() {
+        match b[i] {
+            b'"' | b'\'' => {
+                i = skip_string(b, i);
+                continue;
+            }
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    b.len()
+}
+
+/// Prune the statements of a block: the top level, an at-rule's body, or a
+/// style rule's body (declarations and nested rules).
+fn prune_block(css: &str, used: &dyn Fn(&str) -> bool) -> String {
+    let mut out = String::with_capacity(css.len());
+    for (prelude, body) in statements(css) {
+        let Some(body) = body else {
+            // Declarations and statement at-rules (`@import`, `@charset`).
+            if !prelude.is_empty() {
+                if !out.is_empty() && !out.ends_with('{') && !out.ends_with('}') && !out.ends_with(';') {
+                    out.push(';');
+                }
+                out.push_str(prelude);
+                if prelude.starts_with('@') {
+                    out.push(';');
+                }
+            }
+            continue;
+        };
+        if let Some(at) = prelude.strip_prefix('@') {
+            let name = at.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).next().unwrap_or("");
+            let name = name.trim_start_matches("-webkit-").trim_start_matches("-moz-").to_ascii_lowercase();
+            if RULE_AT_RULES.contains(&name.as_str()) {
+                let inner = prune_block(body, used);
+                if !inner.is_empty() {
+                    push_rule(&mut out, prelude, &inner);
+                }
+            } else {
+                // @font-face, @keyframes, @page, @property, …: kept as they are.
+                push_rule(&mut out, prelude, body);
+            }
+            continue;
+        }
+        let live: Vec<&str> =
+            split_top_level(prelude, b',').into_iter().filter(|s| selector_is_live(s, used)).collect();
+        if live.is_empty() {
+            continue;
+        }
+        let inner = prune_block(body, used);
+        push_rule(&mut out, &live.join(","), &inner);
+    }
+    out
+}
+
+fn push_rule(out: &mut String, prelude: &str, body: &str) {
+    if !out.is_empty() && !out.ends_with('{') && !out.ends_with('}') && !out.ends_with(';') {
+        out.push(';');
+    }
+    out.push_str(prelude);
+    out.push('{');
+    out.push_str(body);
+    out.push('}');
+}
+
+/// Split at `sep` outside parentheses, brackets and strings.
+fn split_top_level(text: &str, sep: u8) -> Vec<&str> {
+    let b = text.as_bytes();
+    let mut parts = Vec::new();
+    let (mut depth, mut start, mut i) = (0usize, 0usize, 0usize);
+    while i < b.len() {
+        match b[i] {
+            b'"' | b'\'' => {
+                i = skip_string(b, i);
+                continue;
+            }
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            c if c == sep && depth == 0 => {
+                parts.push(&text[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    parts.push(&text[start..]);
+    parts
+}
+
+/// A selector is live unless a class or id outside parentheses is unused.
+fn selector_is_live(selector: &str, used: &dyn Fn(&str) -> bool) -> bool {
+    let b = selector.as_bytes();
+    let mut depth = 0usize;
+    let mut i = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'"' | b'\'' => {
+                i = skip_string(b, i);
+                continue;
+            }
+            b'(' | b'[' => depth += 1,
+            b')' | b']' => depth = depth.saturating_sub(1),
+            b'.' | b'#' if depth == 0 && b.get(i + 1).is_some_and(|c| is_ident_start(*c)) => {
+                let start = i + 1;
+                let mut j = start;
+                let mut escaped = false;
+                while j < b.len() && is_ident_char(b[j]) {
+                    if b[j] == b'\\' {
+                        escaped = true;
+                        j += 1;
+                    }
+                    j += 1;
+                }
+                let name = &selector[start..j.min(b.len())];
+                // Escaped names (`.md\:flex`) can't be matched against source
+                // identifiers reliably: keep them.
+                if !escaped && !used(name) {
+                    return false;
+                }
+                i = j;
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    true
+}
+
+/// Drop `@keyframes name{…}` whose name no longer appears elsewhere.
+fn remove_unused_keyframes(css: &str) -> String {
+    let stmts = statements(css);
+    let mut names = Vec::new();
+    for (prelude, body) in &stmts {
+        if body.is_some()
+            && let Some(name) = keyframes_name(prelude)
+        {
+            names.push(name);
+        }
+    }
+    if names.is_empty() {
+        return css.to_owned();
+    }
+    let mut out = String::with_capacity(css.len());
+    for (prelude, body) in &stmts {
+        if let (Some(body), Some(name)) = (body, keyframes_name(prelude)) {
+            let elsewhere = css.replace(&format!("{prelude}{{{body}}}"), "");
+            let referenced = elsewhere.match_indices(name).any(|(at, _)| {
+                let before = elsewhere[..at].chars().next_back();
+                let after = elsewhere[at + name.len()..].chars().next();
+                !before.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+                    && !after.is_some_and(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            });
+            if !referenced {
+                continue;
+            }
+        }
+        match body {
+            Some(body) => push_rule(&mut out, prelude, body),
+            None => {
+                if !out.is_empty() && !out.ends_with('}') && !out.ends_with(';') {
+                    out.push(';');
+                }
+                out.push_str(prelude);
+                if prelude.starts_with('@') {
+                    out.push(';');
+                }
+            }
+        }
+    }
+    out
+}
+
+fn keyframes_name(prelude: &str) -> Option<&str> {
+    let rest = prelude.strip_prefix('@')?;
+    let rest = rest.trim_start_matches("-webkit-").trim_start_matches("-moz-");
+    let name = rest.strip_prefix("keyframes")?.trim();
+    (!name.is_empty()).then_some(name.trim_matches(|c| c == '"' || c == '\''))
+}
+
 fn classify_prelude(prelude: &[u8]) -> Block {
     let text = String::from_utf8_lossy(prelude);
     let text = text.trim();
@@ -381,6 +648,59 @@ mod tests {
         let out = scope("@keyframes spin { from { a: b } 50.5% { a: c } }", "m", true);
         assert!(out.classes.is_empty());
         assert_eq!(out.css, "@keyframes spin{from{a:b}50.5%{a:c}}");
+    }
+
+    fn pruned(css: &str, used: &[&str]) -> String {
+        prune(&minify(css), &|name| used.contains(&name))
+    }
+
+    #[test]
+    fn prune_removes_rules_for_unused_classes() {
+        let css = r#"
+            :root { --brand: #f26b2a }
+            body { margin: 0 }
+            .btn { color: red }
+            .unused { color: blue }
+            .card .title, .ghost .x { font-weight: 700 }
+            #app { display: grid }
+            #nope { display: none }
+            a[href^="http"]:hover { text-decoration: underline }
+        "#;
+        assert_eq!(
+            pruned(css, &["btn", "card", "title", "app"]),
+            r#":root{--brand:#f26b2a}body{margin:0}.btn{color:red}.card .title{font-weight:700}#app{display:grid}a[href^="http"]:hover{text-decoration:underline}"#
+        );
+    }
+
+    #[test]
+    fn prune_is_conservative_inside_functional_pseudo_classes() {
+        let css = ".a:not(.unused) { x: y } :is(.b, .c) { x: z } .md\\:flex { display: flex }";
+        assert_eq!(pruned(css, &["a"]), ".a:not(.unused){x:y}:is(.b,.c){x:z}.md\\:flex{display:flex}");
+    }
+
+    #[test]
+    fn prune_media_nesting_and_keyframes() {
+        let css = r#"
+            @media (min-width: 40rem) { .used { a: b } .gone { a: c } }
+            @supports (display: grid) { .gone { a: d } }
+            @font-face { font-family: X; src: url(x.woff2) }
+            .spin { animation: spin 1s linear infinite }
+            .fade { animation: fade 1s }
+            @keyframes spin { to { rotate: 1turn } }
+            @keyframes fade { from { opacity: 0 } }
+            .card { color: red; .inner { color: blue } .gone { color: green } &:hover { color: pink } }
+        "#;
+        assert_eq!(
+            pruned(css, &["used", "spin", "card", "inner"]),
+            "@media (min-width:40rem){.used{a:b}}@font-face{font-family:X;src:url(x.woff2)}.spin{animation:spin 1s linear infinite}@keyframes spin{to{rotate:1turn}}.card{color:red;.inner{color:blue}&:hover{color:pink}}"
+        );
+    }
+
+    #[test]
+    fn prune_keeps_everything_that_is_used() {
+        let css = "a{b:c}.x{y:z}@media print{.x{d:e}}@import url(a.css);";
+        let min = minify(css);
+        assert_eq!(prune(&min, &|_| true), min);
     }
 
     #[test]

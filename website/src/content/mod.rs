@@ -20,5 +20,6 @@ pub mod security;
 pub mod server_actions;
 pub mod status;
 pub mod styling_and_assets;
+pub mod tailwind;
 pub mod testing;
 pub mod views;

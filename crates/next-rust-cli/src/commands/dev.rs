@@ -41,6 +41,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
     ]);
     eprintln!();
 
+    crate::tailwind::prepare(&info)?;
+
     let mut routes = route_set(&info);
     let mut child: Option<Child> = None;
 

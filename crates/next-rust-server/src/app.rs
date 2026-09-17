@@ -158,6 +158,8 @@ pub struct Routes {
     /// development builds; release builds embed their configuration as JSON
     /// and leave this `None`, so no TOML parser is linked.
     pub toml: Option<next_rust_core::config::TomlParser>,
+    /// Stylesheets added to every page, such as the generated Tailwind CSS.
+    pub stylesheets: &'static [&'static next_rust_view::Stylesheet],
 }
 
 pub(crate) type CustomHandlers = Vec<(Option<Method>, Arc<dyn Endpoint>)>;

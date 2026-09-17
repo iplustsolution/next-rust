@@ -2,4 +2,3 @@
 .next-rust/
 .env*.local
 .DS_Store
-/website/.next-rust
