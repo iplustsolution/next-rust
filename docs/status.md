@@ -81,7 +81,8 @@ limitations · ❌ not implemented yet
 
 | feature | status | notes |
 |---|---|---|
-| `new`, `dev`, `build`, `start`, `check`, `routes`, `analyze`, `generate`, `doctor`, `docker`, `clean` | ✅ | |
+| `new`, `dev`, `build`, `start`, `check`, `routes`, `analyze`, `generate`, `doctor`, `docker`, `upgrade`, `clean` | ✅ | |
+| update notice + `next-rust upgrade` from GitHub | ✅ | notifies once a day; never installs without the user running `upgrade` |
 | dev: rebuild on change, keep serving on errors, browser overlay, live reload | ✅ | restarts the server process; no in-process hot-patching of Rust code |
 | CSS-only hot swap without reload | ❌ | CSS is compiled into the binary, so changes rebuild and reload |
 | plugin traits (runtime + build) | 🟡 | minimal hook set, API may change |
@@ -96,8 +97,10 @@ limitations · ❌ not implemented yet
   `next-rust-build`, `next-rust-cache`, `next-rust-assets` and
   `next-rust-cli` were **not taken on crates.io** when checked on 2026-09-17.
   Check again right before publishing.
-- `repository`/`homepage` in `Cargo.toml` are placeholders
-  (`github.com/next-rust/next-rust`). Set the real URL before publishing.
+- `repository`/`homepage` point to `github.com/iplustsolution/next-rust`.
+- Until the crates are published, `next-rust new` creates projects that
+  depend on the GitHub repository. Switch the template to crates.io versions
+  after the first release.
 - Publish order (dependencies first): assets → core → router → view → cache →
   server → macros → build → next-rust → cli.
 

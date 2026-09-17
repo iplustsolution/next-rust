@@ -4,6 +4,10 @@ mod commands;
 mod project;
 mod templates;
 mod ui;
+mod update_check;
+
+/// The Next Rust source repository.
+pub const REPO_URL: &str = "https://github.com/iplustsolution/next-rust";
 
 use std::process::ExitCode;
 
@@ -26,6 +30,7 @@ COMMANDS:
                         not-found, template, api, middleware
     doctor              Diagnose the project and toolchain
     docker              Write a production Dockerfile
+    upgrade             Update the CLI and this project's framework to the latest version
     clean               Remove build output
 
 OPTIONS:
@@ -37,12 +42,14 @@ Run `next-rust <COMMAND> --help` for command options.";
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(command) = args.first() else {
+        ui::banner();
         println!("{HELP}");
         return ExitCode::SUCCESS;
     };
     let rest = &args[1..];
     let result = match command.as_str() {
         "-h" | "--help" | "help" => {
+            ui::banner();
             println!("{HELP}");
             Ok(())
         }
@@ -61,6 +68,7 @@ fn main() -> ExitCode {
         "doctor" => commands::doctor::run(rest),
         "docker" => commands::docker::run(rest),
         "clean" => commands::clean::run(rest),
+        "upgrade" | "update" => commands::upgrade::run(rest),
         other => Err(format!("unknown command `{other}`\n\n{HELP}")),
     };
     match result {

@@ -104,23 +104,73 @@ pub fn Page(form: FormState) -> impl View {
 }
 ```
 
-## Try it
+## Getting started
 
-You'll need Rust 1.88 or newer.
+### 1. Install Rust (skip this if you already have it)
+
+Next Rust needs **Rust 1.88 or newer**. To check what you have:
 
 ```sh
-git clone https://github.com/next-rust/next-rust
-cd next-rust
-cargo install --path crates/next-rust-cli
+rustc --version
+```
 
-next-rust new my-app --framework-path .
+If that prints "command not found", or a version older than 1.88, install
+Rust with [rustup](https://rustup.rs), the official installer.
+
+**macOS and Linux:**
+
+```sh
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+```
+
+**Windows:** download and run
+[rustup-init.exe](https://win.rustup.rs/x86_64). If it asks, also install
+the Visual Studio C++ Build Tools.
+
+Then open a **new** terminal and confirm:
+
+```sh
+rustc --version
+cargo --version
+```
+
+If you had an older Rust already, update it with `rustup update stable`.
+
+### 2. Install the Next Rust CLI
+
+```sh
+cargo install --git https://github.com/iplustsolution/next-rust next-rust-cli
+```
+
+This builds the `next-rust` command from this repository, which takes a
+minute or two the first time. Check it worked:
+
+```sh
+next-rust --version
+```
+
+If your terminal can't find `next-rust`, make sure `~/.cargo/bin` (on Windows,
+`%USERPROFILE%\.cargo\bin`) is on your `PATH`, then open a new terminal.
+
+### 3. Create a project
+
+```sh
+next-rust new my-app
 cd my-app
+```
+
+### 4. Run it
+
+```sh
 next-rust dev
 ```
 
 Open http://localhost:3000 and edit `app/page.rs`. The browser reloads when
 the build finishes. If you save something broken, the last good version keeps
 running and the compiler error shows up in the page.
+
+The first build downloads and compiles the framework, so give it a moment.
+After that, rebuilds are fast.
 
 When you're ready to ship:
 
@@ -129,8 +179,51 @@ next-rust build   # compiles and pre-renders what it can
 next-rust start
 ```
 
-The crates aren't on crates.io yet, which is why `--framework-path` points
-at your checkout for now.
+## Staying up to date
+
+New projects follow this GitHub repository, so updating is one command. Run
+it inside your project:
+
+```sh
+next-rust upgrade
+```
+
+That does two things:
+
+- moves your project's framework to the latest commit on GitHub (the exact
+  version stays pinned in `Cargo.lock` until you upgrade again);
+- reinstalls the `next-rust` command from GitHub.
+
+To update just one of them:
+
+```sh
+next-rust upgrade --project   # only this project's framework
+next-rust upgrade --cli       # only the next-rust command
+```
+
+You don't need to remember to check. Once a day, `next-rust dev` and
+`next-rust new` quietly ask GitHub whether something newer exists, and print a
+short note if it does. Nothing is installed without you running
+`next-rust upgrade`, so an update never lands in the middle of your work. The
+check sends no information about you or your project. Turn it off with
+`NEXT_RUST_NO_UPDATE_CHECK=1`.
+
+Prefer plain Cargo? `cargo update -p next-rust -p next-rust-build` updates the
+project, and running the install command from step 2 again with `--force`
+updates the CLI.
+
+### Working on the framework itself
+
+If you want to change Next Rust while building an app with it, point the app
+at your own clone instead:
+
+```sh
+git clone https://github.com/iplustsolution/next-rust
+cargo install --path next-rust/crates/next-rust-cli
+next-rust new my-app --framework-path ./next-rust
+```
+
+That project uses your local copy, so `git pull` in the clone updates it.
 
 ## What's in the box
 

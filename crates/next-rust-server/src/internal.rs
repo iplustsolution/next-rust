@@ -9,7 +9,7 @@ use crate::request::Request;
 use crate::response::Response;
 use crate::sse::SseEvent;
 
-pub const RUNTIME_JS: &str = include_str!("client/runtime.js");
+pub use crate::client_runtime::RUNTIME_JS;
 
 pub(crate) fn runtime_version() -> &'static str {
     static V: OnceLock<String> = OnceLock::new();

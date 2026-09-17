@@ -128,7 +128,7 @@ fn syntax_errors_stop_generation_with_location() {
     let t = Tmp::new(&[("app/page.rs", "pub fn Page( {")]);
     let project = analyze_project(&t.config(""));
     assert_eq!(codes(&project), vec!["NR0200"]);
-    assert!(project.diagnostics.0[0].locations[0].to_string_lossy().contains("app/page.rs:1:"));
+    assert!(project.diagnostics.0[0].locations[0].to_string_lossy().replace('\\', "/").contains("app/page.rs:1:"));
 }
 
 #[test]
@@ -153,7 +153,8 @@ fn custom_and_monorepo_app_directories() {
     let paths: Vec<String> = project.routes.iter().map(|r| r.route.pattern.to_display_string()).collect();
     assert_eq!(paths, vec!["/", "/pricing", "/v2/users"]);
     let code = generate_code(&project);
-    assert!(code.contains("shared/pages/(marketing)/pricing/page.rs"));
+    // Windows paths appear as `\\`-escaped separators inside string literals.
+    assert!(code.replace("\\\\", "/").contains("shared/pages/(marketing)/pricing/page.rs"));
     assert!(code.contains("pattern: \"/v2/users\""));
 }
 

@@ -12,9 +12,5 @@ async fn islands_render_on_the_server() {
         res.text
     );
     assert!(res.text.contains(r#"<output data-nr-text="count">3</output>"#));
-    assert!(res.text.contains(r#"data-module="/_nr/client/islands/clock.js""#));
     assert!(res.text.contains(r#"<script type="module" src="/_nr/runtime.js?v="#));
-    let module = client.get("/_nr/client/islands/clock.js").await;
-    assert_eq!(module.status, 200);
-    assert!(module.text.contains("export function hydrate"));
 }

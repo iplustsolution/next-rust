@@ -27,14 +27,19 @@ pub fn run(args: &[String]) -> Result<(), String> {
         );
         return Ok(());
     }
+    crate::update_check::notify_if_outdated();
     let info = project::load()?;
     let port = a.value(&["--port", "-p"]).map(str::to_owned).unwrap_or_else(|| info.config.server.port.to_string());
     let status_file = info.config.output_dir().join("dev/status.json");
     let poll = Duration::from_millis(info.config.dev.poll_interval.max(50));
 
-    eprintln!("\n  {} {}", ui::bold("Next Rust"), ui::dim(env!("CARGO_PKG_VERSION")));
-    eprintln!("  - Local:  http://localhost:{port}");
-    eprintln!("  - App:    {}\n", info.config.app_dir().display());
+    ui::header("development server");
+    ui::boxed(&[
+        format!("{}  {}", ui::dim("Local  "), ui::bold(&format!("http://localhost:{port}"))),
+        format!("{}  {}", ui::dim("App dir"), info.config.app_dir().display()),
+        format!("{}  {}", ui::dim("Mode   "), "development · rebuild on save · live reload"),
+    ]);
+    eprintln!();
 
     let mut routes = route_set(&info);
     let mut child: Option<Child> = None;

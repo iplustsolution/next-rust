@@ -20,6 +20,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let info = project::load()?;
     let out = info.config.output_dir();
 
+    ui::header("production build");
     ui::step("Validating routes");
     let analyzed = analyze_project(&info.config);
     super::report(&analyzed)?;

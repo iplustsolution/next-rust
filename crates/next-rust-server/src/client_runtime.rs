@@ -1,4 +1,16 @@
-// Next Rust client runtime. No dependencies, no eval (CSP friendly).
+//! The browser runtime served at `/_nr/runtime.js`.
+//!
+//! Browsers can only execute JavaScript or WebAssembly, so the part of the
+//! framework that runs in the browser is JavaScript source kept here as a
+//! string. It has no dependencies and never uses `eval`, so it works under a
+//! strict Content Security Policy. It is sent only to pages that render a
+//! `Link!` with client navigation or an interactive island.
+//!
+//! Responsibilities: client-side navigation and prefetching, applying streamed
+//! boundaries after navigation, server-action calls and form enhancement, and
+//! island hydration (declarative bindings or `hydrate(element, props)` modules).
+
+pub const RUNTIME_JS: &str = r#"// Next Rust client runtime. No dependencies, no eval (CSP friendly).
 // Served at /_nr/runtime.js and loaded only by pages that render a Link! with
 // client navigation or an interactive island.
 const NR = (window.nextRust = window.nextRust || {});
@@ -293,3 +305,4 @@ function bindDeclarative(root, state) {
 }
 
 hydrateIslands(document);
+"#;

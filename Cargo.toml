@@ -8,8 +8,8 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/next-rust/next-rust"
-homepage = "https://github.com/next-rust/next-rust"
+repository = "https://github.com/iplustsolution/next-rust"
+homepage = "https://github.com/iplustsolution/next-rust"
 authors = ["Next Rust contributors"]
 
 [workspace.dependencies]

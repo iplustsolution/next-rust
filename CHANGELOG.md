@@ -24,4 +24,6 @@ Initial release.
 - Client runtime (~4 KB gzipped): client navigation, prefetch, islands,
   form enhancement.
 - CLI: new, dev, build, start, check, routes, analyze, generate, doctor,
-  docker, clean.
+  docker, upgrade, clean.
+- `next-rust new` depends on the GitHub repository; `next-rust upgrade`
+  updates projects and the CLI, with a daily update notice.

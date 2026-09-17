@@ -1,0 +1,5 @@
+# The framework is written in Rust. The HTML and CSS files under examples/ are
+# app content that demonstrates `page.html` pages and CSS modules, so they are
+# left out of GitHub's language statistics.
+examples/**/*.html linguist-detectable=false
+examples/**/*.css linguist-detectable=false

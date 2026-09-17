@@ -19,9 +19,3 @@ pub fn Disclosure(open: bool, label: String) -> impl View {
         p![data("nr-show", "open"), hidden(!open), "Hidden details, revealed on the client."],
     ]
 }
-
-/// Island hydrated by a custom ES module (for example wasm-bindgen output).
-#[client(module = "/_nr/client/islands/clock.js")]
-pub fn Clock(label: String) -> impl View {
-    p![label, ": ", time![class("clock"), "--:--:--"]]
-}

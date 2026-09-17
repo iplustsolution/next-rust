@@ -9,6 +9,7 @@ pub mod generate;
 pub mod new;
 pub mod routes;
 pub mod start;
+pub mod upgrade;
 
 use next_rust_build::Project;
 

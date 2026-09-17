@@ -1,6 +1,6 @@
 use next_rust::prelude::*;
 
-use crate::components::{Clock, Counter, Disclosure};
+use crate::components::{Counter, Disclosure};
 
 pub fn Page() -> impl View {
     div![
@@ -8,7 +8,6 @@ pub fn Page() -> impl View {
         p!["The page is server-rendered HTML; only the islands below are interactive."],
         Counter(3),
         Disclosure(false, "More".into()),
-        Clock("Local time".into()),
         Link!(href = "/about", "Client-side navigation to /about"),
     ]
 }

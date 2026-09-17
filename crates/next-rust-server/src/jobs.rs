@@ -162,7 +162,8 @@ mod tests {
                 }
             })
             .start();
-        tokio::time::sleep(Duration::from_millis(60)).await;
+        // Generous margin: Windows timers have ~15 ms resolution.
+        tokio::time::sleep(Duration::from_millis(250)).await;
         for h in handles {
             h.abort();
         }

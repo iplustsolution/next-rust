@@ -161,7 +161,7 @@ fn render_to_string_resolves_suspense() {
 fn streaming_document_sends_shell_first() {
     let body = div![
         h1!["Shell"],
-        suspense(p!["Loading slow"], slow(40, "slow")),
+        suspense(p!["Loading slow"], slow(250, "slow")),
         suspense(p!["Loading fast"], async { div![slow(1, "fast").await, suspense("inner…", slow(1, "inner"))] }),
     ];
     let mut parts = DocumentParts::new(body);

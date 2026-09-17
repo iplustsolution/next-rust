@@ -1,9 +1,10 @@
+
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Next Rust logo">
   <title>Next Rust</title>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#17171c"/>
-      <stop offset="1" stop-color="#050506"/>
+      <stop offset="0" stop-color="#e5e5ec"/>
+      <stop offset="1" stop-color="#e0e0ef"/>
     </linearGradient>
     <linearGradient id="rust" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#ffb35c"/>
@@ -11,8 +12,8 @@
       <stop offset="1" stop-color="#b3260c"/>
     </linearGradient>
     <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0" stop-color="#ffb35c"/>
+      <stop offset="1" stop-color="#f25c1f" stop-opacity="0"/>
     </linearGradient>
     <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
       <stop offset="0" stop-color="#f25c1f" stop-opacity="0.35"/>
@@ -42,11 +43,11 @@
     <use href="#tooth" transform="rotate(330 256 256)"/>
   </g>
   <circle cx="256" cy="256" r="146" fill="none" stroke="url(#rust)" stroke-width="40"/>
-  <circle cx="256" cy="256" r="126" fill="#0a0a0c"/>
+  <circle cx="256" cy="256" r="126" fill="#f6f6f9"/>
 
   <!-- the "N": the Next half, its stroke racing out of the gear -->
   <g clip-path="url(#inner)">
-    <rect x="190" y="186" width="30" height="140" rx="4" fill="#ffffff"/>
+    <rect x="190" y="186" width="30" height="140" rx="4" fill="#ffb35c"/>
     <polygon points="190,186 222,186 350,360 318,360" fill="url(#fade)"/>
     <rect x="292" y="186" width="30" height="92" rx="4" fill="url(#fade)"/>
   </g>

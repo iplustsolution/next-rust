@@ -6,7 +6,9 @@ pub fn cargo_toml(name: &str, framework_path: Option<&str>) -> String {
             format!("{{ path = \"{}/crates/next-rust\" }}", p.trim_end_matches('/')),
             format!("{{ path = \"{}/crates/next-rust-build\" }}", p.trim_end_matches('/')),
         ),
-        None => (format!("\"{}\"", env!("CARGO_PKG_VERSION")), format!("\"{}\"", env!("CARGO_PKG_VERSION"))),
+        // Until the crates are published, projects track the GitHub repository.
+        // `next-rust upgrade` moves them to the latest commit.
+        None => (format!("{{ git = \"{}\" }}", crate::REPO_URL), format!("{{ git = \"{}\" }}", crate::REPO_URL)),
     };
     format!(
         r#"[package]
@@ -125,7 +127,7 @@ nav a {
 
 pub fn readme(name: &str) -> String {
     format!(
-        "# {name}\n\nA [Next Rust](https://github.com/next-rust/next-rust) application.\n\n```sh\nnext-rust dev     # http://localhost:3000\nnext-rust build   # production build + static generation\nnext-rust start   # run the production build\n```\n\nRoutes live in `app/`: `page.rs` files are pages, `layout.rs` files wrap their children, `route.rs` files are API endpoints.\n"
+        "# {name}\n\nA [Next Rust](https://github.com/iplustsolution/next-rust) application.\n\n```sh\nnext-rust dev     # http://localhost:3000\nnext-rust build   # production build + static generation\nnext-rust start   # run the production build\n```\n\nRoutes live in `app/`: `page.rs` files are pages, `layout.rs` files wrap their children, `route.rs` files are API endpoints.\n"
     )
 }
 

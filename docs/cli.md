@@ -14,9 +14,12 @@ Creates a project: `Cargo.toml`, `build.rs`, `src/main.rs`, `next-rust.toml`,
 `app/` with a layout, two pages, a 404 page and an API route, plus `public/`,
 `.gitignore` and `.env.example`.
 
+By default the project depends on
+`https://github.com/iplustsolution/next-rust`.
+
 | option | |
 |---|---|
-| `--framework-path <dir>` | depend on a local Next Rust checkout (path dependencies) |
+| `--framework-path <dir>` | depend on a local Next Rust checkout (path dependencies) instead |
 
 ## `dev`
 
@@ -112,6 +115,34 @@ port availability, and route diagnostics.
 
 Writes a multi-stage `Dockerfile` and `.dockerignore`. See
 [deployment](deployment.md). `--force` overwrites existing files.
+
+## `upgrade`
+
+Updates to the latest Next Rust on GitHub.
+
+| option | |
+|---|---|
+| *(none)* | both of the below |
+| `--project` | `cargo update -p next-rust -p next-rust-build` in the current project, reporting the old and new commit |
+| `--cli` | `cargo install --git https://github.com/iplustsolution/next-rust next-rust-cli --force` |
+
+Projects that use `--framework-path` are updated with `git pull` in that
+checkout. `upgrade` says so instead of changing anything.
+
+### Update notice
+
+Once every 24 hours, `dev` and `new` check GitHub for a newer version: the
+workspace version in `Cargo.toml`, and the latest commit compared with your
+`Cargo.lock`. If something is newer, they print a note suggesting
+`next-rust upgrade`. The check:
+
+- never installs or changes anything;
+- sends nothing about you or your project (it downloads one public file and
+  runs `git ls-remote`);
+- gives up silently after about 5 seconds or on any error;
+- is skipped when `CI` or `NEXT_RUST_NO_UPDATE_CHECK` is set.
+
+The time of the last check is stored in `~/.next-rust/last-update-check`.
 
 ## `clean`
 

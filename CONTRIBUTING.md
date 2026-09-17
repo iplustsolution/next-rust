@@ -14,7 +14,7 @@ renderer, here's what you need to know.
 ## Setting up
 
 ```sh
-git clone https://github.com/next-rust/next-rust
+git clone https://github.com/iplustsolution/next-rust
 cd next-rust
 cargo test --workspace
 ```

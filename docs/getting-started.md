@@ -10,14 +10,11 @@ Next Rust does not need Node.js.
 ## Install the CLI
 
 ```sh
-# from a checkout of this repository
-cargo install --path crates/next-rust-cli
-
-# once published
-cargo install next-rust-cli
+cargo install --git https://github.com/iplustsolution/next-rust next-rust-cli
 ```
 
-This installs the `next-rust` binary.
+This installs the `next-rust` binary. Don't have Rust yet? See the
+[installation steps in the README](../README.md#getting-started).
 
 ## Create a project
 
@@ -30,8 +27,10 @@ next-rust dev
 Open <http://localhost:3000>. Edit `app/page.rs` and save: the dev server
 rebuilds and the browser reloads.
 
-> Until the crates are published, create projects against a local checkout:
-> `next-rust new my-app --framework-path /path/to/next-rust`.
+New projects depend on the GitHub repository. Update the project and the CLI
+with `next-rust upgrade`; see [the CLI reference](cli.md#upgrade). To develop
+against a local clone instead, use
+`next-rust new my-app --framework-path /path/to/next-rust`.
 
 ## What was generated
 
