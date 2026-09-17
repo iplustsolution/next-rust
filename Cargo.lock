@@ -499,7 +499,7 @@ dependencies = [
 
 [[package]]
 name = "next-rust"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "bytes",
  "http",
@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "next-rust-assets"
-version = "0.1.8"
+version = "0.1.9"
 
 [[package]]
 name = "next-rust-benchmarks"
@@ -534,7 +534,7 @@ dependencies = [
 
 [[package]]
 name = "next-rust-build"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "next-rust-assets",
  "next-rust-core",
@@ -548,7 +548,7 @@ dependencies = [
 
 [[package]]
 name = "next-rust-cache"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "next-rust-assets",
  "serde",
@@ -558,7 +558,7 @@ dependencies = [
 
 [[package]]
 name = "next-rust-cli"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "next-rust-build",
  "next-rust-core",
@@ -569,7 +569,7 @@ dependencies = [
 
 [[package]]
 name = "next-rust-core"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "serde",
  "serde_json",
@@ -578,7 +578,7 @@ dependencies = [
 
 [[package]]
 name = "next-rust-macros"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "next-rust-assets",
  "proc-macro2",
@@ -588,7 +588,7 @@ dependencies = [
 
 [[package]]
 name = "next-rust-router"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "next-rust-core",
  "serde",
@@ -597,7 +597,7 @@ dependencies = [
 
 [[package]]
 name = "next-rust-server"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "bytes",
  "flate2",
@@ -623,7 +623,7 @@ dependencies = [
 
 [[package]]
 name = "next-rust-view"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "futures-executor",
  "futures-util",
@@ -631,7 +631,7 @@ dependencies = [
 
 [[package]]
 name = "next-rust-website"
-version = "0.1.8"
+version = "0.1.9"
 dependencies = [
  "next-rust",
  "next-rust-build",
