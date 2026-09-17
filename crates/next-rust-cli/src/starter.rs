@@ -263,6 +263,9 @@ mod tests {
     fn starter_favicon_matches_the_project_logo() {
         let logo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../website/public/logo.svg");
         if let Ok(source) = std::fs::read_to_string(logo) {
+            // Git on Windows may check the file out with CRLF line endings,
+            // while string literals in Rust source always use LF.
+            let source = source.replace("\r\n", "\n");
             assert_eq!(super::FAVICON_SVG, source, "copy website/public/logo.svg into FAVICON_SVG");
         }
     }
