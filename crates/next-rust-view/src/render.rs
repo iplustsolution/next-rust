@@ -152,7 +152,8 @@ impl Writer {
                     self.out.push('"');
                 }
             }
-            if a.name == "data-nr-link" {
+            // `Link!` and plain same-origin anchors both enable client navigation.
+            if a.name == "data-nr-link" || (tag == "a" && a.name == "href" && is_internal_href(value)) {
                 self.flags.links = true;
             }
         }
@@ -327,4 +328,10 @@ pub fn stream_document(parts: DocumentParts, streaming: bool) -> impl Stream<Ite
             },
         }
     })
+}
+
+/// A link the client runtime can navigate to without a full reload:
+/// root-relative (`/about`), not protocol-relative (`//cdn`).
+fn is_internal_href(value: &AttrValue) -> bool {
+    matches!(value, AttrValue::Text(href) if href.starts_with('/') && !href.starts_with("//"))
 }

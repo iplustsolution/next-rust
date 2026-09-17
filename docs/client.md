@@ -17,8 +17,9 @@ WebAssembly. Next Rust's server never ships Rust code to the client unless
 you compile and serve a WASM module yourself (see
 [WASM islands](#wasm-islands)).
 
-The runtime script is added to a page only when the render used a `Link!`
-(with `[rendering] client_navigation = true`, the default) or an island.
+The runtime script is added to a page only when the render used a link to a
+page of the app (`Link!` or a plain `a![href("/about")]`, with
+`[rendering] client_navigation = true`, the default) or an island.
 Pages with neither ship zero JavaScript.
 
 ## Islands with `#[client]`
@@ -136,15 +137,21 @@ Rust-side reactive DOM library. See [status.md](status.md). The protocol
 
 ## Client-side navigation
 
-With the runtime loaded, `Link!` clicks:
+With the runtime loaded, clicks on same-origin links (`Link!` and plain
+`a![href("/about"), "About"]` alike) don't reload the page. Instead they:
 
 1. fetch the target HTML (reusing a prefetch from hover or touch, cached for 30 seconds);
 2. swap `<body>`, `<title>` and managed `<meta>` / `<style data-nr-css>` elements;
 3. update history and scroll position, then hydrate islands in the new content.
 
 A non-HTML response or network failure falls back to a full page load.
-Modifier-clicks, `target=_blank`, `download` and cross-origin links are left
-to the browser.
+Modifier-clicks, `target=_blank`, `download`, `rel="external"` and
+cross-origin links are left to the browser. To force a full page load for one
+link (for example a logout endpoint that sets cookies), add `reload(true)`:
+
+```rust
+a![href("/logout"), reload(true), "Log out"]
+```
 
 Imperative API:
 

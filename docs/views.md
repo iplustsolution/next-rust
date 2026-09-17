@@ -135,9 +135,10 @@ Link!(href = "/docs", class = "nav", prefetch = false, span!["Docs"])
 Link!(href = "/step/2", replace = true, scroll = false, "Next")
 ```
 
-`Link!` renders a normal `<a href>` that works without JavaScript. When the
-page loads the client runtime, links navigate client-side and prefetch on
-hover. See [client.md](client.md).
+`Link!` renders a normal `<a href>` that works without JavaScript. Plain
+anchors get the same treatment: `a![href("/about"), "About"]` also navigates
+without a page refresh and prefetches on hover. Use `reload(true)` on a link
+that must do a full page load. See [client.md](client.md).
 
 ## Images
 

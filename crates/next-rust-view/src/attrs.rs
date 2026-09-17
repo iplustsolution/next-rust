@@ -173,6 +173,12 @@ pub fn replace(enabled: bool) -> Attr {
     if enabled { Attr::new("data-nr-replace", "") } else { Attr::none() }
 }
 
+/// Make a link do a full page load instead of client-side navigation:
+/// `a![href("/logout"), reload(true), "Log out"]`.
+pub fn reload(enabled: bool) -> Attr {
+    if enabled { Attr::new("data-nr-reload", "") } else { Attr::none() }
+}
+
 /// Keep the scroll position after a client navigation (`Link!`).
 pub fn scroll(enabled: bool) -> Attr {
     if enabled { Attr::none() } else { Attr::new("data-nr-scroll", "false") }

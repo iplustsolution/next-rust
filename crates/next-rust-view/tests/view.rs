@@ -198,6 +198,19 @@ fn non_streaming_document_is_one_chunk() {
 }
 
 #[test]
+fn plain_internal_anchors_enable_client_navigation() {
+    let flags_for = |view: Node| {
+        let parts = DocumentParts { tail: Box::new(|f| format!("[links={}]", f.links)), ..DocumentParts::new(view) };
+        futures_executor::block_on(stream_document(parts, false).collect::<Vec<_>>()).concat()
+    };
+    assert!(flags_for(a![href("/about"), "About"].into_node()).contains("[links=true]"));
+    assert!(flags_for(a![href("https://example.com"), "x"].into_node()).contains("[links=false]"));
+    assert!(flags_for(a![href("//cdn.example.com/x"), "x"].into_node()).contains("[links=false]"));
+    let html = render_static(a![href("/logout"), reload(true), "Log out"]);
+    assert_eq!(html, r#"<a href="/logout" data-nr-reload="">Log out</a>"#);
+}
+
+#[test]
 fn flags_detect_links_and_islands() {
     let parts = DocumentParts {
         tail: Box::new(|f| format!("{}{}", f.links, f.islands)),
