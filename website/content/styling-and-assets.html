@@ -1,0 +1,103 @@
+<h2 id="global-css"><a class="anchor" href="#global-css">Global CSS</a></h2>
+<pre><code class="language-rust">// app/layout.rs
+pub fn Layout(children: Children) -&gt; impl View {
+    div![global_css!(&quot;globals.css&quot;), children]
+}
+</code></pre>
+<p>The path is relative to the source file. At <strong>compile time</strong> the stylesheet
+is read and minified, and a change to the CSS file triggers a rebuild.</p>
+<h2 id="css-modules"><a class="anchor" href="#css-modules">CSS modules</a></h2>
+<pre><code class="language-css">/* app/components/card.module.css */
+.card { border-radius: 8px; padding: 1rem; }
+.card-title { font-weight: 600; }
+.card:hover .card-title { text-decoration: underline; }
+:global(.dark) .card { background: #111; }
+</code></pre>
+<pre><code class="language-rust">let styles = css_module!(&quot;card.module.css&quot;);
+article![class(styles.card), h2![class(styles.card_title), &quot;Hello&quot;]]
+</code></pre>
+<ul>
+<li>Class selectors are renamed to <code>card_1a2b3c4d</code>, a deterministic hash of the
+module path and class name, so styles never leak between modules.</li>
+<li>Each class is a typed field (<code>card-title</code> → <code>card_title</code>). A misspelled
+class is a <strong>compile error</strong>.</li>
+<li>Selectors inside <code>@media</code>, <code>@supports</code>, <code>@layer</code> and <code>@container</code> are
+scoped. <code>@keyframes</code> names, <code>url(..)</code> and strings are left untouched.
+<code>:global(..)</code> opts out.</li>
+<li>CSS nesting (<code>.a { .b { } }</code>, <code>&amp;:hover</code>) is supported.</li>
+</ul>
+<h3 id="how-stylesheets-reach-the-page"><a class="anchor" href="#how-stylesheets-reach-the-page">How stylesheets reach the page</a></h3>
+<p>Stylesheets are part of the view tree. A page includes a module&#39;s CSS only if
+it renders a class from that module, or includes a <code>global_css!</code> stylesheet.
+Each stylesheet is emitted <strong>once per document</strong> as
+<code>&lt;style data-nr-css=&quot;&lt;hash&gt;&quot;&gt;</code>, hoisted into <code>&lt;head&gt;</code>. Stylesheets first used
+inside streamed content arrive with that chunk, so there&#39;s no flash of
+unstyled content. Client navigation adds new stylesheets and skips ones
+already present.</p>
+<p>Trade-off: inlining avoids extra requests and render-blocking fetches, but
+the CSS isn&#39;t cached separately from the HTML. For large design systems, put
+a stylesheet in <code>public/</code> and reference it with
+<code>Metadata::new().stylesheet(&quot;/styles.css&quot;)</code>.</p>
+<h2 id="public"><a class="anchor" href="#public"><code>public/</code></a></h2>
+<p>Everything in <code>public/</code> is served from the site root:</p>
+<pre><code class="language-text">public/favicon.ico      → /favicon.ico
+public/images/logo.png  → /images/logo.png
+public/robots.txt       → /robots.txt
+</code></pre>
+<ul>
+<li>Routes take precedence over files with the same path.</li>
+<li><code>ETag</code> and <code>Last-Modified</code> are sent, with <code>304</code> responses for conditional
+requests. Single-range requests (<code>Range: bytes=…</code>) get <code>206</code>.</li>
+<li>Large files are streamed in 64 KB chunks.</li>
+<li><code>Cache-Control: public, max-age=&lt;assets.public_max_age&gt;</code>, which defaults to 0
+because public URLs aren&#39;t fingerprinted.</li>
+<li>Hidden files (<code>.env</code>, <code>.git</code>), <code>..</code> segments, encoded traversal
+(<code>%2e%2e</code>), backslashes, NUL bytes, and symbolic links pointing outside
+<code>public/</code> are all refused.</li>
+</ul>
+<h2 id="fingerprinted-assets-asset"><a class="anchor" href="#fingerprinted-assets-asset">Fingerprinted assets: <code>asset!</code></a></h2>
+<p>For long-term caching, put files in <code>assets/</code> and reference them with
+<code>asset!</code>:</p>
+<pre><code class="language-rust">link![rel(&quot;preload&quot;), href(asset!(&quot;fonts/inter.woff2&quot;)), as_(&quot;font&quot;)]
+img![src(asset!(&quot;images/logo.svg&quot;)), alt(&quot;Acme&quot;)]
+</code></pre>
+<p><code>asset!</code> runs at compile time. It hashes the file content and returns
+<code>/_nr/assets/fonts/inter.&lt;16-hex-hash&gt;.woff2</code>. That URL is served with
+<code>Cache-Control: public, max-age=31536000, immutable</code>, and the URL changes
+whenever the content does. Editing the file triggers a rebuild.</p>
+<h2 id="images"><a class="anchor" href="#images">Images</a></h2>
+<pre><code class="language-rust">Image!(src = &quot;/photos/lake.jpg&quot;, width = 1200, height = 800, alt = &quot;A lake&quot;)
+</code></pre>
+<p>Generated markup: <code>srcset</code> with widths up to the declared width, <code>sizes</code>,
+<code>loading=&quot;lazy&quot;</code> (or <code>fetchpriority=&quot;high&quot;</code> with <code>priority = true</code>),
+<code>decoding=&quot;async&quot;</code>, and width and height attributes.</p>
+<p>Local images go through <code>/_nr/image?url=…&amp;w=…&amp;q=…</code>, which only accepts local
+paths under <code>public/</code> (never remote URLs, so it can&#39;t be used for SSRF). It
+validates the width and serves the image with
+<code>Cache-Control: public, max-age=&lt;images.max_age&gt;</code>.</p>
+<p><strong>Status:</strong> resizing and format conversion (WebP/AVIF) aren&#39;t implemented
+yet. The endpoint currently serves the original file (<code>x-nr-image: original</code>).
+Because the markup and URLs are already final, adding an optimizer won&#39;t
+require changing your code. Until then, pre-size large images, or use
+<code>unoptimized = true</code> with an image CDN.</p>
+<h2 id="fonts"><a class="anchor" href="#fonts">Fonts</a></h2>
+<pre><code class="language-rust">use std::sync::LazyLock;
+
+static INTER: LazyLock&lt;LocalFont&gt; = LazyLock::new(|| {
+    LocalFont::new(&quot;Inter&quot;, asset!(&quot;fonts/inter-var.woff2&quot;)).weight(&quot;100 900&quot;).display(&quot;swap&quot;)
+});
+
+pub fn metadata() -&gt; Metadata { INTER.metadata() }            // &lt;link rel=preload as=font crossorigin&gt;
+
+pub fn Layout(children: Children) -&gt; impl View {
+    div![INTER.style_node(), style(format!(&quot;font-family: {}&quot;, INTER.family())), children]
+}
+</code></pre>
+<p><code>LocalFont</code> sanitizes names and URLs placed in the generated <code>@font-face</code>
+rule. Font files served through <code>asset!</code> get immutable caching.</p>
+<h2 id="compression"><a class="anchor" href="#compression">Compression</a></h2>
+<p>Buffered responses larger than 1 KB, and all streamed responses, with compressible types (HTML, CSS, JS, JSON, SVG,
+WASM) are gzip-compressed when the client accepts it. Streamed HTML is
+compressed chunk by chunk with sync flushes, so it still arrives
+progressively. Disable with <code>[server] compression = false</code>, for example when
+a proxy compresses.</p>

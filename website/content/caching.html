@@ -1,0 +1,132 @@
+<p>Next Rust has two caches:</p>
+<div class="table-wrap"><table><thead><tr>
+<th>cache</th>
+<th>stores</th>
+<th>default store</th>
+</tr>
+</thead><tbody><tr>
+<td><strong>page store</strong></td>
+<td>HTML of static pages (pre-rendered at startup + ISR)</td>
+<td>memory</td>
+</tr>
+<tr>
+<td><strong>data cache</strong></td>
+<td>results of <code>next_rust::cache(..)</code></td>
+<td>memory</td>
+</tr>
+</tbody></table></div>
+<p>Both use the same pluggable abstraction from <code>next-rust-cache</code>.</p>
+<h2 id="data-cache"><a class="anchor" href="#data-cache">Data cache</a></h2>
+<pre><code class="language-rust">use next_rust::{cache, CacheOptions};
+
+pub async fn Page() -&gt; Result&lt;impl View&gt; {
+    let products: Vec&lt;Product&gt; = cache(
+        &quot;products:featured&quot;,
+        CacheOptions::revalidate(300).tag(&quot;products&quot;),
+        || async { api::featured_products().await },
+    )
+    .await?;
+    Ok(ProductGrid(products))
+}
+</code></pre>
+<ul>
+<li>Values are stored as JSON, so they must implement <code>Serialize</code> +
+<code>Deserialize</code>.</li>
+<li>A stale entry (older than <code>revalidate</code>) is recomputed inline. Errors
+aren&#39;t cached.</li>
+<li><code>revalidate_tag(&quot;products&quot;)</code> removes every entry with the tag, in both the
+data cache and the page store.</li>
+<li><code>next_rust::invalidate(&quot;products:featured&quot;)</code> removes one key.</li>
+</ul>
+<h2 id="invalidation-api"><a class="anchor" href="#invalidation-api">Invalidation API</a></h2>
+<pre><code class="language-rust">next_rust::revalidate_path(&quot;/products&quot;).await;   // page store (+ data key of the same name)
+next_rust::revalidate_tag(&quot;products&quot;).await;     // everything tagged
+app.revalidate_path(&quot;/products&quot;).await;          // instance API, returns whether something was removed
+</code></pre>
+<p>Call these from API routes, server actions, jobs or webhooks. For example, a
+CMS publishing hook:</p>
+<pre><code class="language-rust">// app/api/revalidate/route.rs
+pub async fn POST(req: Request) -&gt; Result&lt;Response&gt; {
+    if req.header(&quot;x-secret&quot;) != Some(&amp;std::env::var(&quot;REVALIDATE_SECRET&quot;)?) {
+        return Err(Error::http(401, &quot;unauthorized&quot;));
+    }
+    next_rust::revalidate_tag(&quot;posts&quot;).await;
+    Ok(Response::json(&amp;serde_json::json!({ &quot;ok&quot;: true })))
+}
+</code></pre>
+<h2 id="traits"><a class="anchor" href="#traits">Traits</a></h2>
+<pre><code class="language-rust">pub trait CacheStore: Send + Sync + &#39;static {
+    fn get&lt;&#39;a&gt;(&amp;&#39;a self, key: &amp;&#39;a CacheKey) -&gt; BoxFuture&lt;&#39;a, Result&lt;Option&lt;CacheEntry&gt;, CacheError&gt;&gt;;
+    fn set(&amp;self, key: CacheKey, entry: CacheEntry) -&gt; BoxFuture&lt;&#39;_, Result&lt;(), CacheError&gt;&gt;;
+    fn delete&lt;&#39;a&gt;(&amp;&#39;a self, key: &amp;&#39;a CacheKey) -&gt; BoxFuture&lt;&#39;a, Result&lt;bool, CacheError&gt;&gt;;
+    fn delete_tag&lt;&#39;a&gt;(&amp;&#39;a self, tag: &amp;&#39;a str) -&gt; BoxFuture&lt;&#39;a, Result&lt;usize, CacheError&gt;&gt;;
+    fn clear(&amp;self) -&gt; BoxFuture&lt;&#39;_, Result&lt;(), CacheError&gt;&gt;;
+}
+</code></pre>
+<ul>
+<li><code>CacheKey</code>: namespaced string (<code>page:/blog/x</code>, <code>data:key</code>).</li>
+<li><code>CacheEntry</code>: <code>value</code> bytes, <code>created</code>, <code>revalidate</code>, <code>tags</code>, <code>meta</code>.
+<code>is_stale()</code> reports whether it has expired.</li>
+<li><code>Cache</code>: the typed API over any store (<code>get_or_insert_json</code>,
+<code>revalidate_path</code>, <code>revalidate_tag</code>).</li>
+</ul>
+<p>Built-in stores:</p>
+<ul>
+<li><code>MemoryStore::new(max_entries)</code>: bounded LRU.</li>
+<li><code>FileStore::new(dir)</code>: atomic writes (temp file plus rename). Tag
+invalidation scans metadata files, so it suits single nodes.</li>
+</ul>
+<h2 id="custom-stores-redis"><a class="anchor" href="#custom-stores-redis">Custom stores (Redis, …)</a></h2>
+<p>Redis isn&#39;t required or bundled. To share caches across instances,
+implement <code>CacheStore</code> on top of your client of choice:</p>
+<pre><code class="language-rust">struct RedisStore { client: redis::aio::ConnectionManager }
+
+impl CacheStore for RedisStore {
+    fn get&lt;&#39;a&gt;(&amp;&#39;a self, key: &amp;&#39;a CacheKey) -&gt; BoxFuture&lt;&#39;a, Result&lt;Option&lt;CacheEntry&gt;, CacheError&gt;&gt; {
+        Box::pin(async move {
+            let mut conn = self.client.clone();
+            let bytes: Option&lt;Vec&lt;u8&gt;&gt; = redis::cmd(&quot;GET&quot;).arg(key.as_str()).query_async(&amp;mut conn).await
+                .map_err(|e| CacheError::Backend(e.to_string()))?;
+            Ok(bytes.map(decode_entry))
+        })
+    }
+    // set: SET + SADD tag:&lt;tag&gt; key; delete_tag: SMEMBERS + DEL …
+}
+</code></pre>
+<p>Install it:</p>
+<pre><code class="language-rust">App::new(routes())
+    .page_store(RedisStore::new(url).await?)
+    .cache(Cache::new(RedisStore::new(url).await?))
+</code></pre>
+<h2 id="http-caching"><a class="anchor" href="#http-caching">HTTP caching</a></h2>
+<div class="table-wrap"><table><thead><tr>
+<th>response</th>
+<th><code>Cache-Control</code></th>
+</tr>
+</thead><tbody><tr>
+<td>dynamic page</td>
+<td><code>private, no-cache, no-store, max-age=0, must-revalidate</code></td>
+</tr>
+<tr>
+<td>static page without revalidate</td>
+<td><code>public, max-age=0, must-revalidate</code></td>
+</tr>
+<tr>
+<td>static page with revalidate</td>
+<td><code>public, max-age=0, s-maxage=&lt;n&gt;, stale-while-revalidate</code></td>
+</tr>
+<tr>
+<td><code>/_nr/assets/*</code> (fingerprinted, matching hash)</td>
+<td><code>public, max-age=31536000, immutable</code></td>
+</tr>
+<tr>
+<td><code>/_nr/runtime.js?v=&lt;hash&gt;</code></td>
+<td><code>public, max-age=31536000, immutable</code></td>
+</tr>
+<tr>
+<td><code>public/</code> files</td>
+<td><code>public, max-age=&lt;assets.public_max_age&gt;</code> + ETag</td>
+</tr>
+</tbody></table></div>
+<p><code>x-nr-cache: HIT | MISS | STALE | BYPASS</code> shows how a static page was
+served.</p>

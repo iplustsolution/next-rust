@@ -44,6 +44,10 @@ pub(crate) async fn handle(inner: &AppInner, req: &Request) -> Option<Response> 
         _ if path.starts_with("/_nr/assets/") => Some(asset(inner, req).await),
         _ if path.starts_with("/_nr/client/") => {
             let rest = &path["/_nr/client".len()..];
+            if let Some(embedded) = inner.embedded {
+                let file = crate::embed::find(embedded.client, rest)?;
+                return Some(crate::static_files::serve_embedded(req, file, embedded.built_at, "public, max-age=3600"));
+            }
             let (file, meta) = crate::static_files::resolve_safe(&inner.client_dir, rest).await?;
             let cc = if inner.env.is_dev() { "no-cache" } else { "public, max-age=3600" };
             Some(crate::static_files::serve_file(req, &file, &meta, cc).await)
@@ -63,6 +67,11 @@ async fn asset(inner: &AppInner, req: &Request) -> Response {
     let Some(pos) = hash_pos.filter(|p| *p > 0) else { return Response::not_found() };
     let hash = parts.remove(pos).to_owned();
     let original = format!("{dir}/{}", parts.join("."));
+    if let Some(embedded) = inner.embedded {
+        let Some(file) = crate::embed::find(embedded.assets, &original) else { return Response::not_found() };
+        let cc = if file.hash == hash { "public, max-age=31536000, immutable" } else { "no-cache" };
+        return crate::static_files::serve_embedded(req, file, embedded.built_at, cc);
+    }
     let Some((path, meta)) = crate::static_files::resolve_safe(&inner.config.root.join("assets"), &original).await
     else {
         return Response::not_found();
@@ -95,7 +104,7 @@ async fn asset_hash(path: &Path, meta: &std::fs::Metadata) -> Option<String> {
 /// Only local files from `public/` are served (never remote URLs, so the
 /// endpoint cannot be abused for SSRF). The current implementation serves
 /// the original file with long-lived caching; resizing and format
-/// conversion are not implemented yet (see docs/assets.md).
+/// conversion are not implemented yet (see the "Styling & assets" docs page).
 async fn image(inner: &AppInner, req: &Request) -> Response {
     #[derive(serde::Deserialize)]
     struct Q {
@@ -109,17 +118,24 @@ async fn image(inner: &AppInner, req: &Request) -> Response {
     if q.w.is_some_and(|w| w == 0 || w > 8192) {
         return Response::text("invalid width").with_status(400);
     }
-    let Some((file, meta)) =
-        crate::static_files::resolve_safe(&inner.public_dir, q.url.split('?').next().unwrap_or("")).await
-    else {
-        return Response::not_found();
-    };
-    let mime = next_rust_assets::mime::from_path(&file.to_string_lossy());
-    if !mime.starts_with("image/") {
-        return Response::text("not an image").with_status(400);
-    }
+    let url = q.url.split('?').next().unwrap_or("");
+    let not_image = || Response::text("not an image").with_status(400);
     let cc = format!("public, max-age={}", inner.config.images.max_age);
-    let mut res = crate::static_files::serve_file(req, &file, &meta, &cc).await;
+    let mut res = if let Some(embedded) = inner.embedded {
+        let Some(file) = crate::embed::find(embedded.public, url) else { return Response::not_found() };
+        if !next_rust_assets::mime::from_path(file.path).starts_with("image/") {
+            return not_image();
+        }
+        crate::static_files::serve_embedded(req, file, embedded.built_at, &cc)
+    } else {
+        let Some((file, meta)) = crate::static_files::resolve_safe(&inner.public_dir, url).await else {
+            return Response::not_found();
+        };
+        if !next_rust_assets::mime::from_path(&file.to_string_lossy()).starts_with("image/") {
+            return not_image();
+        }
+        crate::static_files::serve_file(req, &file, &meta, &cc).await
+    };
     res.set_header("x-nr-image", "original");
     res
 }

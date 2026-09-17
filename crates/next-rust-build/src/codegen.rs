@@ -598,6 +598,79 @@ pub struct CodegenOptions {
     /// Embed `page.html` files minified instead of including them verbatim.
     /// Enabled automatically for release builds.
     pub minify_html: bool,
+    /// Compile the configuration file, `public/`, `assets/` and `client/`
+    /// into the binary so it runs without any other files. Enabled
+    /// automatically for release builds.
+    pub embed_files: bool,
+}
+
+/// Files under `dir` as `(relative path with '/', absolute path)`, sorted.
+/// Hidden files and directories are skipped, like the server does.
+pub fn embeddable_files(dir: &Path) -> Vec<(String, PathBuf)> {
+    fn walk(dir: &Path, prefix: &str, out: &mut Vec<(String, PathBuf)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            let rel = if prefix.is_empty() { name } else { format!("{prefix}/{name}") };
+            if path.is_dir() {
+                walk(&path, &rel, out);
+            } else if path.is_file() {
+                out.push((rel, path));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(dir, "", &mut out);
+    out.sort();
+    out
+}
+
+/// Directories embedded into release binaries: `(field, directory)`.
+pub fn embedded_dirs(config: &Config) -> [(&'static str, PathBuf); 3] {
+    [("public", config.public_dir()), ("assets", config.root.join("assets")), ("client", config.root.join("client"))]
+}
+
+fn embedded_code(config: &Config) -> String {
+    let mut out = String::new();
+    let mut built_at = 0u64;
+    for (field, dir) in embedded_dirs(config) {
+        let _ = writeln!(out, "static __NR_EMBED_{}: &[__nr::EmbeddedFile] = &[", field.to_uppercase());
+        for (rel, path) in embeddable_files(&dir) {
+            let Ok(bytes) = std::fs::read(&path) else { continue };
+            if let Some(secs) = std::fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok())
+            {
+                built_at = built_at.max(secs.as_secs());
+            }
+            let _ = writeln!(
+                out,
+                "    __nr::EmbeddedFile {{ path: {}, bytes: include_bytes!({}), hash: {} }},",
+                lit(&rel),
+                lit(&path.to_string_lossy()),
+                lit(&next_rust_assets::content_hash(&bytes))
+            );
+        }
+        out.push_str("];\n");
+    }
+    let config_file = match &config.source {
+        Some(src) => format!(
+            "Some((include_str!({}), {}))",
+            lit(&src.to_string_lossy()),
+            src.extension().is_some_and(|e| e == "json")
+        ),
+        None => "None".into(),
+    };
+    let _ = write!(
+        out,
+        "static __NR_EMBEDDED: __nr::Embedded = __nr::Embedded {{\n    config: {config_file},\n    built_at: {built_at},\n    public: __NR_EMBED_PUBLIC,\n    assets: __NR_EMBED_ASSETS,\n    client: __NR_EMBED_CLIENT,\n}};\n\n"
+    );
+    out
 }
 
 pub fn generate_code(project: &Project) -> String {
@@ -772,9 +845,15 @@ pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String 
 
     let mut out = header;
     out.push_str(&g.out);
+    let embedded = if options.embed_files {
+        out.push_str(&embedded_code(&project.config));
+        "Some(&__NR_EMBEDDED)"
+    } else {
+        "None"
+    };
     let _ = write!(
         out,
-        "/// All routes discovered in the app directory.\npub fn routes() -> ::next_rust::Routes {{\n    __nr::Routes {{\n        pages: vec![\n{}\n        ],\n        apis: vec![\n{}\n        ],\n        actions: vec![\n{}\n        ],\n        root: {},\n        middleware: {},\n        global_error: {},\n        sitemap: {},\n        robots: {},\n        project_root: Some({}),\n    }}\n}}\n",
+        "/// All routes discovered in the app directory.\npub fn routes() -> ::next_rust::Routes {{\n    __nr::Routes {{\n        pages: vec![\n{}\n        ],\n        apis: vec![\n{}\n        ],\n        actions: vec![\n{}\n        ],\n        root: {},\n        middleware: {},\n        global_error: {},\n        sitemap: {},\n        robots: {},\n        project_root: Some({}),\n        embedded: {},\n    }}\n}}\n",
         pages.join(",\n"),
         apis.join(",\n"),
         actions.join(",\n"),
@@ -784,6 +863,7 @@ pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String 
         Gen::opt(sitemap),
         Gen::opt(robots),
         lit(&root.to_string_lossy()),
+        embedded,
     );
     out
 }

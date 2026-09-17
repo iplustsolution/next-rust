@@ -1,0 +1,201 @@
+<p>A Next Rust application deploys as <strong>one file</strong>: the binary that
+<code>next-rust build</code> writes to <code>.next-rust/&lt;name&gt;</code>. It needs no runtime,
+interpreter, Node.js or files next to it.</p>
+<h2 id="what-to-ship"><a class="anchor" href="#what-to-ship">What to ship</a></h2>
+<pre><code class="language-text">.next-rust/my-app    # that&#39;s all
+</code></pre>
+<p>Release builds compile these into the binary:</p>
+<div class="table-wrap"><table><thead><tr>
+<th>part</th>
+<th>how it gets in</th>
+</tr>
+</thead><tbody><tr>
+<td>pages, layouts, API routes, server actions</td>
+<td>compiled Rust (<code>page.html</code> files as minified strings)</td>
+</tr>
+<tr>
+<td><code>next-rust.toml</code></td>
+<td>embedded; it becomes the configuration of the binary</td>
+</tr>
+<tr>
+<td><code>public/</code>, <code>assets/</code>, <code>client/</code></td>
+<td>embedded and served from memory, with ETags and range requests</td>
+</tr>
+<tr>
+<td>CSS (<code>global_css!</code>, <code>css_module!</code>) and the browser runtime</td>
+<td>embedded</td>
+</tr>
+</tbody></table></div>
+<p>Static pages are rendered into memory in the background when the binary
+starts, so the server never writes to disk. The build also runs the binary from
+an empty directory to prove it needs nothing else.</p>
+<p>The binary is built with fat link-time optimization, a single codegen unit and
+stripped symbols. A new project&#39;s server is around 2 MB. Large files in
+<code>public/</code> (videos, archives) grow the binary by their size; serve those from a
+CDN or object storage instead.</p>
+<p>Environment: <code>NEXT_RUST_ENV=production</code>, <code>PORT</code>, <code>HOST</code>, and your secrets.
+<code>.env</code> files are not embedded, so set secrets in the environment of the
+process. <code>NEXT_RUST_CONFIG=/path/to/next-rust.toml</code> replaces the embedded
+configuration.</p>
+<p><code>cargo build --release</code> produces the same self-contained binary in
+<code>target/release/</code>. Set <code>NEXT_RUST_EMBED=0</code> to read files from disk instead.</p>
+<h2 id="what-production-builds-send-to-browsers"><a class="anchor" href="#what-production-builds-send-to-browsers">What production builds send to browsers</a></h2>
+<p>Release builds (<code>next-rust build</code>) are optimized for size, and make the code
+reaching the browser hard for people to read:</p>
+<div class="table-wrap"><table><thead><tr>
+<th>output</th>
+<th>development</th>
+<th>production</th>
+</tr>
+</thead><tbody><tr>
+<td>HTML rendered from Rust</td>
+<td>compact, no formatting whitespace</td>
+<td>same</td>
+</tr>
+<tr>
+<td><code>page.html</code> files</td>
+<td>served as written</td>
+<td>comments and indentation removed at build time</td>
+</tr>
+<tr>
+<td>CSS (<code>global_css!</code>, <code>css_module!</code>)</td>
+<td>minified</td>
+<td>minified, class names hashed</td>
+</tr>
+<tr>
+<td>client runtime (<code>/_nr/runtime.js</code>)</td>
+<td>readable source</td>
+<td>minified with local names mangled (~2.9 KB gzipped)</td>
+</tr>
+<tr>
+<td>error pages</td>
+<td>full details</td>
+<td>generic message and a digest</td>
+</tr>
+<tr>
+<td>server binary</td>
+<td>debug info, reads files from disk</td>
+<td>one stripped file with everything embedded (fat LTO, single codegen unit)</td>
+</tr>
+</tbody></table></div>
+<p>Development keeps the readable versions so errors are easy to debug. Set
+<code>NEXT_RUST_MINIFY=1</code> to minify <code>page.html</code> files in a debug build, or
+<code>NEXT_RUST_MINIFY=0</code> to keep them readable in a release build.</p>
+<p>Minification isn&#39;t a security boundary. Anything a browser can run, a person
+can open in the browser&#39;s developer tools and pretty-print. Keep secrets,
+business logic and credentials in server code (pages, API routes, server
+actions), which never leaves the server.</p>
+<h2 id="bare-metal-vps"><a class="anchor" href="#bare-metal-vps">Bare metal / VPS</a></h2>
+<pre><code class="language-sh">next-rust build
+scp .next-rust/my-app server:/srv/my-app/
+ssh server &#39;NEXT_RUST_ENV=production PORT=8080 /srv/my-app/my-app&#39;
+</code></pre>
+<p>A systemd unit:</p>
+<pre><code class="language-ini">[Unit]
+Description=my-app
+After=network.target
+
+[Service]
+WorkingDirectory=/srv/my-app
+ExecStart=/srv/my-app/my-app
+Environment=NEXT_RUST_ENV=production PORT=8080
+EnvironmentFile=-/srv/my-app/.env.production.local
+Restart=on-failure
+DynamicUser=yes
+StateDirectory=my-app
+
+[Install]
+WantedBy=multi-user.target
+</code></pre>
+<p>The server shuts down gracefully on <code>SIGTERM</code>. It stops accepting
+connections and waits up to <code>[server] shutdown_timeout</code> seconds for in-flight
+requests.</p>
+<h2 id="docker"><a class="anchor" href="#docker">Docker</a></h2>
+<pre><code class="language-sh">next-rust docker
+docker build -t my-app .
+docker run -p 3000:3000 my-app
+</code></pre>
+<p>The generated Dockerfile:</p>
+<ul>
+<li>builds in <code>rust:1-slim</code> with BuildKit cache mounts for the registry and target directory;</li>
+<li>copies the single binary into <code>gcr.io/distroless/cc-debian12:nonroot</code>, so the
+image holds that one file on a minimal base and runs as an unprivileged user.</li>
+</ul>
+<h2 id="kubernetes"><a class="anchor" href="#kubernetes">Kubernetes</a></h2>
+<ul>
+<li>Liveness and readiness: add a lightweight route, e.g.
+<code>App::new(routes()).get(&quot;/healthz&quot;, |_| async { &quot;ok&quot; })</code>.</li>
+<li><code>terminationGracePeriodSeconds</code> should exceed <code>[server] shutdown_timeout</code>.</li>
+<li>For more than one replica, use a shared <code>CacheStore</code> (see
+<a href="/docs/caching">caching</a>) so ISR revalidation and <code>revalidate_tag</code> affect every
+replica. With the default in-memory store, each pod has its own page cache,
+filled when it starts.</li>
+<li>The built-in rate limiter and <code>MemorySessionStore</code> are per pod.</li>
+</ul>
+<h2 id="flyio-railway-render-and-similar-platforms"><a class="anchor" href="#flyio-railway-render-and-similar-platforms">Fly.io, Railway, Render and similar platforms</a></h2>
+<p>These platforms detect a Dockerfile. <code>PORT</code> is honoured automatically. Set
+<code>NEXT_RUST_ENV=production</code> and <code>[server] trust_proxy = true</code> so client IPs
+and the scheme come from the platform&#39;s proxy.</p>
+<h2 id="reverse-proxies-tls-and-http3"><a class="anchor" href="#reverse-proxies-tls-and-http3">Reverse proxies, TLS and HTTP/3</a></h2>
+<p>The built-in server speaks HTTP/1.1 and HTTP/2 (cleartext, via prior
+knowledge or a proxy). Terminate <strong>TLS</strong> and <strong>HTTP/3</strong> at a reverse proxy or
+load balancer (Caddy, nginx, Envoy, a cloud load balancer). This is the usual
+production setup and keeps certificate management out of the application.</p>
+<pre><code class="language-caddyfile">example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+</code></pre>
+<p>With a proxy in front:</p>
+<ul>
+<li>set <code>[server] trust_proxy = true</code>;</li>
+<li>set <code>[security] hsts_max_age = 31536000</code> once the site is HTTPS-only;</li>
+<li>leave <code>[server] compression = true</code> unless the proxy compresses. Streamed
+HTML flushes per chunk either way, but proxies must not buffer it. Nginx
+honours the <code>x-accel-buffering: no</code> header the framework sends for SSE;
+for streamed HTML, set <code>proxy_buffering off</code> on those locations.</li>
+</ul>
+<p>Native TLS and HTTP/3 in the server are on the roadmap
+(<a href="/docs/status">status.md</a>).</p>
+<h2 id="serverless-and-edge"><a class="anchor" href="#serverless-and-edge">Serverless and edge</a></h2>
+<p>The framework core is independent of the listener. <code>App::handle(Request)</code>
+takes a request and returns a response:</p>
+<pre><code class="language-rust">next_rust::routes!();
+
+// Example adapter for any platform that gives you an http::Request&lt;Bytes&gt;.
+pub async fn handle(req: http::Request&lt;bytes::Bytes&gt;) -&gt; http::Response&lt;Vec&lt;u8&gt;&gt; {
+    static APP: std::sync::OnceLock&lt;next_rust::App&gt; = std::sync::OnceLock::new();
+    let app = APP.get_or_init(|| next_rust::App::new(routes()).build().expect(&quot;app&quot;));
+    let res = app.handle(next_rust::Request::from_http(req)).await;
+    let (status, headers) = (res.status, res.headers.clone());
+    let body = res.into_bytes().await.unwrap_or_default().to_vec();
+    let mut out = http::Response::new(body);
+    *out.status_mut() = status;
+    *out.headers_mut() = headers;
+    out
+}
+</code></pre>
+<p>Wrap this in <code>lambda_http</code>, a Cloudflare Workers WASM shim, or a similar
+adapter. Constraints on serverless platforms:</p>
+<ul>
+<li>the process may be frozen between requests, so background ISR
+regeneration may be delayed. Prefer on-demand <code>revalidate_tag</code>;</li>
+<li>configure a <code>CacheStore</code> backed by the platform&#39;s KV store;</li>
+<li>edge runtimes compiled to <code>wasm32</code> can&#39;t use Tokio&#39;s networking or the
+filesystem store. The request pipeline itself doesn&#39;t need them, but no
+official edge adapter ships yet.</li>
+</ul>
+<h2 id="observability"><a class="anchor" href="#observability">Observability</a></h2>
+<ul>
+<li><strong>Production is silent except for errors.</strong> No startup banner, no request
+lines, no warnings: only errors are printed, as one JSON object per line
+(<code>{&quot;level&quot;:&quot;error&quot;,&quot;msg&quot;:&quot;render error [fa28afc233e6]: …&quot;,&quot;ts&quot;:…}</code>).
+Development prints everything in a readable format.</li>
+<li>To see more in production, opt in with <code>[logging] level = &quot;info&quot;</code> and/or
+<code>requests = true</code>.</li>
+<li><code>request_id()</code> middleware adds <code>x-request-id</code>, and error digests appear in
+both the log and the error UI.</li>
+<li>With the <code>tracing</code> feature, all framework log events go through <code>tracing</code>,
+so any subscriber (OpenTelemetry, Datadog, JSON) collects them.</li>
+<li>Secrets aren&#39;t logged. The framework logs method, path, status and
+duration, never headers, cookies or bodies.</li>
+</ul>

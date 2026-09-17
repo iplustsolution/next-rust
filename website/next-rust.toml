@@ -1,0 +1,8 @@
+# The Next Rust website. Build it with `next-rust build` and deploy the one
+# binary it writes to .next-rust/next-rust-website.
+
+[server]
+port = 3000
+
+[assets]
+public_max_age = 3600

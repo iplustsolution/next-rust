@@ -1,0 +1,74 @@
+<p>Applications are easiest to test with a <strong>library + binary</strong> split: the
+library owns the routes, and tests call it directly without a network socket.</p>
+<pre><code class="language-rust">// src/lib.rs
+pub mod db;
+next_rust::routes!();
+</code></pre>
+<pre><code class="language-rust">// src/main.rs
+fn main() {
+    next_rust::run(my_app::routes());
+}
+</code></pre>
+<pre><code class="language-toml"># Cargo.toml
+[dev-dependencies]
+tokio = { version = &quot;1&quot;, features = [&quot;macros&quot;, &quot;rt-multi-thread&quot;] }
+</code></pre>
+<h2 id="testclient"><a class="anchor" href="#testclient"><code>TestClient</code></a></h2>
+<pre><code class="language-rust">// tests/pages.rs
+use next_rust::{http, TestClient};
+
+#[tokio::test]
+async fn home_page() {
+    let client = TestClient::new(my_app::routes());
+    let res = client.get(&quot;/&quot;).await;
+    assert_eq!(res.status, 200);
+    assert!(res.text.contains(&quot;&lt;h1&gt;Hello World&lt;/h1&gt;&quot;));
+}
+
+#[tokio::test]
+async fn api_and_cookies() {
+    let client = TestClient::new(my_app::routes());
+    let created = client.post_json(&quot;/api/todos&quot;, &amp;serde_json::json!({ &quot;title&quot;: &quot;Test&quot; })).await;
+    assert_eq!(created.status, 201);
+    let todo: serde_json::Value = created.json();
+
+    // Cookies set by responses are sent on later requests.
+    client.post_form(&quot;/_nr/action/…&quot;, &quot;username=ada&quot;).await;
+
+    let req = http::Request::delete(format!(&quot;/api/todos/{}&quot;, todo[&quot;id&quot;])).body(Default::default()).unwrap();
+    assert_eq!(client.send(req).await.status, 204);
+}
+</code></pre>
+<ul>
+<li><code>TestClient::new</code> loads your <code>next-rust.toml</code> and uses the <code>test</code>
+environment, where static pages are cached as in production.
+<code>TestClient::production</code> enables production error messages.
+<code>TestClient::with(App::new(routes()).middleware(..), env)</code> tests a custom
+middleware stack.</li>
+<li><code>TestResponse</code> has <code>status</code>, <code>headers</code>, <code>text</code>, <code>chunks</code> (streamed chunks
+in order), <code>header(..)</code>, <code>json::&lt;T&gt;()</code> and <code>cookies()</code>.</li>
+<li>Action URLs: <code>next_rust::action_url(&quot;src/actions.rs::create_user&quot;)</code>, or
+<code>action!(create_user).url()</code> from the crate.</li>
+</ul>
+<h2 id="assertions-for-common-framework-behaviour"><a class="anchor" href="#assertions-for-common-framework-behaviour">Assertions for common framework behaviour</a></h2>
+<pre><code class="language-rust">// streaming: fallback in the first chunk, content later
+assert!(res.chunks[0].contains(&quot;Loading…&quot;));
+
+// ISR
+assert_eq!(res.header(&quot;x-nr-cache&quot;), Some(&quot;HIT&quot;));
+client.app().revalidate_tag(&quot;posts&quot;).await;
+
+// crawlers get non-streamed HTML
+let req = http::Request::get(&quot;/&quot;).header(&quot;user-agent&quot;, &quot;Googlebot&quot;).body(Default::default()).unwrap();
+</code></pre>
+<h2 id="static-generation-in-tests"><a class="anchor" href="#static-generation-in-tests">Static generation in tests</a></h2>
+<pre><code class="language-rust">let mut config = next_rust::Config::discover(env!(&quot;CARGO_MANIFEST_DIR&quot;)).unwrap();
+config.build.output = tempdir.clone();
+let app = next_rust::App::new(my_app::routes()).config(config).environment(next_rust::Environment::Production).build().unwrap();
+let report = app.export().await.unwrap();
+</code></pre>
+<h2 id="end-to-end"><a class="anchor" href="#end-to-end">End-to-end</a></h2>
+<p>For browser tests (client navigation, islands), start the binary and use
+Playwright or WebDriver against it. <code>App::serve_listener</code> accepts a
+<code>TcpListener</code> bound to port 0 if you start the server from Rust.</p>
+<p>Every example in <code>examples/</code> includes a test suite that uses these APIs.</p>

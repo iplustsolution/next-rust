@@ -1,0 +1,126 @@
+<h2 id="requirements"><a class="anchor" href="#requirements">Requirements</a></h2>
+<ul>
+<li>Rust <strong>1.88</strong> or newer (<code>rustup update stable</code>)</li>
+<li>macOS, Linux or Windows</li>
+</ul>
+<p>Next Rust does not need Node.js.</p>
+<h2 id="install-the-cli"><a class="anchor" href="#install-the-cli">Install the CLI</a></h2>
+<pre><code class="language-sh">cargo install --git https://github.com/iplustsolution/next-rust next-rust-cli
+</code></pre>
+<p>This installs the <code>next-rust</code> binary. Don&#39;t have Rust yet? See the
+<a href="https://github.com/iplustsolution/next-rust/blob/main/README.md#getting-started" target="_blank" rel="noopener">installation steps in the README</a>.</p>
+<h2 id="create-a-project"><a class="anchor" href="#create-a-project">Create a project</a></h2>
+<pre><code class="language-sh">next-rust new my-app
+cd my-app
+next-rust dev
+</code></pre>
+<p>Open <a href="http://localhost:3000" target="_blank" rel="noopener">http://localhost:3000</a>. Edit <code>app/page.rs</code> and save: the dev server
+rebuilds and the browser reloads.</p>
+<p>Adding a page is just creating a file. While <code>next-rust dev</code> runs, create an
+empty <code>app/about/page.rs</code> and it&#39;s filled with a starter page, so <code>/about</code>
+works immediately. The same works for <code>layout.rs</code>, <code>route.rs</code>, <code>loading.rs</code>
+and the other special files. In VS Code, type <code>nrpage</code>, <code>nrroute</code> or
+<code>nrlayout</code> for snippets.</p>
+<p>New projects depend on the GitHub repository. Update the project and the CLI
+with <code>next-rust upgrade</code>; see <a href="/docs/cli#upgrade">the CLI reference</a>. To develop
+against a local clone instead, use
+<code>next-rust new my-app --framework-path /path/to/next-rust</code>.</p>
+<h2 id="what-was-generated"><a class="anchor" href="#what-was-generated">What was generated</a></h2>
+<pre><code class="language-text">my-app/
+├── Cargo.toml          # depends on next-rust, build-depends on next-rust-build
+├── build.rs            # fn main() { next_rust_build::generate(); }
+├── next-rust.toml      # optional configuration
+├── src/main.rs         # next_rust::app!();
+├── public/
+│   ├── favicon.svg     # the Next Rust logo (replace with yours)
+│   └── robots.txt
+├── .env.example
+└── app/
+    ├── layout.rs       # root layout and metadata
+    ├── globals.css     # styles (dark and light)
+    ├── page.rs         # / — a single hero to replace with your own
+    ├── not-found.rs    # 404 page
+    └── api/hello/route.rs  # GET /api/hello
+</code></pre>
+<p>Three pieces connect your files to the framework:</p>
+<ol>
+<li><strong><code>build.rs</code></strong> runs <code>next_rust_build::generate()</code>. It scans <code>app/</code>,
+validates the routes, reads the signatures of your special files, and
+writes Rust code to <code>$OUT_DIR/next_rust_routes.rs</code>.</li>
+<li><strong><code>src/main.rs</code></strong> calls <code>next_rust::app!()</code>. This includes the generated
+code and defines <code>main</code>.</li>
+<li><strong>Special files</strong> like <code>page.rs</code> and <code>layout.rs</code> are ordinary Rust
+modules. You never register them anywhere.</li>
+</ol>
+<h2 id="your-first-page"><a class="anchor" href="#your-first-page">Your first page</a></h2>
+<pre><code class="language-rust">// app/products/page.rs
+use next_rust::prelude::*;
+
+pub fn metadata() -&gt; Metadata {
+    Metadata::new().title(&quot;Products&quot;)
+}
+
+pub fn Page() -&gt; impl View {
+    section![
+        h1![&quot;Products&quot;],
+        ul![each([&quot;Keyboard&quot;, &quot;Mouse&quot;], |name| li![name])],
+    ]
+}
+</code></pre>
+<p>That&#39;s the whole route: <code>/products</code> now exists.</p>
+<p>A dynamic route:</p>
+<pre><code class="language-rust">// app/products/[id]/page.rs
+use next_rust::prelude::*;
+
+#[derive(serde::Deserialize)]
+pub struct P { id: u64 }
+
+pub fn Page(Path(p): Path&lt;P&gt;) -&gt; impl View {
+    h1![format!(&quot;Product #{}&quot;, p.id)]
+}
+</code></pre>
+<p>An API endpoint:</p>
+<pre><code class="language-rust">// app/api/time/route.rs
+use next_rust::prelude::*;
+
+pub async fn GET() -&gt; Json&lt;serde_json::Value&gt; {
+    Json(serde_json::json!({ &quot;unix&quot;: std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() }))
+}
+</code></pre>
+<h2 id="inspect-routes"><a class="anchor" href="#inspect-routes">Inspect routes</a></h2>
+<pre><code class="language-sh">$ next-rust routes --layouts
+METHOD  PATH            RENDER      SOURCE
+GET     /               ○ static    app/page.rs
+          └ app/layout.rs
+GET     /products/:id   λ dynamic   app/products/[id]/page.rs
+          └ app/layout.rs
+          dynamic because: dynamic segment without generate_params
+GET     /api/time       api         app/api/time/route.rs
+</code></pre>
+<h2 id="build-and-run-for-production"><a class="anchor" href="#build-and-run-for-production">Build and run for production</a></h2>
+<pre><code class="language-sh">next-rust build    # one self-contained, stripped binary → .next-rust/my-app
+next-rust start    # run it
+</code></pre>
+<p><code>next-rust build</code> prints which pages were pre-rendered (<code>○</code>), which render
+per request (<code>λ</code>) and which are API routes (<code>ƒ</code>). The binary carries your
+pages, configuration and <code>public/</code> files, so you can copy <code>.next-rust/my-app</code>
+to a server and run it with nothing else.</p>
+<h2 id="adding-to-an-existing-cargo-project"><a class="anchor" href="#adding-to-an-existing-cargo-project">Adding to an existing Cargo project</a></h2>
+<pre><code class="language-toml"># Cargo.toml
+[dependencies]
+next-rust = &quot;0.0&quot;
+
+[build-dependencies]
+next-rust-build = &quot;0.0&quot;
+</code></pre>
+<pre><code class="language-rust">// build.rs
+fn main() { next_rust_build::generate(); }
+</code></pre>
+<pre><code class="language-rust">// src/main.rs
+next_rust::app!();
+</code></pre>
+<p>Then create <code>app/page.rs</code>. Use <code>next_rust::routes!()</code> instead of <code>app!()</code>
+when you want your own <code>main</code> (custom middleware, background jobs, a
+library + binary split for testing). See <a href="/docs/testing">testing.md</a>.</p>
+<p>Next: <a href="/docs/routing">Routing</a>.</p>

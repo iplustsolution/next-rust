@@ -1,0 +1,110 @@
+<pre><code class="language-sh">cargo run --release -p next-rust-benchmarks            # ~30 s
+cargo run --release -p next-rust-benchmarks -- --quick
+</code></pre>
+<p>The harness (<code>benchmarks/src/main.rs</code>) runs warm-up iterations, then reports
+the <strong>median</strong> of nine timed batches. It avoids criterion to keep the
+dependency graph small, so treat results as indicative, not statistically
+rigorous.</p>
+<h2 id="results"><a class="anchor" href="#results">Results</a></h2>
+<p>Measured on 2026-09-17: Apple Silicon (aarch64-apple-darwin), Rust 1.98.0,
+release profile (<code>lto = &quot;thin&quot;</code>), other applications running. These are
+<strong>single-machine numbers. No comparison with other frameworks was made, and
+none is claimed.</strong></p>
+<div class="table-wrap"><table><thead><tr>
+<th>benchmark</th>
+<th>time / iteration</th>
+<th>throughput</th>
+</tr>
+</thead><tbody><tr>
+<td>match static route (100 routes)</td>
+<td>137 ns</td>
+<td>7.3 M/s</td>
+</tr>
+<tr>
+<td>match dynamic route + params (100 routes)</td>
+<td>174 ns</td>
+<td>5.8 M/s</td>
+</tr>
+<tr>
+<td>match catch-all route (100 routes)</td>
+<td>327 ns</td>
+<td>3.1 M/s</td>
+</tr>
+<tr>
+<td>match static route (10,000 routes)</td>
+<td>139 ns</td>
+<td>7.2 M/s</td>
+</tr>
+<tr>
+<td>match dynamic route + params (10,000 routes)</td>
+<td>176 ns</td>
+<td>5.7 M/s</td>
+</tr>
+<tr>
+<td>match catch-all route (10,000 routes)</td>
+<td>315 ns</td>
+<td>3.2 M/s</td>
+</tr>
+<tr>
+<td>scan + flatten + validate (2,000 routes, 2,101 dirs)</td>
+<td>69.35 ms</td>
+<td>14/s</td>
+</tr>
+<tr>
+<td><code>render_static</code>: 1,000-item list</td>
+<td>333 µs</td>
+<td>3.0 k/s</td>
+</tr>
+<tr>
+<td><code>render_static</code>: escaping-heavy text (10 KB)</td>
+<td>8.68 µs</td>
+<td>115 k/s</td>
+</tr>
+<tr>
+<td>SSR request through <code>App::handle</code> (layout + 50 items)</td>
+<td>19.6 µs</td>
+<td>51 k/s</td>
+</tr>
+<tr>
+<td>SSR request with 10 middleware layers</td>
+<td>19.6 µs</td>
+<td>51 k/s</td>
+</tr>
+<tr>
+<td><code>App</code> build (config + matcher, 1 route)</td>
+<td>7.7 µs</td>
+<td>130 k/s</td>
+</tr>
+<tr>
+<td>HTTP/1.1 keep-alive over loopback, 32 connections</td>
+<td>—</td>
+<td>97 k req/s</td>
+</tr>
+</tbody></table></div>
+<h2 id="reading-the-numbers"><a class="anchor" href="#reading-the-numbers">Reading the numbers</a></h2>
+<ul>
+<li><strong>Route matching doesn&#39;t depend on route count.</strong> 100 and 10,000 routes
+cost the same, because the trie&#39;s work is proportional to URL segments.
+The static-match figure includes a <code>format!</code> allocation for the benchmark
+URL.</li>
+<li><strong>Discovery</strong> is a build- and dev-time cost only. Production never scans
+the filesystem.</li>
+<li><strong>Middleware</strong> passthrough layers cost less than the measurement noise at
+this scale (one boxed future and one <code>Arc</code> clone per layer).</li>
+<li><strong>HTTP throughput</strong> runs the load generator in the same process and on the
+same machine as the server, without <code>Accept-Encoding</code> (no compression)
+and with request logging disabled. It measures the full hyper + framework stack,
+including rendering a 50-item page per request.</li>
+</ul>
+<h2 id="not-yet-measured"><a class="anchor" href="#not-yet-measured">Not yet measured</a></h2>
+<ul>
+<li><strong>Memory usage</strong>. Measure externally, e.g.
+<code>/usr/bin/time -l ./target/release/my-app</code> on macOS or
+<code>/usr/bin/time -v</code> on Linux.</li>
+<li><strong>Startup time of a real binary</strong>. The <code>App</code> build figure excludes process
+start and config discovery.</li>
+<li><strong>Static generation throughput</strong>. <code>next-rust build</code> prints per-page render
+times in <code>target/next-rust/build.json</code>.</li>
+<li><strong>Streaming time-to-first-byte</strong> under load.</li>
+</ul>
+<p>Contributions of reproducible benchmark scenarios are welcome.</p>

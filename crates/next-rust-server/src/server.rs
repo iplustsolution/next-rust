@@ -7,7 +7,7 @@
 //! * gzip compression for compressible responses, including streams.
 //!
 //! TLS and HTTP/3 are expected to be terminated by a reverse proxy or load
-//! balancer (see docs/deployment.md).
+//! balancer (see the "Deployment" docs page).
 
 use std::convert::Infallible;
 use std::net::SocketAddr;

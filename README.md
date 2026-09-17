@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="Next Rust logo" width="160" height="160">
+  <img src="website/public/logo.svg" alt="Next Rust logo" width="160" height="160">
 </p>
 
 <h1 align="center">Next Rust</h1>
@@ -31,10 +31,11 @@ pub fn Page() -> impl View {
 That file is the whole route. There's no router to register it with and no
 config to update. Save it, and `next-rust dev` serves it at `/`.
 
-> **Early days.** This is version 0.1. It works: the examples run, the tests
-> pass, and a fresh project builds into a deployable server. But APIs will
-> still move before 1.0, and some pieces are missing. The honest list lives in
-> [docs/status.md](docs/status.md). If something you need is on it, that's a
+> **Early days.** Next Rust is pre-1.0 (0.0.x releases). It works: the
+> examples run, the tests pass, and a fresh project builds into a single
+> deployable binary. But APIs will still move before 1.0, and some pieces are
+> missing. The honest list is the "Status & roadmap" page of the
+> [documentation](#documentation). If something you need is on it, that's a
 > great place to start contributing.
 
 ## The idea
@@ -171,7 +172,8 @@ to track the GitHub repository instead.
 
 Adding Next Rust to an existing Cargo project instead? `cargo add next-rust`
 and `cargo add --build next-rust-build`, then see
-[getting started](docs/getting-started.md#adding-to-an-existing-cargo-project).
+"Installation → Adding to an existing Cargo project" in the
+[documentation](#documentation).
 
 ### 4. Run it
 
@@ -278,12 +280,12 @@ crates/
 ├── next-rust-core     config, .env loading, diagnostics
 └── next-rust-assets   hashing, MIME types, CSS processing
 examples/              small runnable apps, each with tests
-docs/                  guides and reference
+website/               the documentation site, built with Next Rust
 benchmarks/            the benchmark harness
 ```
 
-To see how a request travels through all of that, start with
-[docs/architecture.md](docs/architecture.md).
+To see how a request travels through all of that, read the Architecture page
+of the [documentation](#documentation).
 
 ## Contributing
 
@@ -320,9 +322,18 @@ contributions too.
 
 ## Documentation
 
-The guides live in [`docs/`](docs/README.md). Start with
-[getting started](docs/getting-started.md) or [routing](docs/routing.md), or
-go straight to the [configuration reference](docs/configuration.md).
+The documentation is a website built with Next Rust itself, in
+[`website/`](website). It covers installation, routing, rendering, server
+actions, deployment and every configuration option, with search. To read it
+locally:
+
+```sh
+cd website
+next-rust dev        # http://localhost:3000/docs
+```
+
+`next-rust build` in that folder produces the whole site as one binary, ready
+to deploy. Each page's text lives in [`website/content/`](website/content).
 
 ## License
 

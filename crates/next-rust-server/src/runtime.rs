@@ -9,7 +9,8 @@ use crate::app::{App, AppBuilder, Routes};
 /// Command-line flags understood by the generated binary:
 ///
 /// * *(none)* – serve
-/// * `--export` – pre-render static pages into the build output and exit
+/// * `--export` – render every static page, print a JSON report and exit
+///   (writes nothing; used by `next-rust build` as a check)
 /// * `--routes` – print the compiled route table and exit
 pub fn run(routes: Routes) {
     run_with(App::new(routes))
@@ -24,7 +25,7 @@ pub fn run(routes: Routes) {
 /// ```
 pub fn run_with(builder: AppBuilder) {
     let env = Environment::from_env();
-    let config: Config = match crate::app::discover_config(builder.project_root()) {
+    let config: Config = match crate::app::discover_config(builder.project_root(), builder.embedded()) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("error: {e}");
@@ -72,6 +73,14 @@ pub fn run_with(builder: AppBuilder) {
                 std::process::exit(1);
             }
         }
+    }
+    if !env.is_dev() {
+        let warm = app.clone();
+        runtime.spawn(async move {
+            if let Err(e) = warm.prerender().await {
+                crate::log::error(&format!("pre-rendering static pages failed:\n{e}"));
+            }
+        });
     }
     if let Err(e) = runtime.block_on(app.serve()) {
         eprintln!("error: {e}");

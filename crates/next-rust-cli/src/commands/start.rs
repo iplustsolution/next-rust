@@ -9,12 +9,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let info = project::load()?;
-    let exe = info.config.output_dir().join("server").join(&info.bin_name);
+    let exe = info.config.output_dir().join(format!("{}{}", info.bin_name, std::env::consts::EXE_SUFFIX));
     if !exe.is_file() {
         return Err(format!("no production build found at {}; run `next-rust build` first", exe.display()));
     }
     let mut cmd = Command::new(&exe);
-    cmd.current_dir(&info.root).env("NEXT_RUST_ENV", "production");
+    cmd.env("NEXT_RUST_ENV", "production");
     if let Some(port) = a.value(&["--port", "-p"]) {
         cmd.env("PORT", port);
     }

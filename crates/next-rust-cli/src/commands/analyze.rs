@@ -1,5 +1,7 @@
 use crate::{Args, project, ui};
 
+use super::build::reports_dir;
+
 pub fn run(args: &[String]) -> Result<(), String> {
     if Args::new(args).flag(&["-h", "--help"]) {
         println!(
@@ -7,15 +9,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
         );
         return Ok(());
     }
-    let config = project::load_config()?;
-    let out = config.output_dir();
+    let info = project::load()?;
+    let reports = reports_dir(&info);
     let read = |p: &str| {
-        std::fs::read_to_string(out.join(p))
-            .map_err(|_| format!("{} not found; run `next-rust build` first", out.join(p).display()))
+        std::fs::read_to_string(reports.join(p))
+            .map_err(|_| format!("{} not found; run `next-rust build` first", reports.join(p).display()))
     };
-    let manifest: serde_json::Value =
-        serde_json::from_str(&read("manifest/routes.json")?).map_err(|e| e.to_string())?;
-    let build: serde_json::Value = serde_json::from_str(&read("manifest/build.json")?).unwrap_or_default();
+    let manifest: serde_json::Value = serde_json::from_str(&read("routes.json")?).map_err(|e| e.to_string())?;
+    let build: serde_json::Value = serde_json::from_str(&read("build.json")?).unwrap_or_default();
 
     let routes = manifest["routes"].as_array().cloned().unwrap_or_default();
     let count = |k: &str, v: &str| routes.iter().filter(|r| r[k] == v).count();
@@ -49,12 +50,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
             println!("  {:<40} {}", p.as_str().unwrap_or(""), ui::dim("on demand"));
         }
     }
-    if let Ok(rd) = std::fs::read_dir(out.join("server")) {
-        println!("\n{}", ui::bold("Server"));
-        for e in rd.flatten() {
-            let size = e.metadata().map(|m| m.len()).unwrap_or(0);
-            println!("  {:<40} {:>10}", e.file_name().to_string_lossy(), ui::bytes(size));
-        }
+    let bin = info.config.output_dir().join(format!("{}{}", info.bin_name, std::env::consts::EXE_SUFFIX));
+    if let Ok(meta) = std::fs::metadata(&bin) {
+        println!("\n{}", ui::bold("Binary"));
+        println!("  {:<40} {:>10}", bin.strip_prefix(&info.root).unwrap_or(&bin).display(), ui::bytes(meta.len()));
     }
     Ok(())
 }

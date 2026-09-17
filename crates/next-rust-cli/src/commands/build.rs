@@ -1,18 +1,29 @@
 //! `next-rust build`.
 
+use std::path::Path;
 use std::process::Command;
 use std::time::Instant;
 
 use next_rust_build::analyze_project;
 use next_rust_router::RouteKind;
 
+use crate::project::ProjectInfo;
 use crate::{Args, project, ui};
+
+/// Release profile used when the project's Cargo.toml doesn't set its own:
+/// full link-time optimization and a stripped binary.
+const RELEASE_PROFILE: &[(&str, &str)] = &[
+    ("CARGO_PROFILE_RELEASE_OPT_LEVEL", "3"),
+    ("CARGO_PROFILE_RELEASE_LTO", "fat"),
+    ("CARGO_PROFILE_RELEASE_CODEGEN_UNITS", "1"),
+    ("CARGO_PROFILE_RELEASE_STRIP", "symbols"),
+];
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let a = Args::new(args);
     if a.flag(&["-h", "--help"]) {
         println!(
-            "next-rust build [--no-export]\n\nCompile in release mode, pre-render static pages and write the build output:\n\n  .next-rust/\n    server/<bin>          production server binary\n    static/               pre-rendered HTML (also usable for static hosting)\n    cache/pages/          ISR page cache seeded with the static pages\n    manifest/routes.json  route manifest\n    manifest/build.json   static generation report"
+            "next-rust build [--no-check]\n\nCompile a single, self-contained production binary:\n\n  .next-rust/<bin>   the whole app: server, pages, next-rust.toml, public/, assets/ and client/\n\nThe binary is optimized with link-time optimization and stripped of symbols. Deploy\nthat one file and run it; static pages are pre-rendered in memory when it starts.\n\n  --no-check   skip rendering every static page after compiling"
         );
         return Ok(());
     }
@@ -25,32 +36,25 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let analyzed = analyze_project(&info.config);
     super::report(&analyzed)?;
 
-    ui::step("Compiling (release)");
-    let exe = project::cargo_build(&info, true, false).map_err(|report| {
+    ui::step("Compiling a single stripped binary");
+    let exe = project::cargo_build_with(&info, true, false, &release_env(&info)).map_err(|report| {
         eprintln!("{report}");
         "compilation failed".to_owned()
     })?;
 
-    let server_dir = out.join("server");
-    std::fs::create_dir_all(&server_dir).map_err(|e| e.to_string())?;
-    let dest = server_dir.join(&info.bin_name);
+    // Only the binary is written; earlier build layouts are removed.
+    for old in ["server", "static", "cache", "manifest"] {
+        let _ = std::fs::remove_dir_all(out.join(old));
+    }
+    std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+    let dest = out.join(exe.file_name().ok_or("cargo reported an invalid executable path")?);
+    let _ = std::fs::remove_file(&dest);
     std::fs::copy(&exe, &dest).map_err(|e| format!("copy {}: {e}", dest.display()))?;
 
     let mut report = serde_json::Value::Null;
-    if !a.flag(&["--no-export"]) {
-        ui::step("Generating static pages");
-        let output = Command::new(&dest)
-            .arg("--export")
-            .current_dir(&info.root)
-            .env("NEXT_RUST_ENV", "production")
-            .output()
-            .map_err(|e| e.to_string())?;
-        if !output.status.success() {
-            eprintln!("{}", String::from_utf8_lossy(&output.stderr));
-            return Err("static generation failed".into());
-        }
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        report = stdout.lines().last().and_then(|l| serde_json::from_str(l).ok()).unwrap_or(serde_json::Value::Null);
+    if !a.flag(&["--no-check", "--no-export"]) {
+        ui::step("Rendering static pages");
+        report = check_binary(&dest)?;
     }
 
     let mut manifest = analyzed.manifest();
@@ -63,10 +67,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
                 .collect();
         }
     }
-    let manifest_dir = out.join("manifest");
-    std::fs::create_dir_all(&manifest_dir).map_err(|e| e.to_string())?;
-    std::fs::write(manifest_dir.join("routes.json"), manifest.to_json()).map_err(|e| e.to_string())?;
-    std::fs::write(manifest_dir.join("build.json"), serde_json::to_string_pretty(&report).unwrap_or_default())
+    // Build reports for `next-rust analyze` live in Cargo's target directory,
+    // never next to the binary.
+    let reports = reports_dir(&info);
+    std::fs::create_dir_all(&reports).map_err(|e| e.to_string())?;
+    std::fs::write(reports.join("routes.json"), manifest.to_json()).map_err(|e| e.to_string())?;
+    std::fs::write(reports.join("build.json"), serde_json::to_string_pretty(&report).unwrap_or_default())
         .map_err(|e| e.to_string())?;
 
     eprintln!();
@@ -100,12 +106,56 @@ pub fn run(args: &[String]) -> Result<(), String> {
         ui::magenta("ƒ")
     );
     eprintln!();
+    let shown = dest.strip_prefix(&info.root).unwrap_or(&dest);
     ui::ok(&format!(
-        "Built in {:.1}s → {} (server binary {})",
+        "Built in {:.1}s → {} ({})",
         started.elapsed().as_secs_f64(),
-        out.strip_prefix(&info.root).unwrap_or(&out).display(),
+        shown.display(),
         ui::bytes(bin_size)
     ));
-    eprintln!("  Run it with {}", ui::bold("next-rust start"));
+    eprintln!(
+        "  One file to deploy. Run it with {} or {}",
+        ui::bold("next-rust start"),
+        ui::bold(&format!("./{}", shown.display()))
+    );
     Ok(())
+}
+
+/// Stripped, fully optimized release settings, unless the project configures
+/// `[profile.release]` itself or the variables are already set.
+fn release_env(info: &ProjectInfo) -> Vec<(&'static str, &'static str)> {
+    let manifest = std::fs::read_to_string(info.root.join("Cargo.toml")).unwrap_or_default();
+    let mut envs: Vec<(&str, &str)> = vec![("NEXT_RUST_EMBED", "1")];
+    if !manifest.contains("[profile.release]") {
+        envs.extend(RELEASE_PROFILE.iter().copied().filter(|(k, _)| std::env::var_os(k).is_none()));
+    }
+    envs
+}
+
+/// Where `next-rust analyze` finds the last build's reports.
+pub fn reports_dir(info: &ProjectInfo) -> std::path::PathBuf {
+    info.target_dir.join("next-rust")
+}
+
+/// Run the binary from an empty directory and render every static page. This
+/// proves it needs no files besides itself and catches rendering errors at
+/// build time.
+fn check_binary(bin: &Path) -> Result<serde_json::Value, String> {
+    let empty = std::env::temp_dir().join(format!("next-rust-build-check-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&empty);
+    std::fs::create_dir_all(&empty).map_err(|e| e.to_string())?;
+    let output = Command::new(bin)
+        .arg("--export")
+        .current_dir(&empty)
+        .env("NEXT_RUST_ENV", "production")
+        .env_remove("NEXT_RUST_CONFIG")
+        .output();
+    let _ = std::fs::remove_dir_all(&empty);
+    let output = output.map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        eprintln!("{}", String::from_utf8_lossy(&output.stderr));
+        return Err("static generation failed".into());
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.lines().last().and_then(|l| serde_json::from_str(l).ok()).unwrap_or(serde_json::Value::Null))
 }

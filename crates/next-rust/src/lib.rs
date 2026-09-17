@@ -29,7 +29,7 @@
 //! next_rust::app!();
 //! ```
 //!
-//! See the `docs/` directory of the repository for guides.
+//! Guides live on the documentation website (`website/` in the repository).
 
 #![forbid(unsafe_code)]
 

@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use http::{Method, StatusCode};
-use next_rust_cache::{Cache, CacheStore, FileStore, MemoryStore};
+use next_rust_cache::{Cache, CacheStore, MemoryStore};
 use next_rust_core::{Config, Environment};
 use next_rust_router::{Matcher, Params, PatternSegment, RoutePattern, SegmentKind, parse_segment};
 use next_rust_view::{Children, Metadata, Node, Slots};
@@ -139,6 +139,8 @@ pub struct Routes {
     pub robots: Option<RobotsFn>,
     /// Absolute project root recorded at build time (fallback for config discovery).
     pub project_root: Option<&'static str>,
+    /// Configuration and static files compiled into release binaries.
+    pub embedded: Option<&'static crate::embed::Embedded>,
 }
 
 pub(crate) type CustomHandlers = Vec<(Option<Method>, Arc<dyn Endpoint>)>;
@@ -171,8 +173,9 @@ pub(crate) struct AppInner {
     pub env: Environment,
     pub public_dir: PathBuf,
     pub client_dir: PathBuf,
-    pub output_dir: PathBuf,
     pub dev_status_file: PathBuf,
+    /// Files compiled into the binary; `None` reads from disk.
+    pub embedded: Option<&'static crate::embed::Embedded>,
     pub cache: Cache,
     pub page_store: Arc<dyn CacheStore>,
     pub global_stack: Arc<[Arc<dyn Middleware>]>,
@@ -366,9 +369,17 @@ impl App {
             + self.inner.cache.revalidate_tag(tag).await.unwrap_or(0)
     }
 
-    /// Pre-render static routes into the build output (static generation).
+    /// Render every static route without keeping the result: used by
+    /// `next-rust build` to check that static generation succeeds.
     pub async fn export(&self) -> std::result::Result<crate::export::ExportReport, String> {
-        crate::export::export(&self.inner).await
+        crate::export::prerender(&self.inner, &MemoryStore::new(usize::MAX)).await
+    }
+
+    /// Render every static route into the page cache, so the first visitor
+    /// gets a cached page. Production servers do this in the background at
+    /// startup.
+    pub async fn prerender(&self) -> std::result::Result<crate::export::ExportReport, String> {
+        crate::export::prerender(&self.inner, self.inner.page_store.as_ref()).await
     }
 
     /// Route table as `(kind, pattern, source)` for diagnostics.
@@ -384,11 +395,27 @@ fn req_cookies_placeholder() -> crate::Cookies {
     crate::Cookies::default()
 }
 
-/// Find the configuration: the working directory (and its ancestors) first,
-/// then the project root recorded at build time. This lets the binary run
-/// from any directory, e.g. `./target/release/my-app`.
-pub fn discover_config(project_root: Option<&str>) -> std::result::Result<Config, String> {
+/// Find the configuration.
+///
+/// `NEXT_RUST_CONFIG` wins. A release binary then uses the configuration it
+/// was built with, rooted at the working directory, so it runs on its own.
+/// Otherwise the working directory (and its ancestors) is searched, then the
+/// project root recorded at build time, so `./target/debug/my-app` works from
+/// any directory.
+pub fn discover_config(
+    project_root: Option<&str>,
+    embedded: Option<&crate::embed::Embedded>,
+) -> std::result::Result<Config, String> {
     let start = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if std::env::var_os("NEXT_RUST_CONFIG").is_none()
+        && let Some((text, json)) = embedded.and_then(|e| e.config)
+    {
+        let mut config = if json { Config::from_json_str(text) } else { Config::from_toml_str(text) }
+            .map_err(|e| format!("embedded configuration: {e}"))?;
+        config.root = start;
+        config.apply_env_overrides();
+        return Ok(config);
+    }
     let from_cwd = Config::discover(&start).map_err(|e| e.to_string())?;
     if from_cwd.source.is_some() || from_cwd.app_dir().is_dir() {
         return Ok(from_cwd);
@@ -402,6 +429,10 @@ pub fn discover_config(project_root: Option<&str>) -> std::result::Result<Config
 impl AppBuilder {
     pub(crate) fn project_root(&self) -> Option<&'static str> {
         self.routes.project_root
+    }
+
+    pub(crate) fn embedded(&self) -> Option<&'static crate::embed::Embedded> {
+        self.routes.embedded
     }
 
     /// Use an explicit configuration instead of discovering `next-rust.toml`.
@@ -501,7 +532,7 @@ impl AppBuilder {
         let env = self.env.unwrap_or_else(Environment::from_env);
         let config = match self.config {
             Some(c) => c,
-            None => discover_config(self.routes.project_root)?,
+            None => discover_config(self.routes.project_root, self.routes.embedded)?,
         };
         crate::set_dev(env.is_dev());
         let json = match config.logging.format {
@@ -578,7 +609,8 @@ impl AppBuilder {
         let page_store: Arc<dyn CacheStore> = match self.page_store {
             Some(s) => s,
             None if env.is_dev() => Arc::new(MemoryStore::new(1000)),
-            None => Arc::new(FileStore::new(output_dir.join("cache/pages"))),
+            // Production keeps pages in memory: the binary writes no files.
+            None => Arc::new(MemoryStore::new(10_000)),
         };
         let cache = self.cache.unwrap_or_default();
         next_rust_cache::install_global(cache.clone());
@@ -593,7 +625,7 @@ impl AppBuilder {
             public_dir: config.public_dir(),
             client_dir: config.root.join("client"),
             dev_status_file: output_dir.join("dev/status.json"),
-            output_dir,
+            embedded: self.routes.embedded.filter(|e| !e.is_empty()),
             routes: self.routes,
             matcher,
             intercepts,

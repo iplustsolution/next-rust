@@ -4,9 +4,15 @@ All notable changes to this project are documented here. The project follows
 [Semantic Versioning](https://semver.org/); until 1.0, minor versions may
 contain breaking changes.
 
-## 0.1.0 — unreleased
+## 0.0.1
 
 Initial release.
+
+- `next-rust build` writes one self-contained, stripped binary
+  (`.next-rust/<name>`) with `next-rust.toml`, `public/`, `assets/` and
+  `client/` embedded; static pages render into memory at startup.
+- Plain internal links (`a![href("/about")]`) navigate without a page refresh.
+- The documentation is a website built with Next Rust (`website/`).
 
 - Filesystem routing: pages, `page.html`, layouts, templates, route groups,
   dynamic/catch-all/optional catch-all segments, parallel slots, intercepting

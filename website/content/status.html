@@ -1,0 +1,344 @@
+<p>Next Rust is pre-1.0: every push to <code>main</code> is released automatically as a
+new <code>0.0.x</code> version, and the public API may still change.</p>
+<p>Legend: ✅ implemented and covered by tests · 🟡 implemented with documented
+limitations · ❌ not implemented yet</p>
+<h2 id="routing"><a class="anchor" href="#routing">Routing</a></h2>
+<div class="table-wrap"><table><thead><tr>
+<th>feature</th>
+<th>status</th>
+<th>notes</th>
+</tr>
+</thead><tbody><tr>
+<td><code>page.rs</code>, nested <code>layout.rs</code>, <code>template.rs</code></td>
+<td>✅</td>
+<td>unlimited nesting</td>
+</tr>
+<tr>
+<td><code>page.html</code> (fragments and full documents)</td>
+<td>✅</td>
+<td>conflict with <code>page.rs</code> is an error or configurable precedence</td>
+</tr>
+<tr>
+<td>dynamic, catch-all, optional catch-all segments</td>
+<td>✅</td>
+<td>typed <code>Path&lt;T&gt;</code></td>
+</tr>
+<tr>
+<td>route groups, private folders</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>formal route ranking</td>
+<td>✅</td>
+<td>property-tested against a brute-force definition</td>
+</tr>
+<tr>
+<td>configurable/monorepo app directory, separate API directory</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>conflict and naming diagnostics</td>
+<td>✅</td>
+<td>35 diagnostic codes</td>
+</tr>
+<tr>
+<td>symlink loops, Unicode, spaces</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>parallel routes (<code>@slot</code>, <code>default.rs</code>)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>intercepting routes</td>
+<td>🟡</td>
+<td>page-level; not combined with slots; soft navigation only</td>
+</tr>
+<tr>
+<td>programmatic routes (<code>App::get/route/ws</code>)</td>
+<td>✅</td>
+<td></td>
+</tr>
+</tbody></table></div>
+<h2 id="rendering-data"><a class="anchor" href="#rendering-data">Rendering &amp; data</a></h2>
+<div class="table-wrap"><table><thead><tr>
+<th>feature</th>
+<th>status</th>
+<th>notes</th>
+</tr>
+</thead><tbody><tr>
+<td>SSR with typed extractors, <code>load</code> + <code>Data&lt;T&gt;</code></td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>automatic static/dynamic inference</td>
+<td>✅</td>
+<td>reasons shown by the CLI</td>
+</tr>
+<tr>
+<td>SSG + <code>generate_params</code> + <code>DYNAMIC_PARAMS</code></td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>ISR (<code>REVALIDATE</code>, stale-while-revalidate, <code>revalidate_path/tag</code>)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>streaming SSR (<code>loading.rs</code>, <code>suspense</code>)</td>
+<td>✅</td>
+<td>out-of-order streaming, CSP nonces</td>
+</tr>
+<tr>
+<td><code>error.rs</code>, <code>global-error.rs</code>, <code>not-found.rs</code>, redirects</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>metadata merging, title templates, OG/Twitter</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td><code>sitemap.rs</code>, <code>robots.rs</code></td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>generated Open Graph images</td>
+<td>❌</td>
+<td>use static files</td>
+</tr>
+<tr>
+<td>parallel static generation (<code>[build] concurrency</code>)</td>
+<td>❌</td>
+<td>pages render sequentially</td>
+</tr>
+</tbody></table></div>
+<h2 id="client"><a class="anchor" href="#client">Client</a></h2>
+<div class="table-wrap"><table><thead><tr>
+<th>feature</th>
+<th>status</th>
+<th>notes</th>
+</tr>
+</thead><tbody><tr>
+<td>zero-JS pages by default</td>
+<td>✅</td>
+<td>runtime loaded only when needed</td>
+</tr>
+<tr>
+<td><code>Link!</code> client navigation, prefetch, history API</td>
+<td>✅</td>
+<td>markup tested; browser behaviour not covered by automated browser tests</td>
+</tr>
+<tr>
+<td><code>#[client]</code> islands with declarative behaviour</td>
+<td>🟡</td>
+<td>CSP-safe; limited operation set</td>
+</tr>
+<tr>
+<td>module islands (<code>hydrate(element, props)</code>)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>WASM client components</td>
+<td>🟡</td>
+<td>protocol supports wasm-bindgen output; the build pipeline (<code>cargo build --target wasm32</code> + <code>wasm-bindgen</code>) is manual</td>
+</tr>
+<tr>
+<td>Rust reactive DOM library / fine-grained signals in WASM</td>
+<td>❌</td>
+<td></td>
+</tr>
+<tr>
+<td><code>#[server]</code> boundary</td>
+<td>✅</td>
+<td>compiled out on <code>wasm32</code></td>
+</tr>
+</tbody></table></div>
+<h2 id="backend"><a class="anchor" href="#backend">Backend</a></h2>
+<div class="table-wrap"><table><thead><tr>
+<th>feature</th>
+<th>status</th>
+<th>notes</th>
+</tr>
+</thead><tbody><tr>
+<td><code>route.rs</code> API routes, IntoResponse, JSON/text/bytes/streams</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>middleware (global, root, nested)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>cookies, sessions, CORS, rate limiting, request ids, CSRF</td>
+<td>✅</td>
+<td>rate limiting and memory sessions are per process</td>
+</tr>
+<tr>
+<td>server actions + progressive forms + validation</td>
+<td>✅</td>
+<td>multipart unsupported</td>
+</tr>
+<tr>
+<td>SSE</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>WebSockets</td>
+<td>✅</td>
+<td>feature <code>websocket</code>; covered by compilation, not by an automated test</td>
+</tr>
+<tr>
+<td>background/scheduled jobs, in-process queue</td>
+<td>🟡</td>
+<td>interval and daily UTC schedules; no cron expressions or persistent queue</td>
+</tr>
+<tr>
+<td>HTTP/1.1, HTTP/2 (h2c), keep-alive, gzip, graceful shutdown</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>native TLS</td>
+<td>❌</td>
+<td>terminate at a proxy (see deployment)</td>
+</tr>
+<tr>
+<td>HTTP/3</td>
+<td>❌</td>
+<td>terminate at a proxy/CDN</td>
+</tr>
+<tr>
+<td>brotli compression</td>
+<td>❌</td>
+<td>gzip only</td>
+</tr>
+</tbody></table></div>
+<h2 id="assets"><a class="anchor" href="#assets">Assets</a></h2>
+<div class="table-wrap"><table><thead><tr>
+<th>feature</th>
+<th>status</th>
+<th>notes</th>
+</tr>
+</thead><tbody><tr>
+<td><code>public/</code> with ETag, ranges, traversal protection</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td><code>global_css!</code>, <code>css_module!</code> (scoping + minification at compile time)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>fingerprinted <code>asset!</code> with immutable caching</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td><code>Image!</code> markup (srcset, lazy, priority, dimensions)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>image resizing, WebP/AVIF conversion</td>
+<td>❌</td>
+<td>endpoint serves originals</td>
+</tr>
+<tr>
+<td><code>LocalFont</code> (<code>@font-face</code>, preload)</td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>JS minification / bundling</td>
+<td>❌</td>
+<td>the framework ships one hand-written runtime; no user JS bundler</td>
+</tr>
+<tr>
+<td>source maps</td>
+<td>❌</td>
+<td>not applicable without a bundler</td>
+</tr>
+</tbody></table></div>
+<h2 id="tooling"><a class="anchor" href="#tooling">Tooling</a></h2>
+<div class="table-wrap"><table><thead><tr>
+<th>feature</th>
+<th>status</th>
+<th>notes</th>
+</tr>
+</thead><tbody><tr>
+<td><code>new</code>, <code>dev</code>, <code>build</code>, <code>start</code>, <code>check</code>, <code>routes</code>, <code>analyze</code>, <code>generate</code>, <code>doctor</code>, <code>docker</code>, <code>upgrade</code>, <code>clean</code></td>
+<td>✅</td>
+<td></td>
+</tr>
+<tr>
+<td>update notice + <code>next-rust upgrade</code> from GitHub</td>
+<td>✅</td>
+<td>notifies once a day; never installs without the user running <code>upgrade</code></td>
+</tr>
+<tr>
+<td>dev: rebuild on change, keep serving on errors, browser overlay, live reload</td>
+<td>✅</td>
+<td>restarts the server process; no in-process hot-patching of Rust code</td>
+</tr>
+<tr>
+<td>CSS-only hot swap without reload</td>
+<td>❌</td>
+<td>CSS is compiled into the binary, so changes rebuild and reload</td>
+</tr>
+<tr>
+<td>plugin traits (runtime + build)</td>
+<td>🟡</td>
+<td>minimal hook set, API may change</td>
+</tr>
+<tr>
+<td>serverless adapter surface (<code>App::handle</code>)</td>
+<td>🟡</td>
+<td>no packaged adapters for specific platforms</td>
+</tr>
+<tr>
+<td>edge (wasm32) runtime</td>
+<td>❌</td>
+<td></td>
+</tr>
+<tr>
+<td>Redis cache store</td>
+<td>❌</td>
+<td>implement <code>CacheStore</code> (example in docs)</td>
+</tr>
+</tbody></table></div>
+<h2 id="publishing"><a class="anchor" href="#publishing">Publishing</a></h2>
+<ul>
+<li>The crate names <code>next-rust</code>, <code>next-rust-core</code>, <code>next-rust-router</code>,
+<code>next-rust-view</code>, <code>next-rust-server</code>, <code>next-rust-macros</code>,
+<code>next-rust-build</code>, <code>next-rust-cache</code>, <code>next-rust-assets</code> and
+<code>next-rust-cli</code> were <strong>not taken on crates.io</strong> when checked on 2026-09-17.
+Check again right before publishing.</li>
+<li><code>repository</code>/<code>homepage</code> point to <code>github.com/iplustsolution/next-rust</code>.</li>
+<li>Publishing is automated by <code>.github/workflows/release.yml</code> after CI passes
+on <code>main</code> (see CONTRIBUTING.md → Releasing). Publish order: assets → core →
+router → view → cache → server → macros → build → next-rust → cli.</li>
+<li><code>next-rust new</code> uses the crates.io version when it&#39;s published, and the
+GitHub repository otherwise (or with <code>--git</code>).</li>
+</ul>
+<h2 id="roadmap-proposed"><a class="anchor" href="#roadmap-proposed">Roadmap (proposed)</a></h2>
+<ol>
+<li><code>next-rust build --wasm</code>: compile and bind WASM island crates automatically.</li>
+<li>Image optimizer behind an <code>image</code> feature (resize, WebP; AVIF optional).</li>
+<li>Native TLS (rustls) behind a <code>tls</code> feature; HTTP/3 evaluation (quinn/h3).</li>
+<li>Parallel static generation.</li>
+<li>Browser-level end-to-end tests for client navigation and islands.</li>
+<li>Redis <code>CacheStore</code>/<code>SessionStore</code> in a companion crate.</li>
+</ol>

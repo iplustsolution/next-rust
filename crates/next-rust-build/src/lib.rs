@@ -126,7 +126,24 @@ impl Generator {
             None => std::env::var("PROFILE").is_ok_and(|p| p == "release"),
         };
         println!("cargo:rerun-if-env-changed=NEXT_RUST_MINIFY");
-        let mut code = generate_code_with(&project, CodegenOptions { minify_html });
+        // Release builds carry their config and static files, so the binary
+        // is the whole deployment; `NEXT_RUST_EMBED=0|1` overrides.
+        let embed_files = match std::env::var("NEXT_RUST_EMBED").ok().as_deref() {
+            Some("0") => false,
+            Some(_) => true,
+            None => std::env::var("PROFILE").is_ok_and(|p| p == "release"),
+        };
+        println!("cargo:rerun-if-env-changed=NEXT_RUST_EMBED");
+        if embed_files {
+            for (_, dir) in codegen::embedded_dirs(&config) {
+                // Cargo scans existing directories for changes; a missing
+                // path would rerun the build script on every build.
+                if dir.is_dir() {
+                    println!("cargo:rerun-if-changed={}", dir.display());
+                }
+            }
+        }
+        let mut code = generate_code_with(&project, CodegenOptions { minify_html, embed_files });
         for p in &self.plugins {
             if let Some(extra) = p.extra_code(&project) {
                 code.push_str(&format!("\n// plugin: {}\n{extra}\n", p.name()));

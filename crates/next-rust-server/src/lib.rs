@@ -13,6 +13,7 @@ pub mod app;
 mod client_runtime;
 pub mod context;
 pub mod cookies;
+pub mod embed;
 pub mod error;
 pub mod export;
 pub mod http_date;
@@ -48,6 +49,7 @@ pub use context::{
     RenderMode, RequestContext, RequestInfo, ResponseHeaders,
 };
 pub use cookies::{Cookie, Cookies, SameSite};
+pub use embed::{Embedded, EmbeddedFile};
 pub use error::{Error, ErrorKind, OrNotFound, Result, not_found, permanent_redirect, redirect};
 pub use middleware::{
     BoxFuture, Cors, Middleware, Next, RateLimit, RequestId, cors, csrf, protected, rate_limit, request_id,
@@ -144,6 +146,7 @@ pub mod __private {
         SlotDef,
     };
     pub use crate::context::{Ctx, Data, FromContext};
+    pub use crate::embed::{Embedded, EmbeddedFile};
     pub use crate::error::{Error, IntoResult, Result};
     pub use crate::middleware::{BoxFuture, Next};
     pub use crate::render::is_bot;

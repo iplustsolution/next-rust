@@ -36,7 +36,8 @@ cargo run -p next-rust-cli -- new /tmp/try-it --framework-path "$PWD"
 
 ## Where things live
 
-`docs/architecture.md` explains how the crates fit together. The short
+The Architecture page of the documentation site (`website/content/architecture.html`)
+explains how the crates fit together. The short
 version:
 
 - A routing bug? Look in `crates/next-rust-router`. Its tests build real
@@ -68,8 +69,10 @@ names.
 
 - **A test.** Framework behaviour is easy to break by accident. For a bug,
   add a test that fails without your fix.
-- **Docs, if behaviour changed.** Update the relevant page in `docs/`, and
-  `docs/status.md` if a feature moves from missing to done.
+- **Docs, if behaviour changed.** Update the relevant page in
+  `website/content/`, and `status.html` if a feature moves from missing to
+  done. Run `next-rust dev` in `website/` to see your change; a new page also
+  needs an entry in `website/src/docs.rs`.
 - **Passing checks.** Run these before you push:
 
   ```sh
@@ -86,7 +89,7 @@ names.
 - **Error messages are features.** A new failure mode deserves a readable
   diagnostic with a hint about how to fix it.
 - **Dependencies need a reason.** Explain any new crate in the PR, and add it
-  to the table in `docs/architecture.md`.
+  to the table on the Architecture page (`website/content/architecture.html`).
 - **Say what doesn't work.** If a feature is partial, document the gap
   rather than implying it's complete.
 - **Secure by default.** Escaping, cookie defaults and path handling don't
@@ -100,15 +103,27 @@ and `next-rust routes --layouts` is often enough to find the cause.
 
 ## Releasing
 
-Releases are automatic. When CI passes on `main`, the
-[Release workflow](.github/workflows/release.yml) publishes every crate whose
-version isn't on crates.io yet, then tags `vX.Y.Z` and creates a GitHub
-release. To cut a release:
+Releases are automatic and you never need to touch the version. Every push
+to `main` that passes CI is released by the
+[Release workflow](.github/workflows/release.yml):
 
-1. Bump `version` under `[workspace.package]` in the root `Cargo.toml`, and
-   the matching `version = "…"` values in `[workspace.dependencies]`.
-2. Add the release notes to `CHANGELOG.md`.
-3. Merge to `main`.
+1. It takes the latest version on crates.io and bumps the patch number
+   (`0.0.1` → `0.0.2` → `0.0.3` …).
+2. It writes that version into the root `Cargo.toml` and `Cargo.lock`, publishes
+   every crate, tags `vX.Y.Z` and creates a GitHub release with generated notes.
+3. It commits the new version back to `main` as `release: vX.Y.Z [skip ci]`,
+   so pull before you push again.
+
+All ten crates always share one version: each crate's `Cargo.toml` uses
+`version.workspace = true`, and the workflow refuses to release if they
+differ. If a release stops part-way (for example on a crates.io rate limit),
+the next run publishes the missing crates with that same version before
+anything newer is released.
+
+To jump to a bigger version (for example `0.1.0`), set `version` under
+`[workspace.package]` and the matching `version = "…"` values in
+`[workspace.dependencies]` yourself. The workflow releases a version you set
+by hand as-is when it is higher than the one on crates.io.
 
 The workflow needs the `CARGO_REGISTRY_TOKEN` repository secret: a crates.io
 API token with the `publish-new` and `publish-update` scopes.

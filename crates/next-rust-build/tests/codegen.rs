@@ -212,8 +212,12 @@ fn generated_code_shape() {
     assert_eq!(code.matches("middleware: Some(").count(), 1, "{code}");
 
     // Release builds embed minified HTML instead of include_str!.
-    let minified = next_rust_build::generate_code_with(&project, next_rust_build::CodegenOptions { minify_html: true });
+    let minified = next_rust_build::generate_code_with(
+        &project,
+        next_rust_build::CodegenOptions { minify_html: true, embed_files: false },
+    );
     assert!(minified.contains("body: __nr::PageBody::Html(\"<p>legacy</p>\")"), "{minified}");
+    assert!(code.contains("embedded: None") && !code.contains("__NR_EMBEDDED"), "{code}");
 
     // Deterministic output.
     assert_eq!(code, generate_code(&analyze_project(&t.config(""))));
@@ -224,6 +228,38 @@ fn generated_code_shape() {
     assert_eq!(project.routes.len(), 3);
     assert!(out.join("next_rust_routes.rs").is_file());
     assert!(out.join("next_rust_manifest.json").is_file());
+}
+
+#[test]
+fn release_code_embeds_config_and_static_files() {
+    let t = Tmp::new(&[
+        ("next-rust.toml", "[server]\nport = 4000\n"),
+        ("app/page.rs", PAGE),
+        ("public/favicon.svg", "<svg/>"),
+        ("public/images/b.png", "png"),
+        ("public/.env", "SECRET=1"),
+        ("assets/fonts/inter.woff2", "font"),
+    ]);
+    let config = Config::discover(&t.0).unwrap();
+    let project = analyze_project(&config);
+    let code = next_rust_build::generate_code_with(
+        &project,
+        next_rust_build::CodegenOptions { minify_html: true, embed_files: true },
+    );
+    for needle in [
+        "embedded: Some(&__NR_EMBEDDED)",
+        "config: Some((include_str!(",
+        "next-rust.toml\"), false))",
+        "path: \"favicon.svg\", bytes: include_bytes!(",
+        "path: \"images/b.png\"",
+        "path: \"fonts/inter.woff2\"",
+        "static __NR_EMBED_CLIENT: &[__nr::EmbeddedFile] = &[\n];",
+    ] {
+        assert!(code.contains(needle), "missing `{needle}` in:\n{code}");
+    }
+    assert!(!code.contains(".env"), "hidden files are never embedded");
+    let favicon = code.find("\"favicon.svg\"").unwrap();
+    assert!(favicon < code.find("\"images/b.png\"").unwrap(), "files are sorted for lookup");
 }
 
 #[test]

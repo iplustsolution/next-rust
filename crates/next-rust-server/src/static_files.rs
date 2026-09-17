@@ -1,4 +1,5 @@
-//! Static file serving for `public/` (and framework client files).
+//! Static file serving for `public/` (and framework client files), from disk
+//! in development and from the binary in release builds.
 //!
 //! Security properties:
 //!
@@ -44,9 +45,34 @@ pub async fn resolve_safe(root: &Path, url_path: &str) -> Option<(PathBuf, std::
 }
 
 pub(crate) async fn serve_public(inner: &AppInner, req: &Request) -> Option<Response> {
+    let cc = format!("public, max-age={}", inner.config.assets.public_max_age);
+    if let Some(embedded) = inner.embedded {
+        let file = crate::embed::find(embedded.public, req.path())?;
+        return Some(serve_embedded(req, file, embedded.built_at, &cc));
+    }
     let (path, meta) = resolve_safe(&inner.public_dir, req.path()).await?;
-    let max_age = inner.config.assets.public_max_age;
-    Some(serve_file(req, &path, &meta, &format!("public, max-age={max_age}")).await)
+    Some(serve_file(req, &path, &meta, &cc).await)
+}
+
+/// Serve a file compiled into the binary.
+pub fn serve_embedded(
+    req: &Request,
+    file: &crate::embed::EmbeddedFile,
+    built_at: u64,
+    cache_control: &str,
+) -> Response {
+    let modified = UNIX_EPOCH + std::time::Duration::from_secs(built_at);
+    let etag = format!("\"{}\"", file.hash);
+    let len = file.bytes.len() as u64;
+    match prepare(req, file.path, len, &etag, (built_at > 0).then_some(modified), cache_control) {
+        Prepared::Done(res) => res,
+        Prepared::Send(mut res, start, count) => {
+            if count > 0 && req.method() != http::Method::HEAD {
+                res.body = Body::Bytes(Bytes::from_static(&file.bytes[start as usize..(start + count) as usize]));
+            }
+            res
+        }
+    }
 }
 
 /// Serve a resolved file with conditional and range request support.
@@ -55,46 +81,10 @@ pub async fn serve_file(req: &Request, path: &Path, meta: &std::fs::Metadata, ca
     let modified = meta.modified().ok();
     let mtime = modified.and_then(|m| m.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0);
     let etag = format!("W/\"{len:x}-{mtime:x}\"");
-
-    let mut res = Response::default();
-    res.set_header("etag", &etag);
-    res.set_header("cache-control", cache_control);
-    res.set_header("accept-ranges", "bytes");
-    res.set_header("content-type", next_rust_assets::mime::from_path(&path.to_string_lossy()));
-    if let Some(m) = modified {
-        res.set_header("last-modified", &crate::http_date::format(m));
-    }
-
-    let not_modified = match req.header("if-none-match") {
-        Some(inm) => inm.split(',').any(|t| t.trim() == etag || t.trim() == "*"),
-        None => match (req.header("if-modified-since").and_then(crate::http_date::parse), modified) {
-            (Some(since), Some(m)) => {
-                m.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-                    <= since.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-            }
-            _ => false,
-        },
+    let (mut res, start, count) = match prepare(req, &path.to_string_lossy(), len, &etag, modified, cache_control) {
+        Prepared::Send(res, start, count) => (res, start, count),
+        Prepared::Done(res) => return res,
     };
-    if not_modified {
-        res.status = StatusCode::NOT_MODIFIED;
-        return res;
-    }
-
-    let (start, end) = match req.header("range").map(|r| parse_range(r, len)) {
-        None => (0, len.saturating_sub(1)),
-        Some(Some((s, e))) => {
-            res.status = StatusCode::PARTIAL_CONTENT;
-            res.set_header("content-range", &format!("bytes {s}-{e}/{len}"));
-            (s, e)
-        }
-        Some(None) => {
-            let mut r = Response::status(416);
-            r.set_header("content-range", &format!("bytes */{len}"));
-            return r;
-        }
-    };
-    let count = if len == 0 { 0 } else { end - start + 1 };
-    res.set_header("content-length", &count.to_string());
     if req.method() == http::Method::HEAD || count == 0 {
         return res;
     }
@@ -127,6 +117,64 @@ pub async fn serve_file(req: &Request, path: &Path, meta: &std::fs::Metadata, ca
     });
     res.body = Body::Stream(Box::pin(stream));
     res
+}
+
+enum Prepared {
+    /// Send `count` bytes starting at `start` with this response.
+    Send(Response, u64, u64),
+    /// Final response without a body (304, 416).
+    Done(Response),
+}
+
+/// Headers, conditional requests and ranges shared by disk and embedded files.
+fn prepare(
+    req: &Request,
+    name: &str,
+    len: u64,
+    etag: &str,
+    modified: Option<std::time::SystemTime>,
+    cache_control: &str,
+) -> Prepared {
+    let mut res = Response::default();
+    res.set_header("etag", etag);
+    res.set_header("cache-control", cache_control);
+    res.set_header("accept-ranges", "bytes");
+    res.set_header("content-type", next_rust_assets::mime::from_path(name));
+    if let Some(m) = modified {
+        res.set_header("last-modified", &crate::http_date::format(m));
+    }
+
+    let not_modified = match req.header("if-none-match") {
+        Some(inm) => inm.split(',').any(|t| t.trim() == etag || t.trim() == "*"),
+        None => match (req.header("if-modified-since").and_then(crate::http_date::parse), modified) {
+            (Some(since), Some(m)) => {
+                m.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+                    <= since.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+            }
+            _ => false,
+        },
+    };
+    if not_modified {
+        res.status = StatusCode::NOT_MODIFIED;
+        return Prepared::Done(res);
+    }
+
+    let (start, end) = match req.header("range").map(|r| parse_range(r, len)) {
+        None => (0, len.saturating_sub(1)),
+        Some(Some((s, e))) => {
+            res.status = StatusCode::PARTIAL_CONTENT;
+            res.set_header("content-range", &format!("bytes {s}-{e}/{len}"));
+            (s, e)
+        }
+        Some(None) => {
+            let mut r = Response::status(416);
+            r.set_header("content-range", &format!("bytes */{len}"));
+            return Prepared::Done(r);
+        }
+    };
+    let count = if len == 0 { 0 } else { end - start + 1 };
+    res.set_header("content-length", &count.to_string());
+    Prepared::Send(res, start, count)
 }
 
 /// Parse a single `bytes=` range. `None` = unsatisfiable.

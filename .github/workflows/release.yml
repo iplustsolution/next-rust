@@ -2,9 +2,13 @@ name: Release
 
 # Publishes to crates.io after CI has passed on `main`.
 #
-# A release happens when the version in the root Cargo.toml
-# ([workspace.package] version) is not on crates.io yet. Pushes that don't
-# change the version pass through without publishing anything.
+# Every push to `main` is a release. The version is bumped automatically:
+# the patch number of the latest version on crates.io goes up by one
+# (0.0.1 -> 0.0.2) and the bump is committed back to `main`. All crates are
+# always published with the same version; a release that stopped part-way is
+# finished with that version before anything newer is released. A version set by
+# hand in the root Cargo.toml is used as-is when it is higher than the one on
+# crates.io, e.g. to move to 0.1.0.
 #
 # Requires the repository secret CARGO_REGISTRY_TOKEN (a crates.io API token
 # with the "publish-new" and "publish-update" scopes).
@@ -51,6 +55,83 @@ jobs:
             exit 1
           fi
 
+      - name: Pick the version
+        id: version
+        run: |
+          set -euo pipefail
+          # Every published crate is released with the same version.
+          crates="next-rust-assets next-rust-core next-rust-router next-rust-view next-rust-cache next-rust-server next-rust-macros next-rust-build next-rust next-rust-cli"
+
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          publishable=$(echo "$metadata" | jq -r '.packages[] | select(.publish != []) | .name' | sort | xargs)
+          if [ "$publishable" != "$(echo $crates | tr ' ' '\n' | sort | xargs)" ]; then
+            echo "::error::The crates to publish ($publishable) don't match the release list in release.yml"
+            exit 1
+          fi
+          versions=$(echo "$metadata" | jq -r '.packages[] | select(.publish != []) | .version' | sort -u)
+          if [ "$(echo "$versions" | wc -l)" -ne 1 ]; then
+            echo "::error::All crates must share one version (use version.workspace = true); found: $(echo $versions)"
+            exit 1
+          fi
+          current=$versions
+
+          # Latest version of each crate on crates.io.
+          highest=""
+          complete=true
+          for crate in $crates; do
+            v=$(curl -s -A "next-rust release workflow (https://github.com/${{ github.repository }})" \
+              "https://crates.io/api/v1/crates/$crate" | jq -r '.crate.max_version // empty')
+            echo "crates.io: $crate ${v:-(not published)}"
+            if [ -n "$v" ] && { [ -z "$highest" ] || [ "$(printf '%s\n%s\n' "$highest" "$v" | sort -V | tail -n1)" = "$v" ]; }; then
+              highest=$v
+            fi
+            eval "latest_${crate//-/_}=\$v"
+            sleep 1
+          done
+          for crate in $crates; do
+            var="latest_${crate//-/_}"
+            [ "${!var}" = "$highest" ] || complete=false
+          done
+
+          newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ]; }
+          if [ -z "$highest" ]; then
+            version=$current
+            echo "Nothing on crates.io yet: releasing $version"
+          elif newer "$current" "$highest"; then
+            version=$current
+            echo "Using the version set in Cargo.toml: $version (crates.io has $highest)"
+          elif [ "$complete" = false ]; then
+            # A previous release stopped part-way: finish it with the same
+            # version so every crate ends up on $highest.
+            version=$highest
+            echo "Release $highest is incomplete on crates.io: publishing the missing crates"
+          else
+            IFS=. read -r major minor patch <<< "${highest%%[-+]*}"
+            version="$major.$minor.$((patch + 1))"
+            echo "Bumping $highest -> $version"
+          fi
+          echo "current=$current" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Write the version
+        if: steps.version.outputs.current != steps.version.outputs.version
+        env:
+          CURRENT: ${{ steps.version.outputs.current }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          esc=${CURRENT//./\\.}
+          sed -i -E \
+            -e "s/^version = \"$esc\"/version = \"$VERSION\"/" \
+            -e "/path = \"crates\//s/version = \"$esc\"/version = \"$VERSION\"/" \
+            Cargo.toml
+          cargo update --workspace
+          git diff --stat
+          test "$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "next-rust") | .version')" = "$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "release: v$VERSION [skip ci]"
+
       - name: Publish crates
         id: publish
         env:
@@ -73,12 +154,15 @@ jobs:
           )
 
           metadata=$(cargo metadata --no-deps --format-version 1)
-          version=$(echo "$metadata" | jq -r '.packages[] | select(.name == "next-rust") | .version')
-          echo "version=$version" >> "$GITHUB_OUTPUT"
+          version=${{ steps.version.outputs.version }}
           published=false
 
           for crate in "${crates[@]}"; do
             crate_version=$(echo "$metadata" | jq -r --arg c "$crate" '.packages[] | select(.name == $c) | .version')
+            if [ "$crate_version" != "$version" ]; then
+              echo "::error::$crate is at $crate_version but the release is $version"
+              exit 1
+            fi
             status=$(curl -s -o /dev/null -w '%{http_code}' \
               -A "next-rust release workflow (https://github.com/${{ github.repository }})" \
               "https://crates.io/api/v1/crates/$crate/$crate_version")
@@ -110,17 +194,48 @@ jobs:
             echo "Nothing to publish: version $version is already released."
           fi
 
+      - name: Commit the version to main
+        if: steps.version.outputs.current != steps.version.outputs.version
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          echo "release_commit=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          # main may have moved on while this ran: write the version on top of
+          # the latest main instead of rebasing the release commit.
+          for attempt in 1 2 3; do
+            git fetch origin main
+            git checkout -B version-bump origin/main
+            on_main=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "next-rust") | .version')
+            if [ "$(printf '%s\n%s\n' "$VERSION" "$on_main" | sort -V | tail -n1)" = "$on_main" ]; then
+              echo "main already has version $on_main"
+              exit 0
+            fi
+            esc=${on_main//./\\.}
+            sed -i -E \
+              -e "s/^version = \"$esc\"/version = \"$VERSION\"/" \
+              -e "/path = \"crates\//s/version = \"$esc\"/version = \"$VERSION\"/" \
+              Cargo.toml
+            cargo update --workspace
+            git commit -am "release: v$VERSION [skip ci]"
+            if git push origin HEAD:main; then exit 0; fi
+            echo "main moved while pushing; retrying"
+          done
+          echo "::error::Could not push the version bump to main (is the branch protected?)"
+          exit 1
+
       - name: Tag and create GitHub release
         if: steps.publish.outputs.published == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="v${{ steps.publish.outputs.version }}"
+          tag="v${{ steps.version.outputs.version }}"
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
             echo "Tag $tag already exists"
           else
-            git tag "$tag" "${{ github.event.workflow_run.head_sha }}"
+            # Tag the exact source that was published.
+            git tag "$tag" "${release_commit:-${{ github.event.workflow_run.head_sha }}}"
             git push origin "$tag"
           fi
           if ! gh release view "$tag" >/dev/null 2>&1; then

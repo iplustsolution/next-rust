@@ -14,20 +14,17 @@ async fn cached_until_revalidated() {
 }
 
 #[tokio::test]
-async fn export_writes_static_files() {
-    let dir = std::env::temp_dir().join(format!("nr-ssg-export-{}", std::process::id()));
-    let mut config = next_rust::Config::discover(env!("CARGO_MANIFEST_DIR")).unwrap();
-    config.build.output = dir.clone();
-    let app = next_rust::App::new(example_ssg::routes())
-        .config(config)
-        .environment(next_rust::Environment::Production)
-        .build()
-        .unwrap();
-    let report = app.export().await.unwrap();
+async fn static_pages_are_prerendered_in_memory() {
+    let client = TestClient::production(example_ssg::routes());
+    let report = client.app().export().await.unwrap();
     let paths: Vec<&str> = report.pages.iter().map(|p| p.path.as_str()).collect();
     assert_eq!(paths, vec!["/", "/about"]);
-    let html = std::fs::read_to_string(dir.join("static/about/index.html")).unwrap();
-    assert!(html.contains("About (static, never revalidated)"));
-    assert!(!html.contains("nonce="), "static HTML files carry no nonce placeholders");
-    std::fs::remove_dir_all(dir).unwrap();
+    assert!(report.pages.iter().all(|p| p.bytes > 0));
+    assert_eq!(client.get("/about").await.header("x-nr-cache"), Some("MISS"), "export only checks rendering");
+
+    let client = TestClient::production(example_ssg::routes());
+    client.app().prerender().await.unwrap();
+    let about = client.get("/about").await;
+    assert_eq!(about.header("x-nr-cache"), Some("HIT"), "prerender fills the page cache");
+    assert!(about.text.contains("About (static, never revalidated)"));
 }

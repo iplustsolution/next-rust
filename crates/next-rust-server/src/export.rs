@@ -1,10 +1,9 @@
-//! Static generation (`next-rust build`).
+//! Static generation: renders static routes into a page cache.
 
-use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use next_rust_cache::{CacheEntry, CacheKey, CacheStore, FileStore};
+use next_rust_cache::{CacheEntry, CacheKey, CacheStore};
 use next_rust_router::Params;
 use serde::Serialize;
 
@@ -28,20 +27,7 @@ pub struct ExportedPage {
     pub revalidate: Option<u64>,
 }
 
-fn html_file(static_dir: &Path, path: &str) -> PathBuf {
-    let mut p = static_dir.to_path_buf();
-    for seg in path.split('/').filter(|s| !s.is_empty()) {
-        p.push(next_rust_router::decode_segment(seg).unwrap_or_else(|| seg.to_owned()));
-    }
-    p.join("index.html")
-}
-
-pub(crate) async fn export(inner: &Arc<AppInner>) -> Result<ExportReport, String> {
-    let out = &inner.output_dir;
-    let static_dir = out.join("static");
-    let store = FileStore::new(out.join("cache/pages"));
-    store.clear().await.map_err(|e| e.to_string())?;
-    let _ = tokio::fs::remove_dir_all(&static_dir).await;
+pub(crate) async fn prerender(inner: &Arc<AppInner>, store: &dyn CacheStore) -> Result<ExportReport, String> {
     let mut report = ExportReport::default();
     let mut failures = Vec::new();
 
@@ -82,18 +68,13 @@ pub(crate) async fn export(inner: &Arc<AppInner>) -> Result<ExportReport, String
                     let entry = CacheEntry::new(html.clone().into_bytes())
                         .revalidate(revalidate.map(Duration::from_secs))
                         .tags(def.tags.iter().copied());
+                    let bytes = html.replace(&format!(" nonce=\"{NONCE_PLACEHOLDER}\""), "").len();
                     store.set(CacheKey::page(&path), entry).await.map_err(|e| e.to_string())?;
-                    let file = html_file(&static_dir, &path);
-                    if let Some(parent) = file.parent() {
-                        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
-                    }
-                    let plain = html.replace(&format!(" nonce=\"{NONCE_PLACEHOLDER}\""), "");
-                    tokio::fs::write(&file, &plain).await.map_err(|e| e.to_string())?;
                     report.pages.push(ExportedPage {
                         pattern: def.pattern.to_owned(),
                         path,
                         params,
-                        bytes: plain.len(),
+                        bytes,
                         millis: start.elapsed().as_millis(),
                         revalidate,
                     });
@@ -108,19 +89,5 @@ pub(crate) async fn export(inner: &Arc<AppInner>) -> Result<ExportReport, String
         }
     }
 
-    if let Some(f) = inner.routes.sitemap {
-        write(&static_dir.join("sitemap.xml"), f().await.to_xml().as_bytes()).await?;
-    }
-    if let Some(f) = inner.routes.robots {
-        write(&static_dir.join("robots.txt"), f().await.to_text().as_bytes()).await?;
-    }
-
     if failures.is_empty() { Ok(report) } else { Err(failures.join("\n\n")) }
-}
-
-async fn write(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await.map_err(|e| e.to_string())?;
-    }
-    tokio::fs::write(path, bytes).await.map_err(|e| e.to_string())
 }

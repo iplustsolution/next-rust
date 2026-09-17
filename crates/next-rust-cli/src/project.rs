@@ -11,6 +11,8 @@ pub struct ProjectInfo {
     pub config: Config,
     pub root: PathBuf,
     pub bin_name: String,
+    /// Cargo's target directory.
+    pub target_dir: PathBuf,
 }
 
 pub fn load_config() -> Result<Config, String> {
@@ -49,7 +51,8 @@ pub fn load() -> Result<ProjectInfo, String> {
         .and_then(|t| t["name"].as_str())
         .ok_or("this package has no binary target; add src/main.rs with `next_rust::app!();`")?
         .to_owned();
-    Ok(ProjectInfo { config, root, bin_name })
+    let target_dir = meta["target_directory"].as_str().map(PathBuf::from).unwrap_or_else(|| root.join("target"));
+    Ok(ProjectInfo { config, root, bin_name, target_dir })
 }
 
 pub fn cargo() -> String {
@@ -59,7 +62,18 @@ pub fn cargo() -> String {
 /// Run `cargo build`, returning the executable path or the rendered
 /// compiler errors.
 pub fn cargo_build(info: &ProjectInfo, release: bool, quiet: bool) -> Result<PathBuf, String> {
+    cargo_build_with(info, release, quiet, &[])
+}
+
+/// [`cargo_build`] with extra environment variables for cargo.
+pub fn cargo_build_with(
+    info: &ProjectInfo,
+    release: bool,
+    quiet: bool,
+    envs: &[(&str, &str)],
+) -> Result<PathBuf, String> {
     let mut cmd = Command::new(cargo());
+    cmd.envs(envs.iter().copied());
     cmd.arg("build").arg("--bin").arg(&info.bin_name).arg("--message-format=json-diagnostic-rendered-ansi");
     if release {
         cmd.arg("--release");
