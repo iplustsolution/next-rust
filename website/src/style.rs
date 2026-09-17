@@ -1,4 +1,12 @@
-/* Next Rust website */
+//! The site's stylesheet. It is minified once, on first use, and every page
+//! includes it as an inline `<style>` in the document head.
+
+use std::sync::OnceLock;
+
+use next_rust::prelude::Stylesheet;
+
+/// Dark by default, light when the system asks for it.
+const CSS: &str = r##"/* Next Rust website */
 
 :root {
   --bg: #0b0b0d;
@@ -1451,4 +1459,25 @@ html[data-nr-navigating] body {
   .footer-inner {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+"##;
+
+pub fn stylesheet() -> &'static Stylesheet {
+    static SHEET: OnceLock<Stylesheet> = OnceLock::new();
+    SHEET.get_or_init(|| {
+        let css: &'static str = Box::leak(next_rust_assets::css::minify(CSS).into_boxed_str());
+        let id: &'static str =
+            Box::leak(next_rust_assets::content_hash(css.as_bytes())[..12].to_owned().into_boxed_str());
+        Stylesheet { id, css }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn minified_stylesheet_is_smaller() {
+        let sheet = super::stylesheet();
+        assert!(sheet.css.len() < super::CSS.len(), "minification removes whitespace and comments");
+        assert!(sheet.css.contains(".docs{") || sheet.css.contains(".docs {"), "{}", &sheet.css[..200]);
+    }
 }

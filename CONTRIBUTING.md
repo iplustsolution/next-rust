@@ -36,7 +36,7 @@ cargo run -p next-rust-cli -- new /tmp/try-it --framework-path "$PWD"
 
 ## Where things live
 
-The Architecture page of the documentation site (`website/content/architecture.html`)
+The Architecture page of the documentation site (`website/src/content/architecture.rs`)
 explains how the crates fit together. The short
 version:
 
@@ -70,7 +70,7 @@ names.
 - **A test.** Framework behaviour is easy to break by accident. For a bug,
   add a test that fails without your fix.
 - **Docs, if behaviour changed.** Update the relevant page in
-  `website/content/`, and `status.html` if a feature moves from missing to
+  `website/src/content/`, and `status.rs` if a feature moves from missing to
   done. Run `next-rust dev` in `website/` to see your change; a new page also
   needs an entry in `website/src/docs.rs`.
 - **Passing checks.** Run these before you push:
@@ -89,7 +89,7 @@ names.
 - **Error messages are features.** A new failure mode deserves a readable
   diagnostic with a hint about how to fix it.
 - **Dependencies need a reason.** Explain any new crate in the PR, and add it
-  to the table on the Architecture page (`website/content/architecture.html`).
+  to the table on the Architecture page (`website/src/content/architecture.rs`).
 - **Say what doesn't work.** If a feature is partial, document the gap
   rather than implying it's complete.
 - **Secure by default.** Escaping, cookie defaults and path handling don't

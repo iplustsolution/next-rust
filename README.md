@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="website/public/logo.svg" alt="Next Rust logo" width="160" height="160">
+  <img src="https://raw.githubusercontent.com/iplustsolution/next-rust/main/website/public/logo.svg" alt="Next Rust logo" width="160" height="160">
 </p>
 
 <h1 align="center">Next Rust</h1>
@@ -333,7 +333,9 @@ next-rust dev        # http://localhost:3000/docs
 ```
 
 `next-rust build` in that folder produces the whole site as one binary, ready
-to deploy. Each page's text lives in [`website/content/`](website/content).
+to deploy. The site is pure Rust: each page is a module in
+[`website/src/content/`](website/src/content) written with the same view
+macros your app uses.
 
 ## License
 

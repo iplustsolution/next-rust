@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 next-rust = { path = "../crates/next-rust" }
+next-rust-assets = { path = "../crates/next-rust-assets" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

@@ -365,9 +365,9 @@ mod tests {
     #[test]
     fn every_docs_page_highlights_without_losing_text() {
         for doc in crate::docs::all() {
-            let out = code_blocks(doc.html);
+            let out = code_blocks(doc.html());
             let visible = |html: &str| crate::docs::text_of(html).chars().filter(|c| !c.is_whitespace()).count();
-            assert_eq!(visible(&out), visible(doc.html) + visible(&labels(&out)), "{}", doc.slug);
+            assert_eq!(visible(&out), visible(doc.html()) + visible(&labels(&out)), "{}", doc.slug);
         }
     }
 

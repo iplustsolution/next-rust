@@ -1,14 +1,36 @@
 //! The documentation: navigation order, page content and search.
 //!
-//! Each page is an HTML fragment in `content/`, compiled into the binary.
-//! Headings carry `id`s so they can be linked and listed in the page outline.
+//! Each page is a Rust module in `content/` that builds its article with the
+//! view macros. Headings carry `id`s so they can be linked and listed in the
+//! page outline.
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+use next_rust::prelude::{Node, render_static};
 
 /// One documentation page.
 pub struct Doc {
     pub slug: &'static str,
     pub title: &'static str,
     pub description: &'static str,
-    pub html: &'static str,
+    /// Builds the article body.
+    pub content: fn() -> Node,
+    /// Source file, relative to the repository root.
+    pub source: &'static str,
+}
+
+impl Doc {
+    /// The article rendered to HTML. Rendered once, then reused for the page,
+    /// its outline and search.
+    pub fn html(&self) -> &'static str {
+        static RENDERED: OnceLock<HashMap<&'static str, String>> = OnceLock::new();
+        RENDERED
+            .get_or_init(|| all().map(|d| (d.slug, render_static((d.content)()))).collect())
+            .get(self.slug)
+            .map(String::as_str)
+            .unwrap_or("")
+    }
 }
 
 /// A sidebar group.
@@ -18,12 +40,13 @@ pub struct Section {
 }
 
 macro_rules! doc {
-    ($slug:literal, $title:literal, $description:literal) => {
+    ($slug:literal, $module:ident, $title:literal, $description:literal) => {
         Doc {
             slug: $slug,
             title: $title,
             description: $description,
-            html: include_str!(concat!("../content/", $slug, ".html")),
+            content: crate::content::$module::content,
+            source: concat!("website/src/content/", stringify!($module), ".rs"),
         }
     };
 }
@@ -35,8 +58,18 @@ pub const SECTIONS: &[Section] = &[
     Section {
         title: "Get started",
         docs: &[
-            doc!("introduction", "Introduction", "What Next Rust is, and a quick look at how an app is put together."),
-            doc!("getting-started", "Installation", "Install Rust and the CLI, create a project and run it."),
+            doc!(
+                "introduction",
+                introduction,
+                "Introduction",
+                "What Next Rust is, and a quick look at how an app is put together."
+            ),
+            doc!(
+                "getting-started",
+                getting_started,
+                "Installation",
+                "Install Rust and the CLI, create a project and run it."
+            ),
         ],
     },
     Section {
@@ -44,15 +77,17 @@ pub const SECTIONS: &[Section] = &[
         docs: &[
             doc!(
                 "routing",
+                routing,
                 "Routing",
                 "Special files, layouts, route groups, dynamic segments, ranking, slots and interception."
             ),
             doc!(
                 "rendering",
+                rendering,
                 "Rendering & data",
                 "SSR, static generation, ISR, streaming, errors, redirects and metadata."
             ),
-            doc!("views", "Views & components", "The HTML macros, escaping, lists, conditionals and images."),
+            doc!("views", views, "Views & components", "The HTML macros, escaping, lists, conditionals and images."),
         ],
     },
     Section {
@@ -60,54 +95,75 @@ pub const SECTIONS: &[Section] = &[
         docs: &[
             doc!(
                 "api-routes",
+                api_routes,
                 "API routes",
                 "Route handlers, requests and responses, cookies, server-sent events and WebSockets."
             ),
             doc!(
                 "middleware",
+                middleware,
                 "Middleware & auth",
                 "Middleware order, built-in middleware, authentication, sessions and CSRF."
             ),
             doc!(
                 "server-actions",
+                server_actions,
                 "Server actions & forms",
                 "Forms that call Rust functions, with validation and redirects."
             ),
             doc!(
                 "client",
+                client,
                 "Client & navigation",
                 "Islands, WebAssembly, the server/client boundary and client-side navigation."
             ),
             doc!(
                 "styling-and-assets",
+                styling_and_assets,
                 "Styling & assets",
                 "Global CSS, CSS modules, public files, hashed assets, images and fonts."
             ),
-            doc!("caching", "Caching", "The data cache, the page store, revalidation and custom stores."),
+            doc!("caching", caching, "Caching", "The data cache, the page store, revalidation and custom stores."),
         ],
     },
     Section {
         title: "Shipping",
         docs: &[
-            doc!("configuration", "Configuration", "The next-rust.toml reference, environment files and monorepos."),
-            doc!("cli", "CLI", "Every next-rust command and its options."),
-            doc!("deployment", "Deployment", "The single-binary build, VPS, Docker, Kubernetes, proxies and logging."),
-            doc!("testing", "Testing", "Test pages, API routes and actions without starting a server."),
+            doc!(
+                "configuration",
+                configuration,
+                "Configuration",
+                "The next-rust.toml reference, environment files and monorepos."
+            ),
+            doc!("cli", cli, "CLI", "Every next-rust command and its options."),
+            doc!(
+                "deployment",
+                deployment,
+                "Deployment",
+                "The single-binary build, VPS, Docker, Kubernetes, proxies and logging."
+            ),
+            doc!("testing", testing, "Testing", "Test pages, API routes and actions without starting a server."),
         ],
     },
     Section {
         title: "Reference",
         docs: &[
-            doc!("plugins", "Plugins", "Extend the build and the runtime."),
-            doc!("security", "Security", "What is secure by default, and what to check before you launch."),
+            doc!("plugins", plugins, "Plugins", "Extend the build and the runtime."),
+            doc!("security", security, "Security", "What is secure by default, and what to check before you launch."),
             doc!(
                 "architecture",
+                architecture,
                 "Architecture",
                 "How the crates fit together, the request pipeline and design decisions."
             ),
-            doc!("benchmarks", "Benchmarks", "What is measured, how, and how to run the benchmarks yourself."),
-            doc!("diagnostics", "Diagnostics", "Every error and warning code the build can report."),
-            doc!("status", "Status & roadmap", "What is implemented, what has limits, and what comes next."),
+            doc!(
+                "benchmarks",
+                benchmarks,
+                "Benchmarks",
+                "What is measured, how, and how to run the benchmarks yourself."
+            ),
+            doc!("diagnostics", diagnostics, "Diagnostics", "Every error and warning code the build can report."),
+            doc!("status", status, "Status & roadmap", "What is implemented, what has limits, and what comes next."),
         ],
     },
 ];
@@ -217,7 +273,7 @@ pub fn search(query: &str) -> Vec<Hit> {
             let score = if matches(doc.title) { 100 } else { 60 };
             hits.push(Hit { doc, heading: None, snippet: doc.description.to_owned(), score });
         }
-        for (heading, body) in sections(doc.html) {
+        for (heading, body) in sections(doc.html()) {
             let heading_hit = heading.as_ref().is_some_and(|h| matches(&h.text));
             let text = text_of(body);
             if heading_hit || matches(&text) {
@@ -281,8 +337,13 @@ mod tests {
         let mut seen = std::collections::HashSet::new();
         for doc in all() {
             assert!(seen.insert(doc.slug), "duplicate slug {}", doc.slug);
-            assert!(doc.html.len() > 200, "{} looks empty", doc.slug);
-            assert!(!doc.html.contains(".md\""), "{} links to a Markdown file", doc.slug);
+            assert!(doc.html().len() > 200, "{} looks empty", doc.slug);
+            assert!(!doc.html().contains(".md\""), "{} links to a Markdown file", doc.slug);
+            assert!(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join(doc.source).is_file(),
+                "{}",
+                doc.source
+            );
         }
         assert_eq!(all().next().map(|d| d.slug), Some(INTRODUCTION));
     }
@@ -290,7 +351,7 @@ mod tests {
     #[test]
     fn internal_links_point_at_real_pages() {
         for doc in all() {
-            for part in doc.html.split("href=\"/docs").skip(1) {
+            for part in doc.html().split("href=\"/docs").skip(1) {
                 let target = part.split(['"', '#']).next().unwrap_or("");
                 let slug = target.trim_start_matches('/');
                 assert!(slug.is_empty() || find(slug).is_some(), "{} links to missing page /docs{target}", doc.slug);

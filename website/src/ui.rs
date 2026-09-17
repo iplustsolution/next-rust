@@ -196,7 +196,7 @@ fn pager(doc: &Doc) -> impl View {
 
 /// A full documentation page: navigation, article, outline and pager.
 pub fn doc_page(doc: &'static Doc) -> impl View {
-    let headings = docs::headings(doc.html);
+    let headings = docs::headings(doc.html());
     let section = docs::section_of(doc.slug).map(|s| s.title).unwrap_or("Docs");
     fragment![
         header(Area::Docs, ""),
@@ -210,12 +210,12 @@ pub fn doc_page(doc: &'static Doc) -> impl View {
                     p![class("eyebrow"), section],
                     h1![doc.title],
                     p![class("lead"), doc.description],
-                    div![class("prose"), raw_html(crate::highlight::code_blocks(doc.html))],
+                    div![class("prose"), raw_html(crate::highlight::code_blocks(doc.html()))],
                 ],
                 div![
                     class("doc-meta"),
                     a![
-                        href(format!("{REPO}/blob/main/website/content/{}.html", doc.slug)),
+                        href(format!("{REPO}/blob/main/{}", doc.source)),
                         target("_blank"),
                         rel("noopener"),
                         raw_html(EDIT_ICON),

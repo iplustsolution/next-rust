@@ -11,7 +11,7 @@ pub fn metadata() -> Metadata {
 
 pub fn Layout(children: Children) -> impl View {
     fragment![
-        global_css!("globals.css"),
+        crate::style::stylesheet(),
         a![class("skip-link"), href("#content"), "Skip to content"],
         children
     ]
