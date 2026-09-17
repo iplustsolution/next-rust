@@ -15,6 +15,8 @@ readme = "../../README.md"
 [[bin]]
 name = "next-rust"
 path = "src/main.rs"
+# The binary shares its name with the `next-rust` library; only the library is documented.
+doc = false
 
 [dependencies]
 next-rust-core.workspace = true

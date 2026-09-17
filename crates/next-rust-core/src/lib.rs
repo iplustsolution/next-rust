@@ -1,7 +1,7 @@
 //! Core building blocks shared by every Next Rust crate.
 //!
 //! * [`config`] – `next-rust.toml` / `next-rust.json` discovery and parsing.
-//! * [`env`] – `.env` file loading with a strict server/public split.
+//! * [`env`](mod@env) – `.env` file loading with a strict server/public split.
 //! * [`diagnostic`] – structured, human friendly error reporting.
 //! * [`RenderingMode`] – static / dynamic / auto rendering.
 
