@@ -125,8 +125,14 @@ To jump to a bigger version (for example `0.1.0`), set `version` under
 `[workspace.dependencies]` yourself. The workflow releases a version you set
 by hand as-is when it is higher than the one on crates.io.
 
-The workflow needs the `CARGO_REGISTRY_TOKEN` repository secret: a crates.io
-API token with the `publish-new` and `publish-update` scopes.
+The workflow needs two repository secrets:
+
+- `CARGO_REGISTRY_TOKEN`: a crates.io API token with the `publish-new` and
+  `publish-update` scopes.
+- `RELEASE_TOKEN`: a fine-grained GitHub token of a repository admin, limited
+  to this repository, with **Contents: Read and write**. It pushes the version
+  commit and the release tag. `main` is protected by a ruleset, so the
+  Repository admin role must be on its bypass list.
 
 ## Security issues
 

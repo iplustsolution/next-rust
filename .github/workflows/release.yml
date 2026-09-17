@@ -42,6 +42,9 @@ jobs:
           # Publish exactly the commit that passed CI.
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
+          # Pushes the version commit and tag as a repository admin, who may
+          # bypass the ruleset on main (see CONTRIBUTING.md).
+          token: ${{ secrets.RELEASE_TOKEN }}
 
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
