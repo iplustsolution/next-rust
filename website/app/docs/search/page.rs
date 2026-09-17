@@ -16,10 +16,6 @@ pub fn Page(Query(query): Query<SearchQuery>) -> impl View {
     let hits = docs::search(&q);
     let count = hits.len();
     fragment![
-        ui::header(ui::Area::Docs, &q),
-        div![
-            class("docs"),
-            ui::sidebar(""),
             main![
                 class("doc search-page"),
                 id("content"),
@@ -64,7 +60,5 @@ pub fn Page(Query(query): Query<SearchQuery>) -> impl View {
                 ],
             ],
             aside![class("outline")],
-        ],
-        ui::footer(),
     ]
 }

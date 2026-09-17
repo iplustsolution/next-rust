@@ -1,9 +1,7 @@
 use next_rust::prelude::*;
-use crate::ui::{self, Area};
 
 pub fn NotFound() -> impl View {
     fragment![
-        ui::header(Area::Home, ""),
         main![
             id("content"),
             class("not-found"),
@@ -16,6 +14,5 @@ pub fn NotFound() -> impl View {
                 a![class("button"), href("/docs/search"), "Search"],
             ],
         ],
-        ui::footer(),
     ]
 }

@@ -76,6 +76,16 @@ pub struct SegmentDef {
     /// Nested `middleware.rs` (never the app-root one, which is global).
     pub middleware: Option<MiddlewareFn>,
     pub slots: Vec<SlotDef>,
+    /// Identity of `layout` (its file, relative to the project), used to
+    /// recognize a layout the browser already shows.
+    pub layout_id: &'static str,
+    /// The build found that `layout` (and its `load`) reads nothing from the
+    /// request, so client navigations may keep it on screen instead of
+    /// rendering it again.
+    pub layout_reusable: bool,
+    /// `layout` reads route parameters (`Params` / `Path`): it is only reused
+    /// while every parameter keeps its value.
+    pub layout_uses_params: bool,
 }
 
 #[derive(Clone)]
@@ -141,6 +151,13 @@ pub struct Routes {
     pub project_root: Option<&'static str>,
     /// Configuration and static files compiled into release binaries.
     pub embedded: Option<&'static crate::embed::Embedded>,
+    /// Changes whenever the application's source changes. Part of every layout
+    /// key, so a browser never keeps a layout from an older deployment.
+    pub build_id: &'static str,
+    /// Reads `next-rust.toml` at runtime. Set by the generated code for
+    /// development builds; release builds embed their configuration as JSON
+    /// and leave this `None`, so no TOML parser is linked.
+    pub toml: Option<next_rust_core::config::TomlParser>,
 }
 
 pub(crate) type CustomHandlers = Vec<(Option<Method>, Arc<dyn Endpoint>)>;
@@ -405,23 +422,30 @@ fn req_cookies_placeholder() -> crate::Cookies {
 pub fn discover_config(
     project_root: Option<&str>,
     embedded: Option<&crate::embed::Embedded>,
+    toml: Option<next_rust_core::config::TomlParser>,
 ) -> std::result::Result<Config, String> {
     let start = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     if std::env::var_os("NEXT_RUST_CONFIG").is_none()
         && let Some((text, json)) = embedded.and_then(|e| e.config)
     {
-        let mut config = if json { Config::from_json_str(text) } else { Config::from_toml_str(text) }
-            .map_err(|e| format!("embedded configuration: {e}"))?;
+        let parsed = match (json, toml) {
+            (true, _) => Config::from_json_str(text),
+            (false, Some(parse)) => parse(text),
+            (false, None) => Err("embedded TOML configuration needs a TOML parser".to_owned()),
+        };
+        let mut config = parsed.map_err(|e| format!("embedded configuration: {e}"))?;
         config.root = start;
         config.apply_env_overrides();
         return Ok(config);
     }
-    let from_cwd = Config::discover(&start).map_err(|e| e.to_string())?;
+    let from_cwd = Config::discover_with(&start, toml).map_err(|e| e.to_string())?;
     if from_cwd.source.is_some() || from_cwd.app_dir().is_dir() {
         return Ok(from_cwd);
     }
     match project_root {
-        Some(root) if std::path::Path::new(root).is_dir() => Config::discover(root).map_err(|e| e.to_string()),
+        Some(root) if std::path::Path::new(root).is_dir() => {
+            Config::discover_with(root, toml).map_err(|e| e.to_string())
+        }
         _ => Ok(from_cwd),
     }
 }
@@ -433,6 +457,10 @@ impl AppBuilder {
 
     pub(crate) fn embedded(&self) -> Option<&'static crate::embed::Embedded> {
         self.routes.embedded
+    }
+
+    pub(crate) fn toml_parser(&self) -> Option<next_rust_core::config::TomlParser> {
+        self.routes.toml
     }
 
     /// Use an explicit configuration instead of discovering `next-rust.toml`.
@@ -532,7 +560,7 @@ impl AppBuilder {
         let env = self.env.unwrap_or_else(Environment::from_env);
         let config = match self.config {
             Some(c) => c,
-            None => discover_config(self.routes.project_root, self.routes.embedded)?,
+            None => discover_config(self.routes.project_root, self.routes.embedded, self.routes.toml)?,
         };
         crate::set_dev(env.is_dev());
         let json = match config.logging.format {
@@ -689,7 +717,11 @@ async fn dispatch(inner: Arc<AppInner>, mut req: Request) -> Response {
             {
                 req.set_params(hit.params);
                 let idx = ic.page;
-                return run_page(&inner, idx, req).await;
+                // Tells the client runtime this HTML depends on the page it
+                // navigated from, so it isn't reused from other pages.
+                let mut res = run_page(&inner, idx, req).await;
+                res.set_header("x-nr-intercepted", "1");
+                return res;
             }
         }
     }

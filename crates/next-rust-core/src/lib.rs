@@ -7,6 +7,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod brand;
 pub mod config;
 pub mod diagnostic;
 pub mod env;

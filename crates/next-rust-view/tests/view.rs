@@ -198,6 +198,30 @@ fn non_streaming_document_is_one_chunk() {
 }
 
 #[test]
+fn active_links_match_exactly_or_by_prefix() {
+    assert!(link_is_active("/docs", "/docs", false));
+    assert!(link_is_active("/docs/", "/docs", false));
+    assert!(link_is_active("/docs?x=1#top", "/docs", false));
+    assert!(!link_is_active("/docs", "/docs/routing", false));
+    assert!(link_is_active("/docs", "/docs/routing", true));
+    assert!(!link_is_active("/doc", "/docs", true), "prefix matches whole segments");
+    assert!(link_is_active("/", "/anything", true));
+    assert!(!link_is_active("https://example.com/docs", "/docs", true));
+
+    let mut node = nav![
+        a![href("/docs"), class("link"), active_class("on"), "Docs"],
+        a![href("/blog"), active_class("on"), "Blog"],
+        a![href("/docs"), active_class_prefix("section"), "Section"],
+    ]
+    .into_node();
+    mark_active_links(&mut node, "/docs");
+    let html = render_static(node);
+    assert!(html.contains(r#"class="link on" data-nr-active="on" aria-current="page">Docs"#), "{html}");
+    assert!(html.contains(r#"<a href="/blog" data-nr-active="on">Blog"#), "{html}");
+    assert!(html.contains(r#"class="section" aria-current="page">Section"#), "{html}");
+}
+
+#[test]
 fn plain_internal_anchors_enable_client_navigation() {
     let flags_for = |view: Node| {
         let parts = DocumentParts { tail: Box::new(|f| format!("[links={}]", f.links)), ..DocumentParts::new(view) };

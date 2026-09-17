@@ -18,9 +18,11 @@ use futures_util::StreamExt;
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Empty, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
-use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+#[cfg(feature = "http2")]
+use hyper_util::rt::TokioExecutor;
+use hyper_util::rt::{TokioIo, TokioTimer};
+#[cfg(feature = "http2")]
 use hyper_util::server::conn::auto;
-use hyper_util::server::graceful::GracefulShutdown;
 use tokio::net::TcpListener;
 
 use crate::app::App;
@@ -46,24 +48,43 @@ impl App {
     pub async fn serve_listener(self, listener: TcpListener) -> std::io::Result<()> {
         let local = listener.local_addr()?;
         let config = self.inner.config.clone();
-        crate::log::info(&format!(
-            "ready on http://{}:{} ({}, {} routes)",
-            if local.ip().is_unspecified() { "localhost".to_string() } else { local.ip().to_string() },
-            local.port(),
-            self.environment().as_str(),
-            self.inner.routes.pages.len() + self.inner.routes.apis.len()
-        ));
-
-        let mut builder = auto::Builder::new(TokioExecutor::new());
-        builder
-            .http1()
-            .timer(TokioTimer::new())
-            .header_read_timeout(Duration::from_secs(config.server.header_timeout.max(1)))
-            .keep_alive(true);
-        if config.server.http2 {
-            builder.http2().timer(TokioTimer::new()).keep_alive_interval(Duration::from_secs(20));
+        let banner = crate::banner::enabled(self.environment());
+        if banner {
+            crate::banner::started(local, self.inner.routes.pages.len(), self.inner.routes.apis.len());
+        } else {
+            crate::log::info(&format!(
+                "ready on http://{}:{} ({}, {} routes)",
+                if local.ip().is_unspecified() { "localhost".to_string() } else { local.ip().to_string() },
+                local.port(),
+                self.environment().as_str(),
+                self.inner.routes.pages.len() + self.inner.routes.apis.len()
+            ));
         }
-        let graceful = GracefulShutdown::new();
+
+        let header_timeout = Duration::from_secs(config.server.header_timeout.max(1));
+        #[cfg(feature = "http2")]
+        let builder = {
+            let mut builder = auto::Builder::new(TokioExecutor::new());
+            builder.http1().timer(TokioTimer::new()).header_read_timeout(header_timeout).keep_alive(true);
+            if config.server.http2 {
+                builder.http2().timer(TokioTimer::new()).keep_alive_interval(Duration::from_secs(20));
+            } else {
+                builder = builder.http1_only();
+            }
+            builder
+        };
+        #[cfg(not(feature = "http2"))]
+        let builder = {
+            if config.server.http2 {
+                crate::log::warn("[server] http2 = true needs the `http2` feature of next-rust; serving HTTP/1.1");
+            }
+            let mut builder = hyper::server::conn::http1::Builder::new();
+            builder.timer(TokioTimer::new()).header_read_timeout(header_timeout).keep_alive(true);
+            builder
+        };
+        // Every connection task holds a receiver: sending tells them to finish
+        // gracefully, and `closed()` resolves once all of them are done.
+        let (graceful, _) = tokio::sync::watch::channel(());
         let shutdown = shutdown_signal();
         tokio::pin!(shutdown);
 
@@ -84,15 +105,30 @@ impl App {
                         let app = app.clone();
                         async move { Ok::<_, Infallible>(app.handle_hyper(req, Some(remote)).await) }
                     });
-                    let conn = builder.serve_connection_with_upgrades(TokioIo::new(stream), service);
-                    let conn = graceful.watch(conn.into_owned());
+                    #[cfg(feature = "http2")]
+                    let conn = builder.serve_connection_with_upgrades(TokioIo::new(stream), service).into_owned();
+                    #[cfg(not(feature = "http2"))]
+                    let conn = builder.serve_connection(TokioIo::new(stream), service).with_upgrades();
+                    let mut stop = graceful.subscribe();
                     tokio::spawn(async move {
-                        if let Err(e) = conn.await {
+                        let mut conn = std::pin::pin!(conn);
+                        let result = tokio::select! {
+                            result = conn.as_mut() => result,
+                            _ = stop.changed() => {
+                                conn.as_mut().graceful_shutdown();
+                                conn.await
+                            }
+                        };
+                        if let Err(e) = result {
                             crate::log::debug(&format!("connection error: {e}"));
                         }
+                        drop(stop);
                     });
                 }
                 _ = &mut shutdown => {
+                    if banner {
+                        crate::banner::stopping();
+                    }
                     crate::log::info("shutting down gracefully");
                     break;
                 }
@@ -100,8 +136,14 @@ impl App {
         }
         let wait = Duration::from_secs(config.server.shutdown_timeout);
         tokio::select! {
-            _ = graceful.shutdown() => {}
+            _ = async {
+                let _ = graceful.send(());
+                graceful.closed().await;
+            } => {}
             _ = tokio::time::sleep(wait) => crate::log::warn("shutdown timeout: closing remaining connections"),
+        }
+        if banner {
+            crate::banner::stopped();
         }
         Ok(())
     }

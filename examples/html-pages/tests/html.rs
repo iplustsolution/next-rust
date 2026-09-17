@@ -1,10 +1,11 @@
 use next_rust::TestClient;
+use next_rust::testing::strip_layout_markers;
 
 #[tokio::test]
 async fn html_fragments_and_documents() {
     let client = TestClient::new(example_html_pages::routes());
     let legacy = client.get("/legacy").await;
-    assert!(legacy.text.contains("<main><h1>Legacy page</h1>"), "{}", legacy.text);
+    assert!(strip_layout_markers(&legacy.text).contains("<main><h1>Legacy page</h1>"), "{}", legacy.text);
     let landing = client.get("/landing").await;
     assert!(landing.text.starts_with("<!DOCTYPE html>"));
     assert!(landing.text.contains("<h1>Standalone landing page</h1>"));

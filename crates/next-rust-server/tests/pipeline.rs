@@ -569,14 +569,17 @@ async fn intercepting_routes_on_soft_navigation() {
     assert!(body.contains("photo 1") && !body.contains("modal"));
     let req =
         http::Request::get("/photo/1").header("x-nr-nav", "1").header("x-nr-from", "/feed").body(Bytes::new()).unwrap();
-    let (_, _, body) = send(&t.app, req).await;
+    let (_, headers, body) = send(&t.app, req).await;
     assert!(body.contains("modal 1"), "{body}");
+    assert_eq!(headers["x-nr-intercepted"], "1", "the client must not reuse this HTML from other pages");
     let req = http::Request::get("/photo/1")
         .header("x-nr-nav", "1")
         .header("x-nr-from", "/other")
         .body(Bytes::new())
         .unwrap();
-    assert!(send(&t.app, req).await.2.contains("photo 1"));
+    let (_, headers, body) = send(&t.app, req).await;
+    assert!(body.contains("photo 1"));
+    assert!(!headers.contains_key("x-nr-intercepted"));
 }
 
 #[tokio::test]

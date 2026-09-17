@@ -552,12 +552,43 @@ impl<'a> Gen<'a> {
         Some(name)
     }
 
+    /// Whether a layout can stay on screen across client navigations, and
+    /// whether it reads route parameters. A layout is reusable when it (and
+    /// its `load`) takes nothing from the request: only `Children`, `Slots`,
+    /// `Data`, `Nonce`, `Params` and `Path`.
+    fn layout_reuse(&self, path: &Path) -> (bool, bool) {
+        fn check(args: &[ArgKind], uses_params: &mut bool) -> bool {
+            args.iter().all(|arg| match arg {
+                ArgKind::Children | ArgKind::Slots | ArgKind::Data => true,
+                ArgKind::Extractor { name, .. } if name == "Params" || name == "Path" => {
+                    *uses_params = true;
+                    true
+                }
+                ArgKind::Extractor { name, .. } => name == "Nonce",
+                _ => false,
+            })
+        }
+        let info = self.info(path);
+        let Some(layout) = info.get("Layout") else { return (false, false) };
+        let mut uses_params = false;
+        let mut reusable = check(&layout.args, &mut uses_params);
+        if reusable && layout.args.contains(&ArgKind::Data) {
+            reusable = info.get("load").is_none_or(|load| check(&load.args, &mut uses_params));
+        }
+        (reusable, uses_params)
+    }
+
     fn opt(v: Option<String>) -> String {
         v.map(|s| format!("Some({s})")).unwrap_or_else(|| "None".to_owned())
     }
 
     fn segment(&mut self, seg: &SegmentEntry, is_app_root: bool) -> String {
         let layout = seg.layout.as_ref().and_then(|p| self.layout_fn(p, "Layout"));
+        let (reusable, uses_params) = match (&seg.layout, &layout) {
+            (Some(p), Some(_)) => self.layout_reuse(p),
+            _ => (false, false),
+        };
+        let layout_id = seg.layout.as_ref().map(|p| relative(p, &self.project.config.root)).unwrap_or_default();
         let template = seg.template.as_ref().and_then(|p| self.layout_fn(p, "Template"));
         let loading = seg.loading.as_ref().and_then(|p| self.loading_fn(p));
         let error = seg.error.as_ref().and_then(|p| self.error_fn(p, "ErrorBoundary"));
@@ -578,7 +609,7 @@ impl<'a> Gen<'a> {
             })
             .collect();
         format!(
-            "__nr::SegmentDef {{ layout: {}, template: {}, loading: {}, error: {}, not_found: {}, metadata: {}, middleware: {}, slots: vec![{}] }}",
+            "__nr::SegmentDef {{ layout: {}, template: {}, loading: {}, error: {}, not_found: {}, metadata: {}, middleware: {}, slots: vec![{}], layout_id: {}, layout_reusable: {}, layout_uses_params: {} }}",
             Self::opt(layout),
             Self::opt(template),
             Self::opt(loading),
@@ -586,7 +617,10 @@ impl<'a> Gen<'a> {
             Self::opt(not_found),
             Self::opt(metadata),
             Self::opt(middleware),
-            slots.join(", ")
+            slots.join(", "),
+            lit(&layout_id),
+            reusable,
+            uses_params
         )
     }
 }
@@ -634,12 +668,40 @@ pub fn embedded_dirs(config: &Config) -> [(&'static str, PathBuf); 3] {
     [("public", config.public_dir()), ("assets", config.root.join("assets")), ("client", config.root.join("client"))]
 }
 
+/// Paths passed to `asset!("…")` anywhere in the app directory or `src/`.
+/// `/_nr/assets/` URLs only come from that macro, so other files in
+/// `assets/` can never be requested and are left out of release binaries.
+pub fn referenced_assets(config: &Config) -> std::collections::BTreeSet<String> {
+    let mut found = std::collections::BTreeSet::new();
+    for dir in [config.app_dir(), config.root.join("src")] {
+        for (_, path) in embeddable_files(&dir) {
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let Ok(source) = std::fs::read_to_string(&path) else { continue };
+            for (at, _) in source.match_indices("asset!") {
+                let rest = source[at + "asset!".len()..].trim_start();
+                let Some(rest) = rest.strip_prefix(['(', '[', '{']) else { continue };
+                let Some(rest) = rest.trim_start().strip_prefix('"') else { continue };
+                if let Some(end) = rest.find('"') {
+                    found.insert(rest[..end].trim_start_matches('/').to_owned());
+                }
+            }
+        }
+    }
+    found
+}
+
 fn embedded_code(config: &Config) -> String {
     let mut out = String::new();
     let mut built_at = 0u64;
+    let used_assets = referenced_assets(config);
     for (field, dir) in embedded_dirs(config) {
         let _ = writeln!(out, "static __NR_EMBED_{}: &[__nr::EmbeddedFile] = &[", field.to_uppercase());
         for (rel, path) in embeddable_files(&dir) {
+            if field == "assets" && !used_assets.contains(&rel) {
+                continue;
+            }
             let Ok(bytes) = std::fs::read(&path) else { continue };
             if let Some(secs) = std::fs::metadata(&path)
                 .and_then(|m| m.modified())
@@ -658,14 +720,20 @@ fn embedded_code(config: &Config) -> String {
         }
         out.push_str("];\n");
     }
-    let config_file = match &config.source {
-        Some(src) => format!(
-            "Some((include_str!({}), {}))",
-            lit(&src.to_string_lossy()),
-            src.extension().is_some_and(|e| e == "json")
-        ),
-        None => "None".into(),
-    };
+    // The configuration is embedded as JSON, so release binaries need no TOML
+    // parser. It is read from the file again (not `config`) so environment
+    // overrides of the build machine (PORT, HOST) are not baked in.
+    let config_file = config
+        .source
+        .as_ref()
+        .and_then(|src| std::fs::read_to_string(src).ok().map(|text| (src, text)))
+        .and_then(|(src, text)| match src.extension().is_some_and(|e| e == "json") {
+            true => Config::from_json_str(&text).ok(),
+            false => Config::from_toml_str(&text).ok(),
+        })
+        .and_then(|parsed| serde_json::to_string(&parsed).ok())
+        .map(|json| format!("Some(({}, true))", lit(&json)))
+        .unwrap_or_else(|| "None".into());
     let _ = write!(
         out,
         "static __NR_EMBEDDED: __nr::Embedded = __nr::Embedded {{\n    config: {config_file},\n    built_at: {built_at},\n    public: __NR_EMBED_PUBLIC,\n    assets: __NR_EMBED_ASSETS,\n    client: __NR_EMBED_CLIENT,\n}};\n\n"
@@ -853,7 +921,7 @@ pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String 
     };
     let _ = write!(
         out,
-        "/// All routes discovered in the app directory.\npub fn routes() -> ::next_rust::Routes {{\n    __nr::Routes {{\n        pages: vec![\n{}\n        ],\n        apis: vec![\n{}\n        ],\n        actions: vec![\n{}\n        ],\n        root: {},\n        middleware: {},\n        global_error: {},\n        sitemap: {},\n        robots: {},\n        project_root: Some({}),\n        embedded: {},\n    }}\n}}\n",
+        "/// All routes discovered in the app directory.\npub fn routes() -> ::next_rust::Routes {{\n    __nr::Routes {{\n        pages: vec![\n{}\n        ],\n        apis: vec![\n{}\n        ],\n        actions: vec![\n{}\n        ],\n        root: {},\n        middleware: {},\n        global_error: {},\n        sitemap: {},\n        robots: {},\n        project_root: {},\n        embedded: {},\n        build_id: {},\n        toml: {},\n    }}\n}}\n",
         pages.join(",\n"),
         apis.join(",\n"),
         actions.join(",\n"),
@@ -862,8 +930,33 @@ pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String 
         Gen::opt(global_error),
         Gen::opt(sitemap),
         Gen::opt(robots),
-        lit(&root.to_string_lossy()),
+        // Release binaries carry their configuration: no machine paths and no
+        // TOML parser in them.
+        if options.embed_files { "None".to_owned() } else { format!("Some({})", lit(&root.to_string_lossy())) },
         embedded,
+        lit(&build_id(&project.config)),
+        if options.embed_files { "None" } else { "__nr::TOML" },
     );
     out
+}
+
+/// A hash of the application's source: the app directory, `src/` and the
+/// configuration file. Browsers drop layouts rendered by a different build.
+pub fn build_id(config: &Config) -> String {
+    let mut files = embeddable_files(&config.app_dir());
+    for (rel, path) in embeddable_files(&config.root.join("src")) {
+        files.push((format!("src/{rel}"), path));
+    }
+    if let Some(src) = &config.source {
+        files.push(("config".into(), src.clone()));
+    }
+    files.sort();
+    let mut h = next_rust_assets::Fnv64::new();
+    for (rel, path) in files {
+        h.write(rel.as_bytes());
+        h.write(b"\0");
+        h.write(&std::fs::read(&path).unwrap_or_default());
+        h.write(b"\0");
+    }
+    format!("{:016x}", h.finish())
 }

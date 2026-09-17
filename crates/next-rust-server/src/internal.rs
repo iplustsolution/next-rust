@@ -9,11 +9,19 @@ use crate::request::Request;
 use crate::response::Response;
 use crate::sse::SseEvent;
 
-use crate::client_runtime::{RUNTIME_JS, RUNTIME_JS_MIN};
+#[cfg(debug_assertions)]
+use crate::client_runtime::RUNTIME_JS;
+use crate::client_runtime::RUNTIME_JS_MIN;
 
-/// The runtime served to browsers: readable in development, minified otherwise.
+/// The runtime served to browsers: readable in development, minified
+/// otherwise. Release builds contain only the minified copy.
 fn runtime_js(dev: bool) -> &'static str {
-    if dev { RUNTIME_JS } else { RUNTIME_JS_MIN }
+    #[cfg(debug_assertions)]
+    if dev {
+        return RUNTIME_JS;
+    }
+    let _ = dev;
+    RUNTIME_JS_MIN
 }
 
 pub(crate) fn runtime_version(dev: bool) -> &'static str {

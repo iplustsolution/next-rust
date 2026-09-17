@@ -1,6 +1,6 @@
 use next_rust::prelude::*;
 use crate::highlight::highlight;
-use crate::ui::{self, Area, REPO, VERSION};
+use crate::ui::{REPO, VERSION};
 
 pub fn metadata() -> Metadata {
     Metadata::new().absolute_title("Next Rust · The full-stack web framework for Rust")
@@ -47,7 +47,7 @@ const FEATURES: &[(&str, &str, &str)] = &[
     ),
     (
         "Almost no JavaScript",
-        "Pages send zero JavaScript until they use a link or an island. The runtime that handles both is about 3 KB.",
+        "Pages send zero JavaScript until they use a link or an island. The runtime that handles both is about 4 KB.",
         r#"<path d="m13 2-9 12h8l-1 8 9-12h-8Z"/>"#,
     ),
     (
@@ -59,7 +59,6 @@ const FEATURES: &[(&str, &str, &str)] = &[
 
 pub fn Page() -> impl View {
     fragment![
-        ui::header(Area::Home, ""),
         main![
             id("content"),
             class("home"),
@@ -148,7 +147,7 @@ pub fn Page() -> impl View {
                         span![class("step-num"), "3"],
                         h3!["Ship"],
                         pre![code![raw_html(highlight("sh", "next-rust build"))]],
-                        p!["One stripped binary, about 2 MB for a new app. Nothing else to upload."],
+                        p!["One stripped binary, about 1.2 MB for a new app. Nothing else to upload."],
                     ],
                 ],
             ],
@@ -163,6 +162,5 @@ pub fn Page() -> impl View {
                 ],
             ],
         ],
-        ui::footer(),
     ]
 }

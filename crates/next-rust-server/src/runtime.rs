@@ -24,14 +24,16 @@ pub fn run(routes: Routes) {
 /// }
 /// ```
 pub fn run_with(builder: AppBuilder) {
+    crate::banner::mark_process_start();
     let env = Environment::from_env();
-    let config: Config = match crate::app::discover_config(builder.project_root(), builder.embedded()) {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("error: {e}");
-            std::process::exit(1);
-        }
-    };
+    let config: Config =
+        match crate::app::discover_config(builder.project_root(), builder.embedded(), builder.toml_parser()) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("error: {e}");
+                std::process::exit(1);
+            }
+        };
     match next_rust_core::env::EnvVars::load(&config.root, env, &config.env.public_prefix) {
         Ok(vars) => vars.apply_to_process(),
         Err(e) if env.is_dev() => eprintln!("warning: could not read .env files: {e}"),

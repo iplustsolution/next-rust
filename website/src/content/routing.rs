@@ -246,6 +246,82 @@ app/blog/[slug]/page.rs     → /blog/:slug",
             code!["layout.rs"],
             " and is rendered inside the layout of the same segment. On the server the two behave the same. The distinction exists so client-side navigation can re-create templates while preserving layouts.",
         ],
+        h3![
+            id("layouts-stay-on-screen"),
+            a![class("anchor"), href("#layouts-stay-on-screen"), "Layouts stay on screen"]
+        ],
+        p![
+            "When a link moves between two pages that share layouts, only what changed is rendered and sent. For ",
+            code!["/dashboard/settings"],
+            " → ",
+            code!["/dashboard/billing"],
+            ", the server does not run the root and dashboard layouts again: it renders the inside of ",
+            code!["DashboardLayout"],
+            " and the browser swaps just that part. The shared layouts keep their DOM, so scroll positions, open menus, focus and form inputs in them survive the navigation. A refresh or a first visit still renders the whole page.",
+        ],
+        p![
+            "A layout is kept only when its output can't depend on the request. The build checks what each layout (and its ",
+            code!["load"],
+            ") takes:"
+        ],
+        div![
+            class("table-wrap"),
+            table![
+                thead![tr![th!["layout arguments"], th!["on navigation"]]],
+                tbody![
+                    tr![
+                        td![code!["Children"], ", ", code!["Slots"], ", ", code!["Data"], ", ", code!["Nonce"]],
+                        td!["kept"]
+                    ],
+                    tr![
+                        td![code!["Params"], ", ", code!["Path<T>"]],
+                        td!["kept while every route parameter keeps its value"]
+                    ],
+                    tr![
+                        td![
+                            code!["Cookies"],
+                            ", ",
+                            code!["Headers"],
+                            ", ",
+                            code!["Query"],
+                            ", ",
+                            code!["Auth"],
+                            ", ",
+                            code!["RequestInfo"],
+                            ", ",
+                            code!["Ctx"],
+                            ", …"
+                        ],
+                        td!["rendered again, with everything below it"],
+                    ],
+                ],
+            ],
+        ],
+        p![
+            "A ",
+            code!["template.rs"],
+            " and parallel slots (",
+            code!["@slot"],
+            ") are rendered on every navigation, and so is everything below them. Static pages are cut out of their cached HTML, so shared layouts aren't sent either. After a deploy the browser's layouts no longer match the new build and the next navigation renders the whole page.",
+        ],
+        p![
+            "A navigation link in a shared layout can't highlight the current page on the server any more, since the layout isn't rendered again. Mark it and the framework keeps it up to date:"
+        ],
+        pre![code![
+            class("language-rust"),
+            r#"nav![
+    a![href("/dashboard/settings"), active_class("active"), "Settings"],
+    // Also active on every page below /dashboard:
+    a![href("/dashboard"), active_class_prefix("active"), "Dashboard"],
+]"#,
+        ],],
+        p![
+            "The class and ",
+            code!["aria-current=\"page\""],
+            " are applied on the server for the first render and by the client runtime after every navigation. A link inside an open ",
+            code!["<details>"],
+            " menu closes it when it navigates.",
+        ],
         h2![id("route-groups"), a![class("anchor"), href("#route-groups"), "Route groups"]],
         p!["Parenthesized directories organize files without affecting URLs:"],
         pre![code![
@@ -364,7 +440,7 @@ pub fn Page(Path(p): Path<P>) -> impl View { h1![p.slug.join(" / ")] }"#,
                 ],
             ],
         ],
-        p!["All diagnostic codes are listed in ", a![href("/docs/diagnostics"), "diagnostics.md"], ". Example output:",],
+        p!["All diagnostic codes are listed in ", a![href("/docs/diagnostics"), "Diagnostics"], ". Example output:",],
         pre![code![
             class("language-text"),
             r"error[NR0103]: Conflicting dynamic segment names
@@ -381,7 +457,7 @@ pub fn Page(Path(p): Path<P>) -> impl View { h1![p.slug.join(" / ")] }"#,
             "A ",
             code!["route.rs"],
             " anywhere in the tree handles HTTP methods for its URL. See ",
-            a![href("/docs/api-routes"), "api-routes.md"],
+            a![href("/docs/api-routes"), "API routes"],
             ". You can also keep API routes in a separate directory:",
         ],
         pre![code![
@@ -463,7 +539,7 @@ app/photo/[id]/page.rs           the regular page",
             ", so it can rewrite paths. Nested ",
             code!["middleware.rs"],
             " files run for their subtree, outermost first. See ",
-            a![href("/docs/middleware"), "middleware.md"],
+            a![href("/docs/middleware"), "Middleware & auth"],
             ".",
         ],
     ]

@@ -15,6 +15,9 @@ readme = "../../README.md"
 [features]
 default = ["compression"]
 compression = ["dep:flate2"]
+# HTTP/2 over plain TCP (h2c). Browsers use HTTP/2 only over TLS, which a
+# proxy terminates, so this is off by default to keep binaries small.
+http2 = ["hyper/http2", "hyper-util/http2", "hyper-util/server-auto"]
 websocket = ["dep:tokio-tungstenite"]
 tracing = ["dep:tracing"]
 
@@ -25,8 +28,8 @@ next-rust-view.workspace = true
 next-rust-assets.workspace = true
 next-rust-cache.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "net", "time", "fs", "io-util", "macros", "signal", "sync"] }
-hyper = { workspace = true, features = ["server", "http1", "http2"] }
-hyper-util = { workspace = true, features = ["server-auto", "server-graceful", "service", "tokio", "http1", "http2"] }
+hyper = { workspace = true, features = ["server", "http1"] }
+hyper-util = { workspace = true, features = ["server-graceful", "service", "tokio", "http1"] }
 http.workspace = true
 http-body.workspace = true
 http-body-util.workspace = true

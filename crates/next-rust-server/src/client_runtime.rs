@@ -19,21 +19,17 @@
 //!   CONTRIBUTING.md). A test fails if the source changes without the
 //!   minified copy being regenerated.
 
+#[cfg_attr(not(debug_assertions), allow(dead_code))]
 pub const RUNTIME_JS: &str = r#"// Next Rust client runtime. No dependencies, no eval (CSP friendly).
 // Served at /_nr/runtime.js and loaded only by pages that render an internal
 // link (with client navigation enabled) or an interactive island.
 const NR = (window.nextRust = window.nextRust || {});
-const prefetched = new Map();
-const PREFETCH_TTL = 30000;
+// Pages fetched by prefetching or navigation, reused for PAGE_TTL ms so a
+// page is never downloaded twice in a row: a click after a prefetch, a second
+// click, or going back all use the copy already in memory.
+const pages = new Map();
+const PAGE_TTL = 30000;
 let current = location.pathname + location.search;
-
-const sameOrigin = (href) => {
-  try {
-    return new URL(href, location.href).origin === location.origin;
-  } catch {
-    return false;
-  }
-};
 
 function swapStreamed(doc) {
   for (const t of doc.querySelectorAll('template[id^="nr-t"]')) {
@@ -43,26 +39,73 @@ function swapStreamed(doc) {
   }
 }
 
-async function fetchPage(href) {
-  const res = await fetch(href, {
-    headers: { "x-nr-nav": "1", "x-nr-from": location.pathname, accept: "text/html" },
-    credentials: "same-origin",
-  });
-  if (!(res.headers.get("content-type") || "").includes("text/html")) throw new Error("not html");
-  return { url: res.url, html: await res.text() };
+// ---- Layouts ---------------------------------------------------------------
+// The server wraps the children of every reusable layout in comment markers,
+// <!--nr-l:KEY--> ... <!--/nr-l:KEY-->. Navigations send the keys on screen,
+// and the server answers with only what goes inside the deepest shared layout.
+
+function layoutMarkers() {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_COMMENT);
+  const found = [];
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.data.startsWith("nr-l:")) found.push(n);
+  }
+  return found;
 }
 
-function prefetch(href) {
-  const hit = prefetched.get(href);
-  if (hit && Date.now() - hit.at < PREFETCH_TTL) return hit.promise;
-  const promise = fetchPage(href);
-  prefetched.set(href, { at: Date.now(), promise });
-  promise.catch(() => prefetched.delete(href));
+// The start and end markers of a layout region, if it is on screen.
+function findRegion(key) {
+  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_COMMENT);
+  let start = null;
+  for (let n = walker.nextNode(); n; n = walker.nextNode()) {
+    if (n.data === "nr-l:" + key) start = n;
+    else if (start && n.data === "/nr-l:" + key && n.parentNode === start.parentNode) return { start, end: n };
+  }
+  return null;
+}
+
+async function fetchPage(href, full) {
+  const headers = { "x-nr-nav": "1", "x-nr-from": location.pathname, accept: "text/html" };
+  const keys = full ? [] : layoutMarkers().map((n) => n.data.slice(5));
+  if (keys.length) {
+    headers["x-nr-layouts"] = keys.join(",");
+    // Stylesheets already in <head> are not sent again.
+    const styles = [...document.head.querySelectorAll("style[data-nr-css]")].map((s) => s.dataset.nrCss);
+    if (styles.length) headers["x-nr-styles"] = styles.join(",");
+  }
+  const res = await fetch(href, { headers, credentials: "same-origin" });
+  if (!(res.headers.get("content-type") || "").includes("text/html")) throw new Error("not html");
+  return {
+    url: res.url,
+    html: await res.text(),
+    // An intercepted route renders differently depending on where the
+    // navigation started, so that copy is only valid from the same page.
+    from: res.headers.get("x-nr-intercepted") ? location.pathname : null,
+    // Only the inside of this layout was sent.
+    partial: res.headers.get("x-nr-partial"),
+  };
+}
+
+// The page for `href`: the copy in memory if it is recent, otherwise one
+// request, shared by everyone asking for the same page at the same time.
+function loadPage(href, fresh, full) {
+  const now = Date.now();
+  for (const [key, entry] of pages) if (now - entry.at >= PAGE_TTL) pages.delete(key);
+  const hit = fresh ? null : pages.get(href);
+  if (hit) return hit.promise;
+  const promise = fetchPage(href, full);
+  const entry = { at: now, promise };
+  pages.set(href, entry);
+  promise.catch(() => {
+    if (pages.get(href) === entry) pages.delete(href);
+  });
   return promise;
 }
 
-function render(html) {
-  const doc = new DOMParser().parseFromString(html, "text/html");
+const prefetch = (href) => loadPage(href, false);
+
+function render(page) {
+  const doc = new DOMParser().parseFromString(page.html, "text/html");
   swapStreamed(doc);
   document.title = doc.title;
   const managed = 'meta[name]:not([name="viewport"]),meta[property],link[rel="canonical"],style[data-nr-css]';
@@ -72,8 +115,31 @@ function render(html) {
     if (n.dataset && n.dataset.nrCss && existing.has(n.dataset.nrCss)) continue;
     document.head.appendChild(document.importNode(n, true));
   }
-  document.body.replaceWith(document.importNode(doc.body, true));
-  for (const old of document.body.querySelectorAll("script")) {
+  const env = doc.getElementById("__nr_env");
+  if (env) {
+    try {
+      NR.env = JSON.parse(env.textContent || "{}");
+    } catch {}
+  }
+  let scripts;
+  const region = page.partial && findRegion(page.partial);
+  if (region) {
+    // Keep every shared layout; replace only what is inside the deepest one.
+    const { start, end } = region;
+    while (start.nextSibling && start.nextSibling !== end) start.nextSibling.remove();
+    const added = [];
+    for (const n of [...doc.body.childNodes]) {
+      if (n.nodeType === 1 && (n.id === "__nr_env" || (n.getAttribute("src") || "").startsWith("/_nr/runtime.js"))) continue;
+      const node = document.importNode(n, true);
+      end.parentNode.insertBefore(node, end);
+      added.push(node);
+    }
+    scripts = added.flatMap((n) => (n.nodeType !== 1 ? [] : n.tagName === "SCRIPT" ? [n] : [...n.querySelectorAll("script")]));
+  } else {
+    document.body.replaceWith(document.importNode(doc.body, true));
+    scripts = [...document.body.querySelectorAll("script")];
+  }
+  for (const old of scripts) {
     const src = old.getAttribute("src") || "";
     if (old.type === "application/json" || src.startsWith("/_nr/runtime.js") || /^\$nr\(/.test(old.textContent)) continue;
     const s = document.createElement("script");
@@ -82,6 +148,31 @@ function render(html) {
     old.replaceWith(s);
   }
   hydrateIslands(document);
+}
+
+// Links marked with active_class / active_class_prefix follow the current URL.
+function markActiveLinks() {
+  const here = location.pathname.length > 1 ? location.pathname.replace(/\/+$/, "") : location.pathname;
+  for (const a of document.querySelectorAll("a[data-nr-active],a[data-nr-active-prefix]")) {
+    let path;
+    try {
+      path = new URL(a.href, location.href).pathname;
+    } catch {
+      continue;
+    }
+    if (path.length > 1) path = path.replace(/\/+$/, "");
+    const exact = here === path;
+    const below = exact || path === "/" || here.startsWith(path + "/");
+    let current = false;
+    for (const [attr, on] of [["nrActive", exact], ["nrActivePrefix", below]]) {
+      const cls = a.dataset[attr];
+      if (cls === undefined) continue;
+      if (cls) a.classList.toggle(cls, on);
+      current = current || on;
+    }
+    if (current) a.setAttribute("aria-current", "page");
+    else if (a.getAttribute("aria-current") === "page") a.removeAttribute("aria-current");
+  }
 }
 
 async function navigate(href, opts = {}) {
@@ -98,14 +189,25 @@ async function navigate(href, opts = {}) {
   const root = document.documentElement;
   root.setAttribute("data-nr-navigating", "");
   try {
-    const cached = opts.fresh ? null : prefetched.get(url.href);
-    const page = await (cached ? cached.promise : fetchPage(url.href));
-    prefetched.delete(url.href);
-    render(page.html);
+    let page;
+    try {
+      page = await loadPage(url.href, opts.fresh);
+    } catch {
+      page = await loadPage(url.href, true); // a failed prefetch gets one more try
+    }
+    if (page.from && page.from !== location.pathname) page = await loadPage(url.href, true);
+    // A partial page needs its layout on screen; if it is gone, get the full page.
+    if (page.partial && !findRegion(page.partial)) page = await loadPage(url.href, true, true);
+    render(page);
     const finalUrl = new URL(page.url || url.href);
     if (!finalUrl.hash) finalUrl.hash = url.hash;
     if (opts.history !== false) history[opts.replace ? "replaceState" : "pushState"]({ nr: 1 }, "", finalUrl.href);
     current = finalUrl.pathname + finalUrl.search;
+    markActiveLinks();
+    // A link inside a menu that stays on screen (an open <details>) closes it.
+    for (let d = opts.link && opts.link.isConnected && opts.link.closest("details[open]"); d; d = d.parentElement && d.parentElement.closest("details[open]")) {
+      d.open = false;
+    }
     if (opts.scroll !== false) {
       const anchor = url.hash && document.getElementById(decodeURIComponent(url.hash.slice(1)));
       anchor ? anchor.scrollIntoView() : window.scrollTo(0, 0);
@@ -150,15 +252,42 @@ document.addEventListener("click", (e) => {
   const a = internalLink(e.target);
   if (!a) return;
   e.preventDefault();
-  navigate(a.href, { replace: a.hasAttribute("data-nr-replace"), scroll: a.dataset.nrScroll !== "false" });
+  navigate(a.href, { replace: a.hasAttribute("data-nr-replace"), scroll: a.dataset.nrScroll !== "false", link: a });
 });
 
-const intent = (e) => {
-  const a = internalLink(e.target);
-  if (a && a.dataset.nrPrefetch !== "false" && !new URL(a.href).hash) prefetch(a.href);
+// Prefetch only when the mouse rests on a link for PREFETCH_DELAY ms. Moving
+// or scrolling past links, pressing a button and touch taps never fetch early;
+// those pages load on click.
+const PREFETCH_DELAY = 400;
+let hoverLink = null;
+let hoverTimer = 0;
+const cancelIntent = () => {
+  clearTimeout(hoverTimer);
+  hoverTimer = 0;
+  hoverLink = null;
 };
-document.addEventListener("mouseover", intent, { passive: true });
-document.addEventListener("touchstart", intent, { passive: true });
+const intent = (e) => {
+  if (e.pointerType !== "mouse") return;
+  const a = internalLink(e.target);
+  if (a === hoverLink) return;
+  cancelIntent();
+  if (!a || a.dataset.nrPrefetch === "false") return;
+  const url = new URL(a.href);
+  // Same-page anchors and the page that is already open need no fetch.
+  if (url.hash || url.pathname + url.search === current) return;
+  hoverLink = a;
+  hoverTimer = setTimeout(() => {
+    hoverTimer = 0;
+    if (hoverLink === a && a.isConnected) prefetch(a.href);
+  }, PREFETCH_DELAY);
+};
+document.addEventListener("pointerover", intent, { passive: true });
+document.addEventListener("pointermove", intent, { passive: true });
+document.addEventListener("pointerout", (e) => {
+  if (hoverLink && !hoverLink.contains(e.relatedTarget)) cancelIntent();
+}, { passive: true });
+document.addEventListener("pointerdown", cancelIntent, { passive: true });
+document.addEventListener("scroll", cancelIntent, { capture: true, passive: true });
 
 window.addEventListener("popstate", () => {
   if (location.pathname + location.search !== current) navigate(location.href, { history: false, scroll: false });
@@ -174,6 +303,8 @@ NR.action = async (url, input) => {
     credentials: "same-origin",
   });
   const body = await res.json().catch(() => ({ ok: false, error: res.statusText }));
+  // An action may change what pages show: drop every page kept in memory.
+  if (body.ok || body.redirect) pages.clear();
   if (body.redirect) {
     navigate(body.redirect);
     return undefined;
@@ -203,6 +334,7 @@ document.addEventListener("submit", async (e) => {
       credentials: "same-origin",
     });
     const body = await res.json();
+    if (body.ok || body.redirect) pages.clear();
     if (body.redirect) return navigate(body.redirect);
     if (body.ok) {
       form.dispatchEvent(new CustomEvent("nr:success", { detail: body.data, bubbles: true }));
@@ -333,18 +465,19 @@ function bindDeclarative(root, state) {
   update();
 }
 
+markActiveLinks();
 hydrateIslands(document);
 "#;
 
 /// Minified, name-mangled runtime served in production.
-pub const RUNTIME_JS_MIN: &str = r####"const t=window.nextRust=window.nextRust||{},e=new Map;let r=location.pathname+location.search;async function n(t){const e=await fetch(t,{headers:{"x-nr-nav":"1","x-nr-from":location.pathname,accept:"text/html"},credentials:"same-origin"});if(!(e.headers.get("content-type")||"").includes("text/html"))throw new Error("not html");return{url:e.url,html:await e.text()}}function a(t){const r=e.get(t);if(r&&Date.now()-r.at<3e4)return r.promise;const a=n(t);return e.set(t,{at:Date.now(),promise:a}),a.catch(()=>e.delete(t)),a}async function o(t,a={}){const o=new URL(t,location.href);if(o.origin!==location.origin)return void(location.href=o.href);const s=o.pathname+o.search;if(!1!==a.history&&s===r&&o.hash)return void(location.hash=o.hash);const c=document.documentElement;c.setAttribute("data-nr-navigating","");try{const t=a.fresh?null:e.get(o.href),s=await(t?t.promise:n(o.href));e.delete(o.href),function(t){const e=(new DOMParser).parseFromString(t,"text/html");!function(t){for(const e of t.querySelectorAll('template[id^="nr-t"]')){const r=t.getElementById("nr-b"+e.id.slice(4));r&&r.replaceWith(e.content),e.remove()}}(e),document.title=e.title;const r='meta[name]:not([name="viewport"]),meta[property],link[rel="canonical"],style[data-nr-css]',n=new Set([...document.head.querySelectorAll("style[data-nr-css]")].map(t=>t.dataset.nrCss));document.head.querySelectorAll(r.replace(",style[data-nr-css]","")).forEach(t=>t.remove());for(const t of e.head.querySelectorAll(r))t.dataset&&t.dataset.nrCss&&n.has(t.dataset.nrCss)||document.head.appendChild(document.importNode(t,!0));document.body.replaceWith(document.importNode(e.body,!0));for(const t of document.body.querySelectorAll("script")){const e=t.getAttribute("src")||"";if("application/json"===t.type||e.startsWith("/_nr/runtime.js")||/^\$nr\(/.test(t.textContent))continue;const r=document.createElement("script");for(const e of t.attributes)r.setAttribute(e.name,e.value);r.textContent=t.textContent,t.replaceWith(r)}l(document)}(s.html);const c=new URL(s.url||o.href);if(c.hash||(c.hash=o.hash),!1!==a.history&&history[a.replace?"replaceState":"pushState"]({nr:1},"",c.href),r=c.pathname+c.search,!1!==a.scroll){const t=o.hash&&document.getElementById(decodeURIComponent(o.hash.slice(1)));t?t.scrollIntoView():window.scrollTo(0,0)}window.dispatchEvent(new CustomEvent("nr:navigate",{detail:{url:c.href}}))}catch{location.href=o.href}finally{c.removeAttribute("data-nr-navigating")}}t.navigate=t=>o(t),t.replace=t=>o(t,{replace:!0}),t.back=()=>history.back(),t.forward=()=>history.forward(),t.refresh=()=>o(location.href,{replace:!0,scroll:!1,fresh:!0}),t.prefetch=a;const s=t=>{const e=t&&t.closest&&t.closest("a[href]");if(!e||"string"!=typeof e.href)return null;if(e.hasAttribute("data-nr-reload")||e.hasAttribute("download"))return null;if(e.target&&"_self"!==e.target)return null;if((e.getAttribute("rel")||"").split(/\s+/).includes("external"))return null;let r;try{r=new URL(e.href,location.href)}catch{return null}return r.origin===location.origin&&/^https?:$/.test(r.protocol)?e:null};document.addEventListener("click",t=>{if(t.defaultPrevented||0!==t.button||t.metaKey||t.ctrlKey||t.shiftKey||t.altKey)return;const e=s(t.target);e&&(t.preventDefault(),o(e.href,{replace:e.hasAttribute("data-nr-replace"),scroll:"false"!==e.dataset.nrScroll}))});const c=t=>{const e=s(t.target);e&&"false"!==e.dataset.nrPrefetch&&!new URL(e.href).hash&&a(e.href)};document.addEventListener("mouseover",c,{passive:!0}),document.addEventListener("touchstart",c,{passive:!0}),window.addEventListener("popstate",()=>{location.pathname+location.search!==r&&o(location.href,{history:!1,scroll:!1})}),t.action=async(t,e)=>{const r=await fetch(t,{method:"POST",headers:{"content-type":"application/json","x-nr-action":"1",accept:"application/json"},body:JSON.stringify(void 0===e?null:e),credentials:"same-origin"}),n=await r.json().catch(()=>({ok:!1,error:r.statusText}));if(!n.redirect){if(!n.ok){const t=new Error(n.error||"Validation failed");throw t.errors=n.errors,t.status=r.status,t}return n.data}o(n.redirect)},document.addEventListener("submit",async e=>{const r=e.target;if(!(r instanceof HTMLFormElement)||!r.dataset.nrAction||e.defaultPrevented)return;if("multipart/form-data"===r.enctype)return;e.preventDefault();const n=new URLSearchParams(new FormData(r,e.submitter));r.querySelectorAll("[data-nr-error]").forEach(t=>t.textContent=""),r.setAttribute("aria-busy","true");try{const e=await fetch(r.dataset.nrAction,{method:"POST",body:n,headers:{"x-nr-action":"1",accept:"application/json"},credentials:"same-origin"}),a=await e.json();if(a.redirect)return o(a.redirect);if(a.ok){r.dispatchEvent(new CustomEvent("nr:success",{detail:a.data,bubbles:!0}));const e=n.get("_redirect");return e?o(e):t.refresh()}const s=a.errors||{_form:a.error};for(const[t,e]of Object.entries(s)){const n=r.querySelector(`[data-nr-error="${CSS.escape(t)}"]`);n&&(n.textContent=e)}r.dispatchEvent(new CustomEvent("nr:error",{detail:a,bubbles:!0}))}catch{HTMLFormElement.prototype.submit.call(r)}finally{r.removeAttribute("aria-busy")}});try{t.env=JSON.parse((document.getElementById("__nr_env")||{}).textContent||"{}")}catch{t.env={}}const i=new WeakSet;async function l(t){for(const e of t.querySelectorAll("nr-island")){if(i.has(e))continue;i.add(e);let t={};try{t=JSON.parse(e.dataset.props||"{}")}catch{}if(e.dataset.module)try{const r=await(import(e.dataset.module));if("function"==typeof r.hydrate){await r.hydrate(e,t);continue}}catch(t){console.error(`[next-rust] island ${e.dataset.component} failed to load`,t)}d(e,t)}}function d(e,r){const n=t=>t.split(".").reduce((t,e)=>null==t?t:t[e],r),a=(t,e)=>{const n=t.split("."),a=n.pop();n.reduce((t,e)=>t[e]=t[e]&&"object"==typeof t[e]?t[e]:{},r)[a]=e},s=t=>t.startsWith("!")?!n(t.slice(1).trim()):!!n(t.trim()),c=t=>{try{return JSON.parse(t)}catch{return t}},i=()=>{for(const t of e.querySelectorAll("[data-nr-text]")){const e=n(t.dataset.nrText);t.textContent=null==e?"":"object"==typeof e?JSON.stringify(e):String(e)}for(const t of e.querySelectorAll("[data-nr-show]"))t.hidden=!s(t.dataset.nrShow);for(const t of e.querySelectorAll("[data-nr-bind]")){const e=n(t.dataset.nrBind);"checkbox"===t.type?t.checked=!!e:document.activeElement!==t&&(t.value=null==e?"":e)}for(const t of e.querySelectorAll("*"))for(const e of t.attributes)e.name.startsWith("data-nr-class-")&&t.classList.toggle(e.name.slice(14),s(e.value))},l={increment:(t,e)=>a(t,Number(n(t)||0)+Number(e||1)),decrement:(t,e)=>a(t,Number(n(t)||0)-Number(e||1)),toggle:t=>a(t,!n(t))},d=new Set;for(const t of e.querySelectorAll("*"))for(const e of t.attributes)e.name.startsWith("data-nr-on-")&&d.add(e.name.slice(11));for(const n of d)e.addEventListener(n,async s=>{const d=s.target.closest&&s.target.closest(`[data-nr-on-${n}]`);if(d&&e.contains(d)){for(const e of d.getAttribute(`data-nr-on-${n}`).split(";")){const n=e.indexOf(":"),i=(n<0?e:e.slice(0,n)).trim(),d=n<0?"":e.slice(n+1).trim();if("prevent"===i)s.preventDefault();else if("set"===i){const t=d.indexOf("=");a(d.slice(0,t).trim(),c(d.slice(t+1).trim()))}else if("action"===i){const[e,n]=d.split("->").map(t=>t.trim());try{const o=await t.action(e,r);n?a(n,o):o&&"object"==typeof o&&Object.assign(r,o)}catch(t){a("error",t.message)}}else if("navigate"===i)o(d);else if(l[i]){const[t,e]=d.split(",");l[i](t.trim(),e)}}i()}});e.addEventListener("input",t=>{const e=t.target;e.dataset&&e.dataset.nrBind&&(a(e.dataset.nrBind,"checkbox"===e.type?e.checked:"number"===e.type?Number(e.value):e.value),i())}),i()}l(document);"####;
+pub const RUNTIME_JS_MIN: &str = r####"const t=window.nextRust=window.nextRust||{},e=new Map;let n=location.pathname+location.search;function r(t){const e=document.createTreeWalker(document.body,NodeFilter.SHOW_COMMENT);let n=null;for(let r=e.nextNode();r;r=e.nextNode())if(r.data==="nr-l:"+t)n=r;else if(n&&r.data==="/nr-l:"+t&&r.parentNode===n.parentNode)return{start:n,end:r};return null}function a(t,n,r){const a=Date.now();for(const[t,n]of e)a-n.at>=3e4&&e.delete(t);const o=n?null:e.get(t);if(o)return o.promise;const s=async function(t,e){const n={"x-nr-nav":"1","x-nr-from":location.pathname,accept:"text/html"},r=e?[]:function(){const t=document.createTreeWalker(document.body,NodeFilter.SHOW_COMMENT),e=[];for(let n=t.nextNode();n;n=t.nextNode())n.data.startsWith("nr-l:")&&e.push(n);return e}().map(t=>t.data.slice(5));if(r.length){n["x-nr-layouts"]=r.join(",");const t=[...document.head.querySelectorAll("style[data-nr-css]")].map(t=>t.dataset.nrCss);t.length&&(n["x-nr-styles"]=t.join(","))}const a=await fetch(t,{headers:n,credentials:"same-origin"});if(!(a.headers.get("content-type")||"").includes("text/html"))throw new Error("not html");return{url:a.url,html:await a.text(),from:a.headers.get("x-nr-intercepted")?location.pathname:null,partial:a.headers.get("x-nr-partial")}}(t,r),c={at:a,promise:s};return e.set(t,c),s.catch(()=>{e.get(t)===c&&e.delete(t)}),s}const o=t=>a(t,!1);function s(){const t=location.pathname.length>1?location.pathname.replace(/\/+$/,""):location.pathname;for(const e of document.querySelectorAll("a[data-nr-active],a[data-nr-active-prefix]")){let n;try{n=new URL(e.href,location.href).pathname}catch{continue}n.length>1&&(n=n.replace(/\/+$/,""));const r=t===n,a=r||"/"===n||t.startsWith(n+"/");let o=!1;for(const[t,n]of[["nrActive",r],["nrActivePrefix",a]]){const r=e.dataset[t];void 0!==r&&(r&&e.classList.toggle(r,n),o=o||n)}o?e.setAttribute("aria-current","page"):"page"===e.getAttribute("aria-current")&&e.removeAttribute("aria-current")}}async function c(e,o={}){const c=new URL(e,location.href);if(c.origin!==location.origin)return void(location.href=c.href);const i=c.pathname+c.search;if(!1!==o.history&&i===n&&c.hash)return void(location.hash=c.hash);const l=document.documentElement;l.setAttribute("data-nr-navigating","");try{let e;try{e=await a(c.href,o.fresh)}catch{e=await a(c.href,!0)}e.from&&e.from!==location.pathname&&(e=await a(c.href,!0)),e.partial&&!r(e.partial)&&(e=await a(c.href,!0,!0)),function(e){const n=(new DOMParser).parseFromString(e.html,"text/html");!function(t){for(const e of t.querySelectorAll('template[id^="nr-t"]')){const n=t.getElementById("nr-b"+e.id.slice(4));n&&n.replaceWith(e.content),e.remove()}}(n),document.title=n.title;const a='meta[name]:not([name="viewport"]),meta[property],link[rel="canonical"],style[data-nr-css]',o=new Set([...document.head.querySelectorAll("style[data-nr-css]")].map(t=>t.dataset.nrCss));document.head.querySelectorAll(a.replace(",style[data-nr-css]","")).forEach(t=>t.remove());for(const t of n.head.querySelectorAll(a))t.dataset&&t.dataset.nrCss&&o.has(t.dataset.nrCss)||document.head.appendChild(document.importNode(t,!0));const s=n.getElementById("__nr_env");if(s)try{t.env=JSON.parse(s.textContent||"{}")}catch{}let c;const i=e.partial&&r(e.partial);if(i){const{start:t,end:e}=i;for(;t.nextSibling&&t.nextSibling!==e;)t.nextSibling.remove();const r=[];for(const t of[...n.body.childNodes]){if(1===t.nodeType&&("__nr_env"===t.id||(t.getAttribute("src")||"").startsWith("/_nr/runtime.js")))continue;const n=document.importNode(t,!0);e.parentNode.insertBefore(n,e),r.push(n)}c=r.flatMap(t=>1!==t.nodeType?[]:"SCRIPT"===t.tagName?[t]:[...t.querySelectorAll("script")])}else document.body.replaceWith(document.importNode(n.body,!0)),c=[...document.body.querySelectorAll("script")];for(const t of c){const e=t.getAttribute("src")||"";if("application/json"===t.type||e.startsWith("/_nr/runtime.js")||/^\$nr\(/.test(t.textContent))continue;const n=document.createElement("script");for(const e of t.attributes)n.setAttribute(e.name,e.value);n.textContent=t.textContent,t.replaceWith(n)}p(document)}(e);const i=new URL(e.url||c.href);i.hash||(i.hash=c.hash),!1!==o.history&&history[o.replace?"replaceState":"pushState"]({nr:1},"",i.href),n=i.pathname+i.search,s();for(let t=o.link&&o.link.isConnected&&o.link.closest("details[open]");t;t=t.parentElement&&t.parentElement.closest("details[open]"))t.open=!1;if(!1!==o.scroll){const t=c.hash&&document.getElementById(decodeURIComponent(c.hash.slice(1)));t?t.scrollIntoView():window.scrollTo(0,0)}window.dispatchEvent(new CustomEvent("nr:navigate",{detail:{url:i.href}}))}catch{location.href=c.href}finally{l.removeAttribute("data-nr-navigating")}}t.navigate=t=>c(t),t.replace=t=>c(t,{replace:!0}),t.back=()=>history.back(),t.forward=()=>history.forward(),t.refresh=()=>c(location.href,{replace:!0,scroll:!1,fresh:!0}),t.prefetch=o;const i=t=>{const e=t&&t.closest&&t.closest("a[href]");if(!e||"string"!=typeof e.href)return null;if(e.hasAttribute("data-nr-reload")||e.hasAttribute("download"))return null;if(e.target&&"_self"!==e.target)return null;if((e.getAttribute("rel")||"").split(/\s+/).includes("external"))return null;let n;try{n=new URL(e.href,location.href)}catch{return null}return n.origin===location.origin&&/^https?:$/.test(n.protocol)?e:null};document.addEventListener("click",t=>{if(t.defaultPrevented||0!==t.button||t.metaKey||t.ctrlKey||t.shiftKey||t.altKey)return;const e=i(t.target);e&&(t.preventDefault(),c(e.href,{replace:e.hasAttribute("data-nr-replace"),scroll:"false"!==e.dataset.nrScroll,link:e}))});let l=null,d=0;const u=()=>{clearTimeout(d),d=0,l=null},f=t=>{if("mouse"!==t.pointerType)return;const e=i(t.target);if(e===l)return;if(u(),!e||"false"===e.dataset.nrPrefetch)return;const r=new URL(e.href);r.hash||r.pathname+r.search===n||(l=e,d=setTimeout(()=>{d=0,l===e&&e.isConnected&&o(e.href)},400))};document.addEventListener("pointerover",f,{passive:!0}),document.addEventListener("pointermove",f,{passive:!0}),document.addEventListener("pointerout",t=>{l&&!l.contains(t.relatedTarget)&&u()},{passive:!0}),document.addEventListener("pointerdown",u,{passive:!0}),document.addEventListener("scroll",u,{capture:!0,passive:!0}),window.addEventListener("popstate",()=>{location.pathname+location.search!==n&&c(location.href,{history:!1,scroll:!1})}),t.action=async(t,n)=>{const r=await fetch(t,{method:"POST",headers:{"content-type":"application/json","x-nr-action":"1",accept:"application/json"},body:JSON.stringify(void 0===n?null:n),credentials:"same-origin"}),a=await r.json().catch(()=>({ok:!1,error:r.statusText}));if((a.ok||a.redirect)&&e.clear(),!a.redirect){if(!a.ok){const t=new Error(a.error||"Validation failed");throw t.errors=a.errors,t.status=r.status,t}return a.data}c(a.redirect)},document.addEventListener("submit",async n=>{const r=n.target;if(!(r instanceof HTMLFormElement)||!r.dataset.nrAction||n.defaultPrevented)return;if("multipart/form-data"===r.enctype)return;n.preventDefault();const a=new URLSearchParams(new FormData(r,n.submitter));r.querySelectorAll("[data-nr-error]").forEach(t=>t.textContent=""),r.setAttribute("aria-busy","true");try{const n=await fetch(r.dataset.nrAction,{method:"POST",body:a,headers:{"x-nr-action":"1",accept:"application/json"},credentials:"same-origin"}),o=await n.json();if((o.ok||o.redirect)&&e.clear(),o.redirect)return c(o.redirect);if(o.ok){r.dispatchEvent(new CustomEvent("nr:success",{detail:o.data,bubbles:!0}));const e=a.get("_redirect");return e?c(e):t.refresh()}const s=o.errors||{_form:o.error};for(const[t,e]of Object.entries(s)){const n=r.querySelector(`[data-nr-error="${CSS.escape(t)}"]`);n&&(n.textContent=e)}r.dispatchEvent(new CustomEvent("nr:error",{detail:o,bubbles:!0}))}catch{HTMLFormElement.prototype.submit.call(r)}finally{r.removeAttribute("aria-busy")}});try{t.env=JSON.parse((document.getElementById("__nr_env")||{}).textContent||"{}")}catch{t.env={}}const h=new WeakSet;async function p(t){for(const e of t.querySelectorAll("nr-island")){if(h.has(e))continue;h.add(e);let t={};try{t=JSON.parse(e.dataset.props||"{}")}catch{}if(e.dataset.module)try{const n=await(import(e.dataset.module));if("function"==typeof n.hydrate){await n.hydrate(e,t);continue}}catch(t){console.error(`[next-rust] island ${e.dataset.component} failed to load`,t)}m(e,t)}}function m(e,n){const r=t=>t.split(".").reduce((t,e)=>null==t?t:t[e],n),a=(t,e)=>{const r=t.split("."),a=r.pop();r.reduce((t,e)=>t[e]=t[e]&&"object"==typeof t[e]?t[e]:{},n)[a]=e},o=t=>t.startsWith("!")?!r(t.slice(1).trim()):!!r(t.trim()),s=t=>{try{return JSON.parse(t)}catch{return t}},i=()=>{for(const t of e.querySelectorAll("[data-nr-text]")){const e=r(t.dataset.nrText);t.textContent=null==e?"":"object"==typeof e?JSON.stringify(e):String(e)}for(const t of e.querySelectorAll("[data-nr-show]"))t.hidden=!o(t.dataset.nrShow);for(const t of e.querySelectorAll("[data-nr-bind]")){const e=r(t.dataset.nrBind);"checkbox"===t.type?t.checked=!!e:document.activeElement!==t&&(t.value=null==e?"":e)}for(const t of e.querySelectorAll("*"))for(const e of t.attributes)e.name.startsWith("data-nr-class-")&&t.classList.toggle(e.name.slice(14),o(e.value))},l={increment:(t,e)=>a(t,Number(r(t)||0)+Number(e||1)),decrement:(t,e)=>a(t,Number(r(t)||0)-Number(e||1)),toggle:t=>a(t,!r(t))},d=new Set;for(const t of e.querySelectorAll("*"))for(const e of t.attributes)e.name.startsWith("data-nr-on-")&&d.add(e.name.slice(11));for(const r of d)e.addEventListener(r,async o=>{const d=o.target.closest&&o.target.closest(`[data-nr-on-${r}]`);if(d&&e.contains(d)){for(const e of d.getAttribute(`data-nr-on-${r}`).split(";")){const r=e.indexOf(":"),i=(r<0?e:e.slice(0,r)).trim(),d=r<0?"":e.slice(r+1).trim();if("prevent"===i)o.preventDefault();else if("set"===i){const t=d.indexOf("=");a(d.slice(0,t).trim(),s(d.slice(t+1).trim()))}else if("action"===i){const[e,r]=d.split("->").map(t=>t.trim());try{const o=await t.action(e,n);r?a(r,o):o&&"object"==typeof o&&Object.assign(n,o)}catch(t){a("error",t.message)}}else if("navigate"===i)c(d);else if(l[i]){const[t,e]=d.split(",");l[i](t.trim(),e)}}i()}});e.addEventListener("input",t=>{const e=t.target;e.dataset&&e.dataset.nrBind&&(a(e.dataset.nrBind,"checkbox"===e.type?e.checked:"number"===e.type?Number(e.value):e.value),i())}),i()}s(),p(document);"####;
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     /// Content hash of [`RUNTIME_JS`] that [`RUNTIME_JS_MIN`] was generated from.
-    const RUNTIME_JS_SOURCE_HASH: &str = "9771034a00df3977";
+    const RUNTIME_JS_SOURCE_HASH: &str = "80fbd1fabbc3a0b2";
 
     #[test]
     fn minified_runtime_matches_source() {
@@ -361,6 +494,7 @@ mod tests {
             "window.nextRust",
             "nr-island",
             "data-nr-reload",
+            "pointerover",
             "x-nr-nav",
             "x-nr-from",
             "x-nr-action",

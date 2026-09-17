@@ -14,17 +14,9 @@ const ARROW_LEFT: &str = r#"<svg viewBox="0 0 24 24" width="16" height="16" fill
 const ARROW_RIGHT: &str = r#"<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>"#;
 const EDIT_ICON: &str = r#"<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>"#;
 
-/// Which top-level area a page belongs to.
-#[derive(Clone, Copy, PartialEq)]
-pub enum Area {
-    Home,
-    Docs,
-}
-
-pub fn header(area: Area, query: &str) -> impl View {
-    let nav_link = |label: &'static str, url: &'static str, active: bool| {
-        a![class(if active { "nav-link active" } else { "nav-link" }), href(url), label]
-    };
+/// The site header. It lives in the root layout, so it is rendered once per
+/// visit and stays on screen (logo included) across every navigation.
+pub fn header() -> impl View {
     header![
         class("site-header"),
         div![
@@ -40,7 +32,7 @@ pub fn header(area: Area, query: &str) -> impl View {
             nav![
                 class("header-nav"),
                 aria("label", "Main"),
-                nav_link("Docs", "/docs", area == Area::Docs),
+                a![class("nav-link"), href("/docs"), active_class_prefix("active"), "Docs"],
                 a![
                     class("nav-link"),
                     href(format!("{REPO}/tree/main/examples")),
@@ -67,7 +59,6 @@ pub fn header(area: Area, query: &str) -> impl View {
                     input![
                         r#type("search"),
                         name("q"),
-                        value(query),
                         placeholder("Search documentation"),
                         aria("label", "Search documentation"),
                         autocomplete("off"),
@@ -125,35 +116,40 @@ pub fn footer() -> impl View {
     ]
 }
 
-fn sidebar_links(active: &str) -> impl View {
-    each(docs::SECTIONS, move |section| {
+fn sidebar_links() -> impl View {
+    each(docs::SECTIONS, |section| {
         div![
             class("side-section"),
             p![class("side-title"), section.title],
-            ul![each(section.docs, move |doc| {
-                let current = doc.slug == active;
-                li![a![
-                    class(if current { "side-link active" } else { "side-link" }),
-                    href(docs::href(doc)),
-                    attr_if(current, aria("current", "page")),
-                    doc.title,
-                ]]
-            })],
+            ul![each(section.docs, |doc| li![a![
+                class("side-link"),
+                href(docs::href(doc)),
+                // Highlighted by the framework for the current URL, so the
+                // sidebar can live in a layout that stays on screen.
+                active_class("active"),
+                doc.title,
+            ]])],
         ]
     })
 }
 
 /// Left navigation on wide screens, a collapsible menu on small ones.
-pub fn sidebar(active: &str) -> impl View {
-    let label = docs::find(active).map(|d| d.title).unwrap_or("Menu");
+pub fn sidebar() -> impl View {
     fragment![
         details![
             class("mobile-nav"),
-            summary![raw_html(MENU_ICON), span![label]],
-            nav![aria("label", "Documentation"), sidebar_links(active)],
+            summary![raw_html(MENU_ICON), span!["Documentation menu"]],
+            nav![aria("label", "Documentation"), sidebar_links()],
         ],
-        aside![class("sidebar"), nav![aria("label", "Documentation"), sidebar_links(active)]],
+        aside![class("sidebar"), nav![aria("label", "Documentation"), sidebar_links()]],
     ]
+}
+
+/// Sidebar and grid shared by every docs page (`app/docs/layout.rs`). It
+/// reads nothing from the request, so navigating between docs pages only
+/// replaces the article and its outline.
+pub fn docs_shell(children: Children) -> impl View {
+    div![class("docs"), sidebar(), children]
 }
 
 /// "On this page" outline.
@@ -194,38 +190,32 @@ fn pager(doc: &Doc) -> impl View {
     ]
 }
 
-/// A full documentation page: navigation, article, outline and pager.
+/// A documentation page inside the docs shell: article, pager and outline.
 pub fn doc_page(doc: &'static Doc) -> impl View {
     let headings = docs::headings(doc.html());
     let section = docs::section_of(doc.slug).map(|s| s.title).unwrap_or("Docs");
     fragment![
-        header(Area::Docs, ""),
-        div![
-            class("docs"),
-            sidebar(doc.slug),
-            main![
-                class("doc"),
-                id("content"),
-                article![
-                    p![class("eyebrow"), section],
-                    h1![doc.title],
-                    p![class("lead"), doc.description],
-                    div![class("prose"), raw_html(crate::highlight::code_blocks(doc.html()))],
-                ],
-                div![
-                    class("doc-meta"),
-                    a![
-                        href(format!("{REPO}/blob/main/{}", doc.source)),
-                        target("_blank"),
-                        rel("noopener"),
-                        raw_html(EDIT_ICON),
-                        "Edit this page on GitHub",
-                    ],
-                ],
-                pager(doc),
+        main![
+            class("doc"),
+            id("content"),
+            article![
+                p![class("eyebrow"), section],
+                h1![doc.title],
+                p![class("lead"), doc.description],
+                div![class("prose"), raw_html(crate::highlight::code_blocks(doc.html()))],
             ],
-            outline(&headings),
+            div![
+                class("doc-meta"),
+                a![
+                    href(format!("{REPO}/blob/main/{}", doc.source)),
+                    target("_blank"),
+                    rel("noopener"),
+                    raw_html(EDIT_ICON),
+                    "Edit this page on GitHub",
+                ],
+            ],
+            pager(doc),
         ],
-        footer(),
+        outline(&headings),
     ]
 }

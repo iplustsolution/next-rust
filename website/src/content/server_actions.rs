@@ -72,7 +72,7 @@ pub async fn signup(input: Signup) -> Result<User> {
                 " targets, ",
                 code!["#[server_action]"],
                 " functions are compiled out entirely. See ",
-                a![href("/docs/client#serverclient-boundary"), "client.md"],
+                a![href("/docs/client#serverclient-boundary"), "Client & navigation"],
                 ".",
             ],
         ],

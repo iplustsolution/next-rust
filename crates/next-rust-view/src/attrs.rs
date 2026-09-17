@@ -163,7 +163,8 @@ pub fn on(event: &str, handler: impl AttrText) -> Attr {
     Attr::new(format!("data-nr-on-{event}"), handler.into_attr_text())
 }
 
-/// Disable prefetching for a `Link!`.
+/// Disable prefetching for a link. By default a page is prefetched when the
+/// mouse rests on its link for 400 ms.
 pub fn prefetch(enabled: bool) -> Attr {
     if enabled { Attr::none() } else { Attr::new("data-nr-prefetch", "false") }
 }
@@ -177,6 +178,63 @@ pub fn replace(enabled: bool) -> Attr {
 /// `a![href("/logout"), reload(true), "Log out"]`.
 pub fn reload(enabled: bool) -> Attr {
     if enabled { Attr::new("data-nr-reload", "") } else { Attr::none() }
+}
+
+/// Mark a link as the current page: when the URL path equals the link's path,
+/// the link gets this class and `aria-current="page"`. Applied by the server
+/// when rendering and kept up to date by the client runtime after every
+/// navigation, so it also works in layouts that stay on screen.
+///
+/// `a![href("/docs"), active_class("active"), "Docs"]`
+pub fn active_class(class: impl AttrText) -> Attr {
+    Attr::new("data-nr-active", class.into_attr_text())
+}
+
+/// Like [`active_class`], but also active on every page below the link's path:
+/// a link to `/docs` is active on `/docs/routing`.
+pub fn active_class_prefix(class: impl AttrText) -> Attr {
+    Attr::new("data-nr-active-prefix", class.into_attr_text())
+}
+
+/// Whether a link to `href` is active on `path`, exactly or as a prefix.
+pub fn link_is_active(href: &str, path: &str, prefix: bool) -> bool {
+    let target = href.split(['?', '#']).next().unwrap_or("");
+    let target = if target.len() > 1 { target.trim_end_matches('/') } else { target };
+    let path = if path.len() > 1 { path.trim_end_matches('/') } else { path };
+    if !target.starts_with('/') || target.starts_with("//") {
+        return false;
+    }
+    path == target || (prefix && (target == "/" || path.strip_prefix(target).is_some_and(|rest| rest.starts_with('/'))))
+}
+
+/// Apply [`active_class`] / [`active_class_prefix`] for `path` to a view tree
+/// (async boundaries are left to the client runtime).
+pub fn mark_active_links(node: &mut crate::Node, path: &str) {
+    match node {
+        crate::Node::Element(el) => {
+            let exact = el.attr("data-nr-active").map(str::to_owned);
+            let prefix = el.attr("data-nr-active-prefix").map(str::to_owned);
+            if let Some(href) = el.attr("href").map(str::to_owned) {
+                for (class, is_prefix) in [(exact, false), (prefix, true)] {
+                    if let Some(class) = class
+                        && link_is_active(&href, path, is_prefix)
+                    {
+                        el.set_attr(Attr::new("class", class));
+                        el.set_attr(Attr::new("aria-current", "page"));
+                    }
+                }
+            }
+            for child in &mut el.children {
+                mark_active_links(child, path);
+            }
+        }
+        crate::Node::Fragment(children) => {
+            for child in children {
+                mark_active_links(child, path);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Keep the scroll position after a client navigation (`Link!`).

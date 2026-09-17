@@ -60,12 +60,14 @@ header_timeout = 10          # seconds to receive request headers
 request_timeout = 60         # seconds until a handler is aborted with 504 (0 = off)
 shutdown_timeout = 10        # graceful shutdown grace period
 compression = true           # gzip
-http2 = true                 # h2c / proxied HTTP/2
+http2 = false                # h2c; needs the `http2` feature of next-rust
 trust_proxy = false          # trust X-Forwarded-* headers
 
 [build]
 output = ".next-rust"
 concurrency = 8              # reserved: static generation currently renders pages sequentially
+optimize = "size"            # size (opt-level "z") | speed (opt-level 3)
+panic = "unwind"             # unwind: a panic fails one request | abort: smaller, a panic stops the server
 
 [assets]
 optimize = true              # reserved: CSS is always minified at compile time

@@ -53,6 +53,8 @@ pub struct RenderFlags {
 struct Writer {
     out: String,
     styles_seen: HashSet<&'static str>,
+    /// Stylesheet ids the browser already has (partial navigations).
+    styles_known: HashSet<String>,
     /// When set, stylesheets are collected here instead of written inline.
     hoisted: Option<Vec<&'static Stylesheet>>,
     flags: RenderFlags,
@@ -66,6 +68,7 @@ impl Writer {
         Writer {
             out: String::with_capacity(4096),
             styles_seen: HashSet::new(),
+            styles_known: HashSet::new(),
             hoisted: hoist.then(Vec::new),
             flags: RenderFlags::default(),
             streaming,
@@ -75,7 +78,7 @@ impl Writer {
     }
 
     fn style(&mut self, sheet: &'static Stylesheet) {
-        if !self.styles_seen.insert(sheet.id) {
+        if !self.styles_seen.insert(sheet.id) || self.styles_known.contains(sheet.id) {
             return;
         }
         match &mut self.hoisted {
@@ -224,6 +227,8 @@ pub struct DocumentParts {
     /// Called once the body is complete; returns markup appended before
     /// `</body>` (client runtime scripts, depending on the flags).
     pub tail: Box<dyn FnOnce(RenderFlags) -> String + Send>,
+    /// Ids of stylesheets the browser already has; they are not written again.
+    pub known_styles: Vec<String>,
 }
 
 impl DocumentParts {
@@ -235,6 +240,7 @@ impl DocumentParts {
             body: body.into_node(),
             nonce: None,
             tail: Box::new(|_| String::new()),
+            known_styles: Vec::new(),
         }
     }
 }
@@ -290,6 +296,7 @@ pub fn stream_document(parts: DocumentParts, streaming: bool) -> impl Stream<Ite
                 let body = std::mem::take(&mut parts.body);
                 let body = if streaming { body } else { resolve(body).await };
                 let mut w = Writer::new(streaming, true);
+                w.styles_known = std::mem::take(&mut parts.known_styles).into_iter().collect();
                 w.node(body, false);
                 let body_html = std::mem::take(&mut w.out);
                 let mut chunk = open_document(&parts, &mut w, &body_html);

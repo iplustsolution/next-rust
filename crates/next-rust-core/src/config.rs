@@ -186,7 +186,7 @@ impl Default for ServerConfig {
             request_timeout: 60,
             shutdown_timeout: 10,
             compression: true,
-            http2: true,
+            http2: false,
             trust_proxy: false,
         }
     }
@@ -198,12 +198,44 @@ pub struct BuildConfig {
     pub output: PathBuf,
     /// Reserved: static generation currently renders pages sequentially.
     pub concurrency: usize,
+    /// What `next-rust build` optimizes the binary for.
+    pub optimize: Optimize,
+    /// What happens when code panics in a release binary.
+    pub panic: PanicStrategy,
 }
 
 impl Default for BuildConfig {
     fn default() -> Self {
-        Self { output: PathBuf::from(".next-rust"), concurrency: 8 }
+        Self {
+            output: PathBuf::from(".next-rust"),
+            concurrency: 8,
+            optimize: Optimize::Size,
+            panic: PanicStrategy::Unwind,
+        }
     }
+}
+
+/// `[build] optimize`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Optimize {
+    /// Smallest binary (`opt-level = "z"`).
+    #[default]
+    Size,
+    /// Fastest code (`opt-level = 3`), larger binary.
+    Speed,
+}
+
+/// `[build] panic`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PanicStrategy {
+    /// A panic fails only the request that caused it; the server keeps running.
+    #[default]
+    Unwind,
+    /// A panic stops the whole process. About 20% smaller; run it under a
+    /// supervisor that restarts it.
+    Abort,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -407,20 +439,32 @@ impl fmt::Display for ConfigError {
 
 impl std::error::Error for ConfigError {}
 
+/// Parses TOML configuration. Passed explicitly so programs that never read
+/// TOML at runtime (release binaries, whose configuration is embedded as
+/// JSON) don't link a TOML parser.
+pub type TomlParser = fn(&str) -> Result<Config, String>;
+
 impl Config {
     /// Discover and load the configuration starting at `start`.
     pub fn discover(start: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        Self::discover_with(start, Some(Self::from_toml_str))
+    }
+
+    /// [`Config::discover`] with an optional TOML parser. Without one,
+    /// `next-rust.toml` files are reported as an error and only JSON
+    /// configuration can be read.
+    pub fn discover_with(start: impl AsRef<Path>, toml: Option<TomlParser>) -> Result<Self, ConfigError> {
         if let Ok(explicit) = std::env::var("NEXT_RUST_CONFIG") {
-            return Self::load(explicit);
+            return Self::load_with(explicit, toml);
         }
         let start = absolutize(start.as_ref());
         for dir in start.ancestors() {
-            let toml = dir.join(TOML_FILE);
+            let toml_file = dir.join(TOML_FILE);
             let json = dir.join(JSON_FILE);
-            match (toml.is_file(), json.is_file()) {
+            match (toml_file.is_file(), json.is_file()) {
                 (true, true) => return Err(ConfigError::Ambiguous { dir: dir.to_path_buf() }),
-                (true, false) => return Self::load(toml),
-                (false, true) => return Self::load(json),
+                (true, false) => return Self::load_with(toml_file, toml),
+                (false, true) => return Self::load_with(json, toml),
                 _ => {}
             }
             // Stop at the Cargo package boundary if there is no config:
@@ -436,12 +480,22 @@ impl Config {
 
     /// Load a specific file (`.toml` or `.json`).
     pub fn load(path: impl AsRef<Path>) -> Result<Self, ConfigError> {
+        Self::load_with(path, Some(Self::from_toml_str))
+    }
+
+    /// [`Config::load`] with an optional TOML parser (see [`TomlParser`]).
+    pub fn load_with(path: impl AsRef<Path>, toml: Option<TomlParser>) -> Result<Self, ConfigError> {
         let path = absolutize(path.as_ref());
         let text = std::fs::read_to_string(&path).map_err(|error| ConfigError::Io { path: path.clone(), error })?;
         let mut config = if path.extension().is_some_and(|e| e == "json") {
             Self::from_json_str(&text)
         } else {
-            Self::from_toml_str(&text)
+            match toml {
+                Some(parse) => parse(&text),
+                None => Err("this binary reads JSON configuration only (its configuration was embedded at build \
+                     time); point NEXT_RUST_CONFIG at a .json file"
+                    .to_owned()),
+            }
         }
         .map_err(|message| ConfigError::Parse { path: path.clone(), message })?;
         config.root = path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));

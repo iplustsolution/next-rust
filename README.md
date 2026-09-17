@@ -258,7 +258,8 @@ it:
 - **Frontend:** HTML is escaped unless you explicitly ask for raw output.
   CSS modules are scoped at compile time. Pages ship zero JavaScript unless
   they use client navigation or an interactive island, and even then it's a
-  single ~4 KB script.
+  single ~4 KB script. Navigating between pages that share layouts renders
+  and sends only the part below them; the layouts stay on screen.
 - **Tooling:** `new`, `dev`, `build`, `start`, `routes`, `check`, `doctor`,
   `generate` and `docker`.
 

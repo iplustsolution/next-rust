@@ -238,7 +238,7 @@ cargo/rustc  ── type checks every page against its extractors ──▶ serv
                     tr![
                         td![code!["hyper"], ", ", code!["hyper-util"]],
                         td!["server"],
-                        td!["HTTP/1.1 + HTTP/2 server, upgrades, graceful shutdown"],
+                        td!["HTTP/1.1 server (HTTP/2 with the http2 feature), upgrades"],
                         td!["writing HTTP parsing (security risk)"],
                     ],
                     tr![

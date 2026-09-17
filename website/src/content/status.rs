@@ -110,6 +110,11 @@ pub fn content() -> Node {
                 tbody![
                     tr![td!["zero-JS pages by default"], td!["✅"], td!["runtime loaded only when needed"]],
                     tr![
+                        td!["partial navigation: shared layouts are not rendered or sent again"],
+                        td!["✅"],
+                        td!["server rendering tested; swap, active links and prefetch checked in Chrome"],
+                    ],
+                    tr![
                         td![code!["Link!"], " client navigation, prefetch, history API"],
                         td!["✅"],
                         td!["markup tested; browser behaviour not covered by automated browser tests"],
@@ -165,7 +170,15 @@ pub fn content() -> Node {
                         td!["🟡"],
                         td!["interval and daily UTC schedules; no cron expressions or persistent queue"],
                     ],
-                    tr![td!["HTTP/1.1, HTTP/2 (h2c), keep-alive, gzip, graceful shutdown"], td!["✅"], td![]],
+                    tr![
+                        td![
+                            "HTTP/1.1, HTTP/2 (h2c, ",
+                            code!["http2"],
+                            " feature), keep-alive, gzip, graceful shutdown"
+                        ],
+                        td!["✅"],
+                        td![]
+                    ],
                     tr![td!["native TLS"], td!["❌"], td!["terminate at a proxy (see deployment)"]],
                     tr![td!["HTTP/3"], td!["❌"], td!["terminate at a proxy/CDN"]],
                     tr![td!["brotli compression"], td!["❌"], td!["gzip only"]],

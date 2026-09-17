@@ -16,6 +16,16 @@
 //! the segment's own page), never errors of the layout itself, which bubble
 //! to the parent segment. `not_found()` is caught by the nearest
 //! `not-found.rs`, redirects are never caught.
+//!
+//! ## Partial navigation
+//!
+//! The children of every reusable layout are wrapped in comment markers,
+//! `<!--nr-l:KEY-->…<!--/nr-l:KEY-->`. On a client-side navigation the
+//! browser sends the keys it shows in `x-nr-layouts`. When the new page shares
+//! layouts with it, only what is inside the deepest shared layout is rendered
+//! and sent (`x-nr-partial: KEY`); the shared layouts are not run again and
+//! stay on screen in the browser. Static pages are cut out of their cached
+//! HTML instead of being rendered.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -30,7 +40,7 @@ use next_rust_view::{
     stream_document, suspense,
 };
 
-use crate::app::{AppInner, ErrorInfo, PageBody, PageDef, Rendering};
+use crate::app::{AppInner, ErrorInfo, PageBody, PageDef, Rendering, SegmentDef};
 use crate::context::{Ctx, RequestContext};
 use crate::error::{Error, ErrorKind, Result};
 use crate::middleware::BoxFuture;
@@ -50,13 +60,18 @@ pub(crate) async fn page_response(inner: &Arc<AppInner>, index: usize, req: Requ
         return full_html_page(inner, html, &nonce);
     }
 
+    let partial = partial_target(inner, def, &req);
+
     if def.rendering == Rendering::Static && !inner.env.is_dev() {
-        return serve_static(inner, index, &req, &nonce).await;
+        return serve_static(inner, index, &req, &nonce, partial).await;
     }
 
     let ctx = RequestContext::from_request(&req, inner.config.clone(), nonce, inner.env.is_dev());
     let streaming = inner.config.rendering.streaming && !is_bot(req.header("user-agent"));
-    let mut res = render_page(inner, index, ctx, streaming).await;
+    let mut res = match partial {
+        Some(target) => render_partial(inner, index, ctx, streaming, target).await,
+        None => render_page(inner, index, ctx, streaming).await,
+    };
     if !res.headers.contains_key("cache-control") {
         res.set_header("cache-control", "private, no-cache, no-store, max-age=0, must-revalidate");
     }
@@ -89,6 +104,151 @@ pub fn is_bot(user_agent: Option<&str>) -> bool {
         .any(|needle| ua.contains(needle))
 }
 
+// ---------------------------------------------------------------------------
+// Partial navigation
+// ---------------------------------------------------------------------------
+
+const MARKER_OPEN: &str = "<!--nr-l:";
+const MARKER_CLOSE: &str = "<!--/nr-l:";
+
+/// The key of a reusable layout for these parameters, or `None` when the
+/// layout must always be rendered.
+pub(crate) fn layout_key(inner: &AppInner, seg: &SegmentDef, params: &Params) -> Option<String> {
+    if seg.layout.is_none() || !seg.layout_reusable || seg.layout_id.is_empty() {
+        return None;
+    }
+    let mut h = next_rust_assets::Fnv64::new();
+    h.write(inner.routes.build_id.as_bytes());
+    h.write(b"\0");
+    h.write(seg.layout_id.as_bytes());
+    if seg.layout_uses_params {
+        let mut values: Vec<(&str, String)> = params.iter().map(|(k, v)| (k, format!("{v:?}"))).collect();
+        values.sort();
+        for (k, v) in values {
+            h.write(b"\0");
+            h.write(k.as_bytes());
+            h.write(b"=");
+            h.write(v.as_bytes());
+        }
+    }
+    Some(format!("{:016x}", h.finish()))
+}
+
+/// The layout level to render below, and its key, when the browser already
+/// shows every layout above it.
+fn partial_target(inner: &AppInner, def: &PageDef, req: &Request) -> Option<(usize, String)> {
+    if req.header("x-nr-nav") != Some("1") || !inner.config.rendering.client_navigation {
+        return None;
+    }
+    if let PageBody::Html(html) = def.body
+        && is_full_document(html)
+    {
+        return None;
+    }
+    let shown: std::collections::HashSet<&str> =
+        req.header("x-nr-layouts")?.split(',').map(str::trim).filter(|k| !k.is_empty()).take(64).collect();
+    let mut target = None;
+    for (level, seg) in def.segments.iter().enumerate() {
+        // Parallel slots are rendered by the layout itself and change per URL.
+        if !seg.slots.is_empty() {
+            break;
+        }
+        if seg.layout.is_some() {
+            // Stop at the first layout that must be rendered again.
+            let Some(key) = layout_key(inner, seg, req.params()).filter(|k| shown.contains(k.as_str())) else {
+                break;
+            };
+            target = Some((level, key));
+        }
+        // A template renders again on every navigation, so nothing below it
+        // can be reused.
+        if seg.template.is_some() {
+            break;
+        }
+    }
+    target
+}
+
+/// Render only what is inside the layout at `level`. Anything unusual (an
+/// error, `not_found()`) falls back to the full page.
+async fn render_partial(
+    inner: &Arc<AppInner>,
+    index: usize,
+    ctx: Ctx,
+    streaming: bool,
+    (level, key): (usize, String),
+) -> Response {
+    let def = &inner.routes.pages[index];
+    let metadata = match collect_metadata(def, &ctx).await {
+        Ok(m) => m,
+        Err(_) => return render_page(inner, index, ctx, streaming).await,
+    };
+    match render_level(inner.clone(), index, level, ctx.clone(), streaming, false).await {
+        Ok(region) if ctx.status() == 200 => {
+            let mut res =
+                document_response_with(inner, &ctx, partial_metadata(metadata), region, streaming, known_styles(&ctx));
+            mark_partial(&mut res, &key);
+            res
+        }
+        Err(e) if e.is_redirect() => crate::response::IntoResponse::into_response(e),
+        _ => {
+            ctx.set_status(200);
+            render_page(inner, index, ctx, streaming).await
+        }
+    }
+}
+
+/// Metadata for a partial page. Icons are left out: the browser loaded them
+/// with the first page, and a client navigation never changes them.
+fn partial_metadata(mut metadata: Metadata) -> Metadata {
+    metadata.icons = None;
+    metadata
+}
+
+/// Remove `<link rel="icon">` and `<link rel="apple-touch-icon">` tags from
+/// cached head markup (the static-page equivalent of [`partial_metadata`]).
+fn strip_icon_links(head: &mut String) {
+    for rel in ["<link rel=\"icon\"", "<link rel=\"apple-touch-icon\""] {
+        while let Some(at) = head.find(rel) {
+            let Some(len) = head[at..].find('>') else { break };
+            head.replace_range(at..at + len + 1, "");
+        }
+    }
+}
+
+fn mark_partial(res: &mut Response, key: &str) {
+    res.set_header("x-nr-partial", key);
+    // Depends on what this browser already shows: never store it in a shared cache.
+    res.set_header("cache-control", "private, no-cache, no-store, max-age=0, must-revalidate");
+    res.set_header("vary", "x-nr-layouts");
+}
+
+/// Cut the region inside layout `key` out of a complete HTML document,
+/// leaving out icons and the stylesheets the browser already has.
+fn slice_partial(html: &str, key: &str, known_styles: &[&str]) -> Option<String> {
+    let open = format!("{MARKER_OPEN}{key}-->");
+    let close = format!("{MARKER_CLOSE}{key}-->");
+    let start = html.find(&open)? + open.len();
+    let end = start + html[start..].find(&close)?;
+    let head_start = html.find("<head>")? + "<head>".len();
+    let head_end = head_start + html[head_start..].find("</head>")?;
+    let env = html
+        .find("<script id=\"__nr_env\"")
+        .and_then(|at| html[at..].find("</script>").map(|len| &html[at..at + len + "</script>".len()]))
+        .unwrap_or("");
+    let mut head = html[head_start..head_end].to_owned();
+    strip_icon_links(&mut head);
+    for id in known_styles {
+        let open = format!("<style data-nr-css=\"{id}\">");
+        if let Some(at) = head.find(&open)
+            && let Some(len) = head[at..].find("</style>")
+        {
+            head.replace_range(at..at + len + "</style>".len(), "");
+        }
+    }
+    Some(format!("<!DOCTYPE html><html><head>{head}</head><body>{}{env}</body></html>", &html[start..end]))
+}
+
 /// Render a page for `ctx` into a response.
 pub(crate) async fn render_page(inner: &Arc<AppInner>, index: usize, ctx: Ctx, streaming: bool) -> Response {
     let def = &inner.routes.pages[index];
@@ -104,7 +264,7 @@ pub(crate) async fn render_page(inner: &Arc<AppInner>, index: usize, ctx: Ctx, s
         }
     };
 
-    let body = match render_level(inner.clone(), index, 0, ctx.clone(), streaming).await {
+    let body = match render_level(inner.clone(), index, 0, ctx.clone(), streaming, true).await {
         Ok(node) => node,
         Err(e) if e.is_redirect() => return crate::response::IntoResponse::into_response(e),
         Err(e) if e.is_not_found() => return not_found_page(inner, &ctx).await,
@@ -137,12 +297,16 @@ fn page_body(def: &PageDef, ctx: Ctx) -> BoxFuture<Result<Node>> {
     }
 }
 
+/// Render the segment at `level` and everything below it. With
+/// `with_layout = false` the segment's own layout is skipped, which yields the
+/// region a partial navigation replaces.
 fn render_level(
     inner: Arc<AppInner>,
     index: usize,
     level: usize,
     ctx: Ctx,
     streaming: bool,
+    with_layout: bool,
 ) -> BoxFuture<Result<Node>> {
     Box::pin(async move {
         let def = &inner.routes.pages[index];
@@ -151,7 +315,7 @@ fn render_level(
         let below_fut = if last {
             page_body(def, ctx.clone())
         } else {
-            render_level(inner.clone(), index, level + 1, ctx.clone(), streaming)
+            render_level(inner.clone(), index, level + 1, ctx.clone(), streaming, true)
         };
 
         let below = match seg.loading {
@@ -176,11 +340,18 @@ fn render_level(
             children = template(ctx.clone(), Children(children), Slots::new()).await?;
         }
         match seg.layout {
-            Some(layout) => {
+            Some(layout) if with_layout => {
+                if let Some(key) = layout_key(&inner, &seg, &ctx.params) {
+                    children = next_rust_view::fragment![
+                        raw_html(format!("{MARKER_OPEN}{key}-->")),
+                        children,
+                        raw_html(format!("{MARKER_CLOSE}{key}-->"))
+                    ];
+                }
                 let slots = render_slots(&seg, &ctx).await?;
                 layout(ctx.clone(), Children(children), slots).await
             }
-            None => Ok(children),
+            _ => Ok(children),
         }
     })
 }
@@ -265,6 +436,43 @@ pub(crate) fn document_response(
     body: Node,
     streaming: bool,
 ) -> Response {
+    document_response_with(inner, ctx, metadata, body, streaming, Vec::new())
+}
+
+/// Point icons from `public/` at a versioned URL (`/logo.svg?v=<hash>`) that
+/// browsers cache for good. Browsers re-check the favicon on their own (for
+/// example when the URL changes); with a versioned URL that check is answered
+/// from the browser cache instead of the server.
+fn version_icons(inner: &AppInner, mut metadata: Metadata) -> Metadata {
+    if let Some(icons) = &mut metadata.icons {
+        for icon in icons {
+            if let Some(v) = crate::static_files::public_version(inner, &icon.href) {
+                icon.href = format!("{}?v={v}", icon.href);
+            }
+        }
+    }
+    metadata
+}
+
+/// Stylesheet ids the browser reports having (`x-nr-styles`).
+fn known_styles(ctx: &Ctx) -> Vec<String> {
+    ctx.headers
+        .get("x-nr-styles")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(',').map(str::trim).filter(|s| !s.is_empty()).take(256).map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+fn document_response_with(
+    inner: &Arc<AppInner>,
+    ctx: &Ctx,
+    metadata: Metadata,
+    mut body: Node,
+    streaming: bool,
+    known_styles: Vec<String>,
+) -> Response {
+    next_rust_view::attrs::mark_active_links(&mut body, ctx.path());
+    let metadata = version_icons(inner, metadata);
     let nonce = ctx.nonce.clone();
     let mut head_extra = String::new();
     if inner.env.is_dev() && !ctx.is_static() {
@@ -304,6 +512,7 @@ pub(crate) fn document_response(
             }
             t
         }),
+        known_styles,
     };
     let stream =
         stream_document(parts, streaming).map(|chunk| Ok::<Bytes, crate::request::BoxError>(Bytes::from(chunk)));
@@ -344,10 +553,39 @@ pub(crate) async fn not_found_page(inner: &Arc<AppInner>, ctx: &Ctx) -> Response
         Some(f) => f(ctx.clone()).await.unwrap_or_else(|_| default_not_found()),
         None => default_not_found(),
     };
-    let body = root_wrapped(inner, ctx, content).await;
     let metadata =
         root_metadata(inner, ctx).await.merge(Metadata::new().absolute_title("404: Not Found").robots("noindex"));
-    let mut res = document_response(inner, ctx, metadata, body, false);
+    // Like any page, the 404 page keeps the root layout on screen when the
+    // browser already shows it.
+    let root_key = layout_key(inner, &inner.routes.root, &ctx.params);
+    let shown = ctx.headers.get("x-nr-nav").is_some_and(|v| v == "1")
+        && ctx
+            .headers
+            .get("x-nr-layouts")
+            .and_then(|v| v.to_str().ok())
+            .zip(root_key.as_deref())
+            .is_some_and(|(keys, key)| keys.split(',').any(|k| k.trim() == key));
+    let mut res = match root_key {
+        Some(key) if shown => {
+            let mut res =
+                document_response_with(inner, ctx, partial_metadata(metadata), content, false, known_styles(ctx));
+            mark_partial(&mut res, &key);
+            res
+        }
+        Some(key) => {
+            let marked = next_rust_view::fragment![
+                raw_html(format!("{MARKER_OPEN}{key}-->")),
+                content,
+                raw_html(format!("{MARKER_CLOSE}{key}-->"))
+            ];
+            let body = root_wrapped(inner, ctx, marked).await;
+            document_response(inner, ctx, metadata, body, false)
+        }
+        None => {
+            let body = root_wrapped(inner, ctx, content).await;
+            document_response(inner, ctx, metadata, body, false)
+        }
+    };
     res.set_header("cache-control", "private, no-cache, no-store, max-age=0, must-revalidate");
     res
 }
@@ -441,7 +679,36 @@ fn cache_path(path: &str) -> String {
     if path.len() > 1 { path.trim_end_matches('/').to_owned() } else { path.to_owned() }
 }
 
-async fn serve_static(inner: &Arc<AppInner>, index: usize, req: &Request, nonce: &str) -> Response {
+async fn serve_static(
+    inner: &Arc<AppInner>,
+    index: usize,
+    req: &Request,
+    nonce: &str,
+    partial: Option<(usize, String)>,
+) -> Response {
+    let res = serve_static_full(inner, index, req, nonce).await;
+    let Some((_, key)) = partial else { return res };
+    if res.status != http::StatusCode::OK {
+        return res;
+    }
+    let cache = res.headers.get("x-nr-cache").cloned();
+    let html = res.into_text().await;
+    let known: Vec<&str> =
+        req.header("x-nr-styles").map(|v| v.split(',').map(str::trim).take(256).collect()).unwrap_or_default();
+    match slice_partial(&html, &key, &known) {
+        Some(region) => {
+            let mut out = Response::html(region);
+            if let Some(c) = cache {
+                out.headers.insert("x-nr-cache", c);
+            }
+            mark_partial(&mut out, &key);
+            out
+        }
+        None => Response::html(html).with_cache_control("private, no-cache, no-store, max-age=0, must-revalidate"),
+    }
+}
+
+async fn serve_static_full(inner: &Arc<AppInner>, index: usize, req: &Request, nonce: &str) -> Response {
     let def = &inner.routes.pages[index];
     let path = cache_path(req.path());
     let key = CacheKey::page(&path);

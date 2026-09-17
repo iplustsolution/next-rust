@@ -218,6 +218,7 @@ fn generated_code_shape() {
     );
     assert!(minified.contains("body: __nr::PageBody::Html(\"<p>legacy</p>\")"), "{minified}");
     assert!(code.contains("embedded: None") && !code.contains("__NR_EMBEDDED"), "{code}");
+    assert!(code.contains("toml: __nr::TOML") && code.contains("project_root: Some("), "{code}");
 
     // Deterministic output.
     assert_eq!(code, generate_code(&analyze_project(&t.config(""))));
@@ -239,6 +240,8 @@ fn release_code_embeds_config_and_static_files() {
         ("public/images/b.png", "png"),
         ("public/.env", "SECRET=1"),
         ("assets/fonts/inter.woff2", "font"),
+        ("assets/unused.png", "never referenced"),
+        ("src/lib.rs", "pub const FONT: &str = next_rust::asset!(\"fonts/inter.woff2\");\n"),
     ]);
     let config = Config::discover(&t.0).unwrap();
     let project = analyze_project(&config);
@@ -248,8 +251,10 @@ fn release_code_embeds_config_and_static_files() {
     );
     for needle in [
         "embedded: Some(&__NR_EMBEDDED)",
-        "config: Some((include_str!(",
-        "next-rust.toml\"), false))",
+        "config: Some((\"{\\\"app\\\":",
+        "\\\"port\\\":4000",
+        "project_root: None",
+        "toml: None",
         "path: \"favicon.svg\", bytes: include_bytes!(",
         "path: \"images/b.png\"",
         "path: \"fonts/inter.woff2\"",
@@ -258,8 +263,51 @@ fn release_code_embeds_config_and_static_files() {
         assert!(code.contains(needle), "missing `{needle}` in:\n{code}");
     }
     assert!(!code.contains(".env"), "hidden files are never embedded");
+    assert!(!code.contains("unused.png"), "assets nobody references with asset! are left out");
     let favicon = code.find("\"favicon.svg\"").unwrap();
     assert!(favicon < code.find("\"images/b.png\"").unwrap(), "files are sorted for lookup");
+}
+
+#[test]
+fn layouts_are_reusable_only_when_they_ignore_the_request() {
+    const LAYOUT: &str =
+        "use next_rust::prelude::*;\npub fn Layout(children: Children) -> impl View { div![children] }\n";
+    let t = Tmp::new(&[
+        ("app/layout.rs", LAYOUT),
+        ("app/page.rs", PAGE),
+        (
+            "app/account/layout.rs",
+            "use next_rust::prelude::*;\npub fn Layout(children: Children, cookies: Cookies) -> impl View { div![children] }\n",
+        ),
+        ("app/account/page.rs", PAGE),
+        (
+            "app/teams/[team]/layout.rs",
+            "use next_rust::prelude::*;\npub fn Layout(children: Children, params: Params) -> impl View { div![children] }\n",
+        ),
+        ("app/teams/[team]/page.rs", PAGE),
+        (
+            "app/feed/layout.rs",
+            "use next_rust::prelude::*;\npub async fn load(q: Query) -> Result<u32> { Ok(1) }\npub fn Layout(children: Children, Data(n): Data<u32>) -> impl View { div![children] }\n",
+        ),
+        ("app/feed/page.rs", PAGE),
+    ]);
+    let project = analyze_project(&t.config(""));
+    assert!(!project.has_errors(), "{}", project.diagnostics);
+    let code = generate_code(&project);
+    for (id, reusable, params) in [
+        ("app/layout.rs", true, false),
+        ("app/account/layout.rs", false, false),
+        ("app/teams/[team]/layout.rs", true, true),
+        ("app/feed/layout.rs", false, false),
+    ] {
+        let needle = format!("layout_id: {id:?}, layout_reusable: {reusable}, layout_uses_params: {params}");
+        assert!(code.contains(&needle), "missing `{needle}` in:\n{code}");
+    }
+    let build_id = code.split("build_id: \"").nth(1).and_then(|s| s.split('"').next()).unwrap().to_owned();
+    assert_eq!(build_id.len(), 16);
+    std::fs::write(t.0.join("app/page.rs"), format!("{PAGE}// changed\n")).unwrap();
+    let changed = generate_code(&analyze_project(&t.config("")));
+    assert!(!changed.contains(&build_id), "editing the source changes the build id");
 }
 
 #[test]

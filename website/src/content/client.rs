@@ -181,7 +181,7 @@ pub fn Editor(doc: Document) -> impl View { … }"#,
         p![
             strong!["Status:"],
             " the CLI doesn't yet automate this build step, and there's no Rust-side reactive DOM library. See ",
-            a![href("/docs/status"), "status.md"],
+            a![href("/docs/status"), "Status & roadmap"],
             ". The protocol (",
             code!["hydrate(element, props)"],
             " plus JSON props) is stable, so a future ",
@@ -252,7 +252,11 @@ pub async fn load_invoice(id: u64) -> Result<Invoice> { db::invoice(id).await }"
             " alike) don't reload the page. Instead they:",
         ],
         ol![
-            li!["fetch the target HTML (reusing a prefetch from hover or touch, cached for 30 seconds);"],
+            li![
+                "fetch the target HTML, unless it is already in memory (see below). Only the part below the layouts both pages share is requested (see ",
+                a![href("/docs/routing#layouts-stay-on-screen"), "Layouts stay on screen"],
+                ");",
+            ],
             li![
                 "swap ",
                 code!["<body>"],
@@ -265,6 +269,36 @@ pub async fn load_invoice(id: u64) -> Result<Invoice> { db::invoice(id).await }"
                 " elements;",
             ],
             li!["update history and scroll position, then hydrate islands in the new content."],
+        ],
+        h3![id("prefetching"), a![class("anchor"), href("#prefetching"), "Prefetching"]],
+        p![
+            "A page is fetched ahead of the click only when the mouse rests on its link for ",
+            strong!["400 ms"],
+            ". Moving or scrolling past links, pressing the button, and touch taps never fetch early, so a long list of cards doesn't turn into a burst of requests. Links to the page that is already open and same-page ",
+            code!["#anchors"],
+            " are never prefetched.",
+        ],
+        p![
+            "Turn it off for a link with ",
+            code!["prefetch = false"],
+            h3![id("page-reuse"), a![class("anchor"), href("#page-reuse"), "Pages are fetched once"]],
+            p![
+                "Every page the runtime downloads, by prefetching or by navigating, is kept in memory for 30 seconds. Within that time a page is never requested twice: clicking a link that was prefetched, clicking it again, and the browser's back and forward buttons all reuse the copy. Clicking a link while its prefetch is still loading waits for that same request.",
+            ],
+            ul![
+                li![
+                    "After a server action or an enhanced form succeeds, every kept page is dropped, so the next navigation shows fresh data."
+                ],
+                li![code!["nextRust.refresh()"], " always fetches the current page again."],
+                li![
+                    "A page served by an intercepting route is only reused when navigating from the same page, because its HTML depends on where the navigation started."
+                ],
+            ],
+            " on ",
+            code!["Link!"],
+            ", or ",
+            code!["prefetch(false)"],
+            " on a plain anchor."
         ],
         p![
             "A non-HTML response or network failure falls back to a full page load. Modifier-clicks, ",

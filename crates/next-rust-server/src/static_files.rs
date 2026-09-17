@@ -46,12 +46,64 @@ pub async fn resolve_safe(root: &Path, url_path: &str) -> Option<(PathBuf, std::
 
 pub(crate) async fn serve_public(inner: &AppInner, req: &Request) -> Option<Response> {
     let cc = format!("public, max-age={}", inner.config.assets.public_max_age);
+    // `?v=<version>` URLs (written by the framework, e.g. for icons) name one
+    // exact version of the file, so browsers may keep them forever.
+    let versioned = |current: &str| {
+        req.query_param("v").is_some_and(|v| v == current).then_some("public, max-age=31536000, immutable")
+    };
     if let Some(embedded) = inner.embedded {
         let file = crate::embed::find(embedded.public, req.path())?;
+        let cc = versioned(&file.hash[..VERSION_LEN]).map(str::to_owned).unwrap_or(cc);
         return Some(serve_embedded(req, file, embedded.built_at, &cc));
     }
     let (path, meta) = resolve_safe(&inner.public_dir, req.path()).await?;
+    let current = disk_version(&path, &meta);
+    let cc = current.as_deref().and_then(versioned).map(str::to_owned).unwrap_or(cc);
     Some(serve_file(req, &path, &meta, &cc).await)
+}
+
+const VERSION_LEN: usize = 10;
+
+/// Content version of a file in `public/` (the start of its content hash),
+/// used to build cache-busting URLs such as `/logo.svg?v=3f2a…`.
+pub(crate) fn public_version(inner: &AppInner, url_path: &str) -> Option<String> {
+    if !url_path.starts_with('/') || url_path.starts_with("//") || url_path.contains(['?', '#']) {
+        return None;
+    }
+    if let Some(embedded) = inner.embedded {
+        return crate::embed::find(embedded.public, url_path).map(|f| f.hash[..VERSION_LEN].to_owned());
+    }
+    let mut rel = PathBuf::new();
+    for raw in url_path.split('/').filter(|s| !s.is_empty()) {
+        let seg = next_rust_router::decode_segment(raw)?;
+        if seg.starts_with('.') || seg.contains(['\\', '\0', '/', ':']) {
+            return None;
+        }
+        rel.push(seg);
+    }
+    let root = std::fs::canonicalize(&inner.public_dir).ok()?;
+    let full = std::fs::canonicalize(root.join(rel)).ok()?;
+    let meta = std::fs::metadata(&full).ok().filter(|m| m.is_file() && full.starts_with(&root))?;
+    disk_version(&full, &meta)
+}
+
+/// Hash of a file on disk, cached until its size or modification time changes.
+fn disk_version(path: &Path, meta: &std::fs::Metadata) -> Option<String> {
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    type Versions = Mutex<HashMap<PathBuf, (u64, Option<std::time::SystemTime>, String)>>;
+    static CACHE: OnceLock<Versions> = OnceLock::new();
+    let key = (meta.len(), meta.modified().ok());
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some((len, mtime, version)) = cache.lock().ok()?.get(path)
+        && (*len, *mtime) == key
+    {
+        return Some(version.clone());
+    }
+    let bytes = std::fs::read(path).ok()?;
+    let version = next_rust_assets::content_hash(&bytes)[..VERSION_LEN].to_owned();
+    cache.lock().ok()?.insert(path.to_path_buf(), (key.0, key.1, version.clone()));
+    Some(version)
 }
 
 /// Serve a file compiled into the binary.

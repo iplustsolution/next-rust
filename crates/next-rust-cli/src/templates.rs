@@ -56,10 +56,10 @@ serde_json = "1"
 [build-dependencies]
 next-rust-build = {build_dep}
 
-# Production builds: maximum optimization and a stripped binary without
-# debug symbols. HTML pages and the browser runtime are minified automatically.
+# Production builds. `next-rust build` always uses these settings (see
+# [build] in next-rust.toml); they also apply to a plain `cargo build --release`.
 [profile.release]
-opt-level = 3
+opt-level = "z"
 lto = "fat"
 codegen-units = 1
 strip = true

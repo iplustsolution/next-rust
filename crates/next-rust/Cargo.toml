@@ -17,6 +17,7 @@ readme = "../../README.md"
 default = ["compression"]
 compression = ["next-rust-server/compression"]
 websocket = ["next-rust-server/websocket"]
+http2 = ["next-rust-server/http2"]
 tracing = ["next-rust-server/tracing"]
 
 [dependencies]

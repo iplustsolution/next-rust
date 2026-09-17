@@ -43,7 +43,7 @@ pub fn content() -> Node {
             div![
                 strong!["Very little JavaScript"],
                 span![
-                    "Pages ship no JavaScript unless they use links or islands. The client runtime is about 3 KB gzipped.",
+                    "Pages ship no JavaScript unless they use links or islands. The client runtime is about 4 KB gzipped.",
                 ],
             ],
             div![

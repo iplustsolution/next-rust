@@ -10,6 +10,7 @@
 
 pub mod actions;
 pub mod app;
+mod banner;
 mod client_runtime;
 pub mod context;
 pub mod cookies;
@@ -147,6 +148,9 @@ pub mod __private {
     };
     pub use crate::context::{Ctx, Data, FromContext};
     pub use crate::embed::{Embedded, EmbeddedFile};
+
+    /// The TOML parser handed to development builds (see `Routes::toml`).
+    pub const TOML: Option<next_rust_core::config::TomlParser> = Some(next_rust_core::Config::from_toml_str);
     pub use crate::error::{Error, IntoResult, Result};
     pub use crate::middleware::{BoxFuture, Next};
     pub use crate::render::is_bot;

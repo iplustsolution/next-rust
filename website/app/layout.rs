@@ -10,9 +10,13 @@ pub fn metadata() -> Metadata {
 }
 
 pub fn Layout(children: Children) -> impl View {
+    // Header and footer are shared by every page, so client navigations never
+    // replace them: the logo is requested once per visit.
     fragment![
         crate::style::stylesheet(),
         a![class("skip-link"), href("#content"), "Skip to content"],
-        children
+        crate::ui::header(),
+        children,
+        crate::ui::footer(),
     ]
 }

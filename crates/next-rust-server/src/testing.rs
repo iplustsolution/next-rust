@@ -134,6 +134,22 @@ impl TestClient {
         self.send(http::Request::get(uri).body(Bytes::new()).expect("valid request")).await
     }
 
+    /// `GET` with extra request headers.
+    pub async fn get_with_headers(&self, uri: &str, headers: &[(&str, &str)]) -> TestResponse {
+        let mut req = http::Request::get(uri);
+        for (name, value) in headers {
+            req = req.header(*name, *value);
+        }
+        self.send(req.body(Bytes::new()).expect("valid request")).await
+    }
+
+    /// `GET` as a client-side navigation from a page whose HTML is
+    /// `from_html`: sends the layouts it shows, like the browser runtime.
+    pub async fn navigate(&self, uri: &str, from_html: &str) -> TestResponse {
+        let keys = layout_keys(from_html).join(",");
+        self.get_with_headers(uri, &[("x-nr-nav", "1"), ("x-nr-layouts", &keys)]).await
+    }
+
     pub async fn post_json<T: serde::Serialize>(&self, uri: &str, body: &T) -> TestResponse {
         let bytes = serde_json::to_vec(body).expect("serializable body");
         self.send(
@@ -155,4 +171,28 @@ impl TestClient {
         )
         .await
     }
+}
+
+/// Keys of the layouts marked in a page, outermost first.
+pub fn layout_keys(html: &str) -> Vec<String> {
+    html.split("<!--nr-l:").skip(1).filter_map(|rest| rest.split("-->").next()).map(str::to_owned).collect()
+}
+
+/// A page's HTML without the layout markers used by partial navigation, for
+/// comparing markup in tests.
+pub fn strip_layout_markers(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut rest = html;
+    while let Some(at) = rest.find("<!--nr-l:").into_iter().chain(rest.find("<!--/nr-l:")).min() {
+        out.push_str(&rest[..at]);
+        match rest[at..].find("-->") {
+            Some(end) => rest = &rest[at + end + 3..],
+            None => {
+                rest = &rest[at..];
+                break;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
