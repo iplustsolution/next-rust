@@ -47,6 +47,23 @@ version:
   `crates/next-rust-server/src/app.rs`.
 - HTML output? `crates/next-rust-view`.
 
+## Changing the browser runtime
+
+The client runtime lives in `crates/next-rust-server/src/client_runtime.rs`
+as `RUNTIME_JS` (readable, served in development) and `RUNTIME_JS_MIN`
+(minified, served in production). If you edit `RUNTIME_JS`, regenerate the
+minified copy with [Terser](https://terser.org), run from a scratch directory
+outside the repository:
+
+```sh
+npx terser runtime.js --module --compress passes=3 --mangle toplevel=true -o runtime.min.js
+```
+
+Paste the output into `RUNTIME_JS_MIN` and update `RUNTIME_JS_SOURCE_HASH`
+(the failing test prints the expected value). The tests check that the two
+stay in sync and that the minified copy keeps the public attribute and header
+names.
+
 ## What a good pull request has
 
 - **A test.** Framework behaviour is easy to break by accident. For a bug,

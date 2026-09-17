@@ -29,7 +29,7 @@ pub mod codegen;
 
 use std::path::{Path, PathBuf};
 
-pub use codegen::{AnalyzedRoute, Project, analyze_project, generate_code};
+pub use codegen::{AnalyzedRoute, CodegenOptions, Project, analyze_project, generate_code, generate_code_with};
 use next_rust_core::{Config, Diagnostic};
 
 /// Build-time plugin hooks.
@@ -119,7 +119,14 @@ impl Generator {
             let color = std::env::var_os("NO_COLOR").is_none();
             return Err(project.diagnostics.errors().map(|d| d.render(color)).collect::<Vec<_>>().join("\n"));
         }
-        let mut code = generate_code(&project);
+        // Release builds ship minified HTML; `NEXT_RUST_MINIFY=0|1` overrides.
+        let minify_html = match std::env::var("NEXT_RUST_MINIFY").ok().as_deref() {
+            Some("0") => false,
+            Some(_) => true,
+            None => std::env::var("PROFILE").is_ok_and(|p| p == "release"),
+        };
+        println!("cargo:rerun-if-env-changed=NEXT_RUST_MINIFY");
+        let mut code = generate_code_with(&project, CodegenOptions { minify_html });
         for p in &self.plugins {
             if let Some(extra) = p.extra_code(&project) {
                 code.push_str(&format!("\n// plugin: {}\n{extra}\n", p.name()));

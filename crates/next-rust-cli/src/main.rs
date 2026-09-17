@@ -2,6 +2,7 @@
 
 mod commands;
 mod project;
+mod starter;
 mod templates;
 mod ui;
 mod update_check;

@@ -25,5 +25,8 @@ Initial release.
   form enhancement.
 - CLI: new, dev, build, start, check, routes, analyze, generate, doctor,
   docker, upgrade, clean.
+- Production builds minify what browsers receive: `page.html` files are
+  minified at build time, the client runtime is served minified and
+  name-mangled, and new projects build stripped release binaries.
 - `next-rust new` depends on the GitHub repository; `next-rust upgrade`
   updates projects and the CLI, with a daily update notice.

@@ -15,6 +15,29 @@ client/, assets/            # if you use module islands / asset!
 
 Environment: `NEXT_RUST_ENV=production`, `PORT`, `HOST`, and your secrets.
 
+## What production builds send to browsers
+
+Release builds (`next-rust build`) are optimized for size, and make the code
+reaching the browser hard for people to read:
+
+| output | development | production |
+|---|---|---|
+| HTML rendered from Rust | compact, no formatting whitespace | same |
+| `page.html` files | served as written | comments and indentation removed at build time |
+| CSS (`global_css!`, `css_module!`) | minified | minified, class names hashed |
+| client runtime (`/_nr/runtime.js`) | readable source | minified with local names mangled (~2.9 KB gzipped) |
+| error pages | full details | generic message and a digest |
+| server binary | debug info | stripped, fat LTO, single codegen unit |
+
+Development keeps the readable versions so errors are easy to debug. Set
+`NEXT_RUST_MINIFY=1` to minify `page.html` files in a debug build, or
+`NEXT_RUST_MINIFY=0` to keep them readable in a release build.
+
+Minification isn't a security boundary. Anything a browser can run, a person
+can open in the browser's developer tools and pretty-print. Keep secrets,
+business logic and credentials in server code (pages, API routes, server
+actions), which never leaves the server.
+
 ## Bare metal / VPS
 
 ```sh

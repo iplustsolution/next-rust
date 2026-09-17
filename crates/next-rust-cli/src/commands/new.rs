@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use crate::{Args, templates, ui};
+use crate::{Args, starter, templates, ui};
 
 /// A progress step: label, detail, and the files it writes.
 type Step<'a> = (&'a str, &'a str, Vec<(&'a str, String)>);
@@ -48,7 +48,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             vec![
                 ("Cargo.toml", templates::cargo_toml(pkg, framework.as_deref())),
                 ("build.rs", templates::BUILD_RS.into()),
-                ("src/main.rs", templates::MAIN_RS.into()),
+                ("src/main.rs", starter::MAIN_RS.into()),
             ],
         ),
         (
@@ -57,24 +57,29 @@ pub fn run(args: &[String]) -> Result<(), String> {
             vec![("next-rust.toml", templates::CONFIG.into()), (".env.example", templates::ENV_EXAMPLE.into())],
         ),
         (
-            "Root layout & styles",
-            "app/layout.rs, app/globals.css",
-            vec![("app/layout.rs", templates::layout_rs(pkg)), ("app/globals.css", templates::GLOBALS_CSS.into())],
+            "Theme & layout",
+            "responsive dark/light theme, header, footer",
+            vec![
+                ("app/layout.rs", starter::layout_rs(pkg)),
+                ("app/globals.css", starter::GLOBALS_CSS.into()),
+                ("src/components.rs", starter::COMPONENTS_RS.into()),
+            ],
         ),
         (
             "Pages",
-            "/  ·  /about  ·  404",
+            "landing  ·  about  ·  404",
             vec![
-                ("app/page.rs", templates::PAGE_RS.into()),
-                ("app/about/page.rs", templates::ABOUT_RS.into()),
-                ("app/not-found.rs", templates::NOT_FOUND_RS.into()),
+                ("app/page.rs", starter::PAGE_RS.into()),
+                ("app/about/page.rs", starter::ABOUT_RS.into()),
+                ("app/not-found.rs", starter::NOT_FOUND_RS.into()),
             ],
         ),
         ("API route", "GET /api/hello", vec![("app/api/hello/route.rs", templates::API_RS.into())]),
         (
-            "Static files & git",
-            "public/, .gitignore, README.md",
+            "Logo & static files",
+            "favicon.svg, robots.txt, README.md",
             vec![
+                ("public/favicon.svg", starter::FAVICON_SVG.into()),
                 ("public/robots.txt", "User-agent: *\nAllow: /\n".into()),
                 (".gitignore", templates::GITIGNORE.into()),
                 ("README.md", templates::readme(pkg)),

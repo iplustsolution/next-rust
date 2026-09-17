@@ -276,6 +276,7 @@ pub(crate) fn document_response(
         }
     }
     let client_nav = inner.config.rendering.client_navigation;
+    let dev = inner.env.is_dev();
     let env_json = inner.public_env_json.clone();
     let tail_nonce = nonce.clone();
     let parts = DocumentParts {
@@ -297,7 +298,7 @@ pub(crate) fn document_response(
             if flags.islands || (flags.links && client_nav) {
                 t.push_str(&format!(
                     "<script type=\"module\" src=\"/_nr/runtime.js?v={}\" nonce=\"{}\"></script>",
-                    crate::internal::runtime_version(),
+                    crate::internal::runtime_version(dev),
                     escape_attr(&tail_nonce)
                 ));
             }

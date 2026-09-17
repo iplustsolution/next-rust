@@ -15,6 +15,7 @@ readme = "../../README.md"
 [dependencies]
 next-rust-core.workspace = true
 next-rust-router.workspace = true
+next-rust-assets.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 syn = { workspace = true, features = ["full", "parsing"] }

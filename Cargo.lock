@@ -536,6 +536,7 @@ dependencies = [
 name = "next-rust-build"
 version = "0.1.0"
 dependencies = [
+ "next-rust-assets",
  "next-rust-core",
  "next-rust-router",
  "proc-macro2",

@@ -25,16 +25,18 @@ serde_json = "1"
 [build-dependencies]
 next-rust-build = {build_dep}
 
+# Production builds: maximum optimization and a stripped binary without
+# debug symbols. HTML pages and the browser runtime are minified automatically.
 [profile.release]
-lto = "thin"
-codegen-units = 4
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+strip = true
 "#
     )
 }
 
 pub const BUILD_RS: &str = "fn main() {\n    next_rust_build::generate();\n}\n";
-
-pub const MAIN_RS: &str = "next_rust::app!();\n";
 
 pub const CONFIG: &str = r#"# Next Rust configuration. Every setting is optional.
 
@@ -54,49 +56,6 @@ pub const GITIGNORE: &str = "/target\n/.next-rust\n.env*.local\n";
 
 pub const ENV_EXAMPLE: &str = "# Server-only secrets (never sent to the browser)\nDATABASE_URL=postgres://localhost/app\n\n# Values safe for client code must use the public prefix\nNEXT_RUST_PUBLIC_SITE_NAME=My App\n";
 
-pub fn layout_rs(name: &str) -> String {
-    format!(
-        r#"use next_rust::prelude::*;
-
-pub fn metadata() -> Metadata {{
-    Metadata::new()
-        .title("{name}")
-        .title_template("%s · {name}")
-        .description("Built with Next Rust")
-}}
-
-pub fn Layout(children: Children) -> impl View {{
-    div![
-        global_css!("globals.css"),
-        header![nav![Link!(href = "/", "Home"), Link!(href = "/about", "About")]],
-        main![children],
-    ]
-}}
-"#
-    )
-}
-
-pub const PAGE_RS: &str = r#"use next_rust::prelude::*;
-
-pub fn Page() -> impl View {
-    div![
-        h1!["Hello World"],
-        p!["Welcome to Next Rust. Edit app/page.rs and save to reload."],
-    ]
-}
-"#;
-
-pub const ABOUT_RS: &str = r#"use next_rust::prelude::*;
-
-pub fn metadata() -> Metadata {
-    Metadata::new().title("About")
-}
-
-pub fn Page() -> impl View {
-    article![h1!["About"], p!["This page lives in app/about/page.rs."]]
-}
-"#;
-
 pub const API_RS: &str = r#"use next_rust::prelude::*;
 
 pub async fn GET(req: Request) -> Response {
@@ -105,29 +64,9 @@ pub async fn GET(req: Request) -> Response {
 }
 "#;
 
-pub const NOT_FOUND_RS: &str = r#"use next_rust::prelude::*;
-
-pub fn NotFound() -> impl View {
-    div![h1!["404"], p!["This page could not be found."], Link!(href = "/", "Go home")]
-}
-"#;
-
-pub const GLOBALS_CSS: &str = r#"body {
-  font-family: system-ui, -apple-system, sans-serif;
-  max-width: 48rem;
-  margin: 0 auto;
-  padding: 2rem 1rem;
-  line-height: 1.6;
-}
-
-nav a {
-  margin-right: 1rem;
-}
-"#;
-
 pub fn readme(name: &str) -> String {
     format!(
-        "# {name}\n\nA [Next Rust](https://github.com/iplustsolution/next-rust) application.\n\n```sh\nnext-rust dev     # http://localhost:3000\nnext-rust build   # production build + static generation\nnext-rust start   # run the production build\n```\n\nRoutes live in `app/`: `page.rs` files are pages, `layout.rs` files wrap their children, `route.rs` files are API endpoints.\n"
+        "# {name}\n\nA [Next Rust](https://github.com/iplustsolution/next-rust) application.\n\n```sh\nnext-rust dev     # http://localhost:3000\nnext-rust build   # production build + static generation\nnext-rust start   # run the production build\n```\n\nRoutes live in `app/`: `page.rs` files are pages, `layout.rs` files wrap their children, `route.rs` files are API endpoints. Shared components (icons, header, footer) are in `src/components.rs`.\n"
     )
 }
 

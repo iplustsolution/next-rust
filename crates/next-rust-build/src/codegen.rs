@@ -592,7 +592,20 @@ impl<'a> Gen<'a> {
 }
 
 /// Generate the Rust source included by `next_rust::app!()`.
+/// Options for [`generate_code_with`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct CodegenOptions {
+    /// Embed `page.html` files minified instead of including them verbatim.
+    /// Enabled automatically for release builds.
+    pub minify_html: bool,
+}
+
 pub fn generate_code(project: &Project) -> String {
+    generate_code_with(project, CodegenOptions::default())
+}
+
+/// Generate code with explicit options.
+pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String {
     let mut g = Gen { project, modules: BTreeMap::new(), wrappers: BTreeSet::new(), out: String::new() };
     let root = &project.config.root;
     let app_root = project.config.app_dir();
@@ -632,7 +645,12 @@ pub fn generate_code(project: &Project) -> String {
             RouteKind::Page | RouteKind::Html => {
                 let (body, metadata, gen_params, revalidate, dynamic_params, tags) = if r.kind == RouteKind::Html {
                     (
-                        format!("__nr::PageBody::Html(include_str!({}))", lit(&r.source.to_string_lossy())),
+                        match std::fs::read_to_string(&r.source) {
+                            Ok(html) if options.minify_html => {
+                                format!("__nr::PageBody::Html({})", lit(&next_rust_assets::html::minify(&html)))
+                            }
+                            _ => format!("__nr::PageBody::Html(include_str!({}))", lit(&r.source.to_string_lossy())),
+                        },
                         None,
                         None,
                         ar.revalidate.map(|v| format!("Some({v})")).unwrap_or_else(|| "None".into()),

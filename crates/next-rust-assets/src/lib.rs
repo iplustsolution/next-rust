@@ -13,6 +13,7 @@
 
 pub mod css;
 pub mod hash;
+pub mod html;
 pub mod mime;
 
 pub use hash::{Fnv64, content_hash, fingerprint_name};

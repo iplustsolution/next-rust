@@ -211,6 +211,10 @@ fn generated_code_shape() {
     // The app-root middleware is global and never duplicated per segment.
     assert_eq!(code.matches("middleware: Some(").count(), 1, "{code}");
 
+    // Release builds embed minified HTML instead of include_str!.
+    let minified = next_rust_build::generate_code_with(&project, next_rust_build::CodegenOptions { minify_html: true });
+    assert!(minified.contains("body: __nr::PageBody::Html(\"<p>legacy</p>\")"), "{minified}");
+
     // Deterministic output.
     assert_eq!(code, generate_code(&analyze_project(&t.config(""))));
 
