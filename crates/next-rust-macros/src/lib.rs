@@ -256,10 +256,107 @@ pub fn action(input: TokenStream) -> TokenStream {
 
 fn read_relative(lit: &LitStr, base: &Path) -> Result<(PathBuf, String), TokenStream> {
     let rel = lit.value();
-    let path = base.join(&rel);
+    let direct = base.join(&rel);
+    let path = if direct.is_file() {
+        direct
+    } else {
+        // Editors such as rust-analyzer expand macros without telling them which
+        // file they are in, so `base` may be the crate root. Look for the file
+        // where it can live instead: the configured app directory, then the crate.
+        match find_unique(&search_roots(), Path::new(&rel)) {
+            Found::One(p) => p,
+            Found::Many(list) => {
+                let names: Vec<String> = list.iter().map(|p| p.display().to_string()).collect();
+                return Err(error(
+                    lit.span(),
+                    format!(
+                        "`{rel}` matches several files; use a path relative to this source file:\n  {}",
+                        names.join("\n  ")
+                    ),
+                ));
+            }
+            Found::None => {
+                return Err(error(
+                    lit.span(),
+                    format!("cannot find `{rel}` (looked next to this file and in the project)"),
+                ));
+            }
+        }
+    };
     match std::fs::read_to_string(&path) {
         Ok(text) => Ok((path, text)),
         Err(e) => Err(error(lit.span(), format!("cannot read {}: {e}", path.display()))),
+    }
+}
+
+enum Found {
+    None,
+    One(PathBuf),
+    Many(Vec<PathBuf>),
+}
+
+/// The routing directory from `next-rust.toml` (if it can be read), then the crate root.
+fn search_roots() -> Vec<PathBuf> {
+    let manifest = manifest_dir();
+    let mut roots = Vec::new();
+    let app = std::fs::read_to_string(manifest.join("next-rust.toml"))
+        .ok()
+        .and_then(|toml| configured_app_dir(&toml))
+        .unwrap_or_else(|| "app".to_owned());
+    roots.push(manifest.join(app));
+    roots.push(manifest);
+    roots
+}
+
+/// `directory = "..."` from the `[app]` table, read without a TOML parser.
+fn configured_app_dir(toml: &str) -> Option<String> {
+    let mut in_app = false;
+    for line in toml.lines() {
+        let line = line.split('#').next().unwrap_or("").trim();
+        if line.starts_with('[') {
+            in_app = line == "[app]";
+        } else if in_app && let Some(value) = line.strip_prefix("directory") {
+            let value = value.trim_start().strip_prefix('=')?.trim().trim_matches('"');
+            return Some(value.to_owned());
+        }
+    }
+    None
+}
+
+/// Files under `roots` whose path ends with `rel`, searched root by root; the
+/// first root with any match decides.
+fn find_unique(roots: &[PathBuf], rel: &Path) -> Found {
+    for root in roots {
+        let mut matches = Vec::new();
+        collect_matches(root, rel, 0, &mut matches);
+        matches.sort();
+        matches.dedup();
+        match matches.len() {
+            0 => continue,
+            1 => return Found::One(matches.remove(0)),
+            _ => return Found::Many(matches),
+        }
+    }
+    Found::None
+}
+
+fn collect_matches(dir: &Path, rel: &Path, depth: usize, out: &mut Vec<PathBuf>) {
+    if depth > 12 || out.len() > 16 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let Ok(kind) = entry.file_type() else { continue };
+        if kind.is_dir() {
+            if !name.starts_with('.') && name != "target" && name != "node_modules" {
+                collect_matches(&path, rel, depth + 1, out);
+            }
+        } else if path.ends_with(rel) {
+            out.push(path);
+        }
     }
 }
 
@@ -368,4 +465,54 @@ pub fn asset(input: TokenStream) -> TokenStream {
         #url
     }}
     .into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("nr-macros-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        dir
+    }
+
+    fn touch(path: PathBuf) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "body{}").unwrap();
+    }
+
+    #[test]
+    fn finds_a_stylesheet_inside_the_app_directory() {
+        let root = temp("unique");
+        touch(root.join("app/globals.css"));
+        touch(root.join("target/debug/globals.css"));
+        let roots = vec![root.join("app"), root.clone()];
+        assert!(
+            matches!(find_unique(&roots, Path::new("globals.css")), Found::One(p) if p == root.join("app/globals.css"))
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn app_directory_wins_and_ambiguity_is_reported() {
+        let root = temp("many");
+        touch(root.join("app/a/card.css"));
+        touch(root.join("app/b/card.css"));
+        touch(root.join("styles/card.css"));
+        let roots = vec![root.join("app"), root.clone()];
+        assert!(matches!(find_unique(&roots, Path::new("card.css")), Found::Many(list) if list.len() == 2));
+        assert!(matches!(find_unique(&roots, Path::new("a/card.css")), Found::One(_)));
+        assert!(matches!(find_unique(&roots, Path::new("missing.css")), Found::None));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn reads_the_configured_app_directory() {
+        assert_eq!(
+            configured_app_dir("[server]\nport = 1\n[app]\ndirectory = \"src/web\" # routes\n").as_deref(),
+            Some("src/web")
+        );
+        assert_eq!(configured_app_dir("[build]\ndirectory = \"x\"\n"), None);
+    }
 }

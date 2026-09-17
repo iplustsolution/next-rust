@@ -212,7 +212,8 @@ fn dev_events(inner: &AppInner) -> Response {
                         let ev =
                             SseEvent::json(&serde_json::json!({ "message": status.message })).event("error-overlay");
                         return Some((ev, st));
-                    } else if !first {
+                    }
+                    if !first {
                         return Some((SseEvent::data("{}").event("clear"), st));
                     }
                 }
