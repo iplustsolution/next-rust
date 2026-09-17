@@ -254,3 +254,16 @@ pub const MAIN_RS: &str = "next_rust::app!();\n";
 pub fn layout_rs(app_name: &str) -> String {
     LAYOUT_RS.replace("__APP_NAME__", app_name)
 }
+
+#[cfg(test)]
+mod tests {
+    /// `website/public/logo.svg` is the source of the logo. The CLI keeps its
+    /// own copy (it is published without the website), so check they match.
+    #[test]
+    fn starter_favicon_matches_the_project_logo() {
+        let logo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../website/public/logo.svg");
+        if let Ok(source) = std::fs::read_to_string(logo) {
+            assert_eq!(super::FAVICON_SVG, source, "copy website/public/logo.svg into FAVICON_SVG");
+        }
+    }
+}

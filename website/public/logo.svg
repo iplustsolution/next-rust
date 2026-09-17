@@ -1,8 +1,3 @@
-//! The Next Rust logo, served at `/logo.svg` and used as the favicon.
-
-use next_rust::prelude::*;
-
-pub const SVG: &str = r##"
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Next Rust logo">
   <title>Next Rust</title>
   <defs>
@@ -56,9 +51,3 @@ pub const SVG: &str = r##"
     <rect x="292" y="186" width="30" height="92" rx="4" fill="url(#fade)"/>
   </g>
 </svg>
-"##;
-
-/// `GET /logo.svg`
-pub async fn serve(_req: Request) -> Response {
-    Response::text(SVG).with_content_type("image/svg+xml").with_cache_control("public, max-age=86400")
-}

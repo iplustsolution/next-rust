@@ -4,7 +4,6 @@
 pub mod content;
 pub mod docs;
 pub mod highlight;
-pub mod logo;
 pub mod style;
 pub mod ui;
 
