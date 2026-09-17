@@ -131,7 +131,7 @@ impl App {
             self.handle(request).await
         };
 
-        if config.logging.requests && !path.starts_with("/_nr/dev/") {
+        if config.logging.requests(self.environment()) && !path.starts_with("/_nr/dev/") {
             let id = res.header("x-request-id").map(str::to_owned);
             crate::log::request(
                 method.as_str(),

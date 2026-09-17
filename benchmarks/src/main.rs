@@ -108,7 +108,7 @@ fn bench_app(middleware_layers: usize) -> App {
         intercept_from: None,
     });
     let mut config = Config::default();
-    config.logging.requests = false;
+    config.logging.requests = Some(false);
     let mut builder = App::new(routes).config(config).environment(Environment::Production);
     for _ in 0..middleware_layers {
         builder = builder.middleware(passthrough);

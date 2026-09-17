@@ -81,8 +81,8 @@ watch = []                   # extra paths that trigger rebuilds
 
 [logging]
 format = "auto"              # auto (pretty in dev, JSON in prod) | pretty | json
-level = "info"               # error | warn | info | debug | trace
-requests = true
+level = "info"               # error | warn | info | debug | trace (default: info in development, error in production)
+requests = true              # one line per request (default: on in development, off in production)
 
 [[redirects]]
 source = "/old/:slug"

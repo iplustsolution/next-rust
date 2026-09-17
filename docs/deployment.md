@@ -161,9 +161,12 @@ adapter. Constraints on serverless platforms:
 
 ## Observability
 
-- Logs: one JSON object per line in production
-  (`{"level":"info","msg":"request","method":"GET","path":"/","status":"200","duration_ms":"1.42"}`),
-  pretty in development. Configure with `[logging]`.
+- **Production is silent except for errors.** No startup banner, no request
+  lines, no warnings: only errors are printed, as one JSON object per line
+  (`{"level":"error","msg":"render error [fa28afc233e6]: …","ts":…}`).
+  Development prints everything in a readable format.
+- To see more in production, opt in with `[logging] level = "info"` and/or
+  `requests = true`.
 - `request_id()` middleware adds `x-request-id`, and error digests appear in
   both the log and the error UI.
 - With the `tracing` feature, all framework log events go through `tracing`,

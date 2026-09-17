@@ -504,6 +504,13 @@ impl AppBuilder {
             None => discover_config(self.routes.project_root)?,
         };
         crate::set_dev(env.is_dev());
+        let json = match config.logging.format {
+            next_rust_core::config::LogFormat::Json => true,
+            next_rust_core::config::LogFormat::Pretty => false,
+            next_rust_core::config::LogFormat::Auto => !env.is_dev(),
+        };
+        // Production prints only errors unless `[logging]` says otherwise.
+        crate::log::configure(json, config.logging.level(env));
         crate::set_trust_proxy(config.server.trust_proxy);
 
         let mut matcher = Matcher::new();

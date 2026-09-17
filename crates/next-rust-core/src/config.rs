@@ -323,14 +323,31 @@ impl Default for DevConfig {
 pub struct LoggingConfig {
     pub format: LogFormat,
     /// `error`, `warn`, `info`, `debug` or `trace`.
-    pub level: String,
-    /// Log one line per request.
-    pub requests: bool,
+    /// Default: `info` in development, `error` in production and tests.
+    pub level: Option<String>,
+    /// Log one line per request. Default: on in development, off otherwise.
+    pub requests: Option<bool>,
 }
 
 impl Default for LoggingConfig {
     fn default() -> Self {
-        Self { format: LogFormat::Auto, level: "info".into(), requests: true }
+        Self { format: LogFormat::Auto, level: None, requests: None }
+    }
+}
+
+impl LoggingConfig {
+    /// Effective log level. Production prints only errors unless configured.
+    pub fn level(&self, env: crate::Environment) -> &str {
+        match &self.level {
+            Some(level) => level,
+            None if env.is_dev() => "info",
+            None => "error",
+        }
+    }
+
+    /// Whether request lines are logged. Off outside development unless configured.
+    pub fn requests(&self, env: crate::Environment) -> bool {
+        self.requests.unwrap_or(env.is_dev())
     }
 }
 
@@ -521,10 +538,12 @@ impl Config {
                 );
             }
         }
-        if !matches!(self.logging.level.as_str(), "error" | "warn" | "info" | "debug" | "trace") {
+        if let Some(level) = &self.logging.level
+            && !matches!(level.as_str(), "error" | "warn" | "info" | "debug" | "trace")
+        {
             out.push(
                 Diagnostic::warning("NR0007", "Unknown log level")
-                    .message(format!("`logging.level = {:?}`; falling back to `info`", self.logging.level)),
+                    .message(format!("`logging.level = {level:?}`; falling back to `info`")),
             );
         }
         out

@@ -33,14 +33,10 @@ pub fn run_with(builder: AppBuilder) {
     };
     match next_rust_core::env::EnvVars::load(&config.root, env, &config.env.public_prefix) {
         Ok(vars) => vars.apply_to_process(),
-        Err(e) => eprintln!("warning: could not read .env files: {e}"),
+        Err(e) if env.is_dev() => eprintln!("warning: could not read .env files: {e}"),
+        Err(_) => {}
     }
-    let json = match config.logging.format {
-        next_rust_core::config::LogFormat::Json => true,
-        next_rust_core::config::LogFormat::Pretty => false,
-        next_rust_core::config::LogFormat::Auto => !env.is_dev(),
-    };
-    crate::log::configure(json, &config.logging.level);
+    // Logging is configured when the app is built (see AppBuilder::build).
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let runtime = match tokio::runtime::Builder::new_multi_thread().enable_all().build() {

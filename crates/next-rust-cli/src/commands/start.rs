@@ -1,6 +1,6 @@
 use std::process::Command;
 
-use crate::{Args, project, ui};
+use crate::{Args, project};
 
 pub fn run(args: &[String]) -> Result<(), String> {
     let a = Args::new(args);
@@ -18,7 +18,6 @@ pub fn run(args: &[String]) -> Result<(), String> {
     if let Some(port) = a.value(&["--port", "-p"]) {
         cmd.env("PORT", port);
     }
-    ui::step(&format!("Starting {}", ui::bold(&info.bin_name)));
     let status = cmd.status().map_err(|e| e.to_string())?;
     if status.success() { Ok(()) } else { Err(String::new()) }
 }
