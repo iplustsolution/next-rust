@@ -387,5 +387,55 @@ pub fn robots() -> Robots {
             code!["public/og.png"],
             " work too.",
         ],
+        h3![id("feeds"), a![class("anchor"), href("#feeds"), "Feeds"]],
+        p![
+            code!["Feed"],
+            " renders the same entries as RSS 2.0, Atom 1.0 or JSON Feed 1.1 — each format wants a \
+             different date format and a different idea of escaping, which it handles. Serve one per \
+             route:",
+        ],
+        pre![code![
+            class("language-rust"),
+            r#"// app/feed.xml/route.rs
+use next_rust::prelude::*;
+
+pub async fn GET() -> Response {
+    let mut feed = Feed::new("Acme", "https://acme.dev", "https://acme.dev/feed.xml")
+        .description("Notes from the team")
+        .language("en");
+    for post in posts::all() {
+        feed = feed.entry(
+            FeedEntry::new(post.url(), post.title)
+                .summary(post.summary)
+                .content_html(post.body_html())   // full text, not a teaser
+                .published(post.date)             // YYYY-MM-DD or RFC 3339
+                .tag(post.topic),
+        );
+    }
+    Response::xml(feed.to_rss())                  // or .to_atom() / .to_json()
+}"#,
+        ],],
+        p!["Tell readers and browsers the feed exists from your root layout, and it is discoverable \
+             everywhere:",],
+        pre![code![
+            class("language-rust"),
+            r#"Metadata::new().feed("Acme · RSS", "https://acme.dev/feed.xml", "application/rss+xml")"#,
+        ],],
+        div![
+            class("callout"),
+            p![
+                code!["Metadata::link(rel, href)"],
+                " adds any other ",
+                code!["<link>"],
+                " you need (",
+                code!["preconnect"],
+                ", ",
+                code!["me"],
+                ", ",
+                code!["alternate"],
+                "). Keep site-wide links in the root layout: client navigation swaps titles, meta tags \
+                 and canonicals, and leaves the rest of the head alone.",
+            ],
+        ],
     ]
 }

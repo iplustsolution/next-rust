@@ -329,3 +329,26 @@ fn generator_reports_errors_as_text() {
     assert!(err.contains("NR0102"), "{err}");
     assert!(err.contains("Duplicate route"));
 }
+
+/// A `metadata` that takes `Data<T>` needs the same `load` call a page gets,
+/// or the generated code refers to data nobody fetched.
+#[test]
+fn metadata_can_take_the_loaded_data() {
+    let t = Tmp::new(&[(
+        "app/blog/[slug]/page.rs",
+        "use next_rust::prelude::*;\n\
+         pub async fn load(params: Params) -> Result<String> { Ok(params.get(\"slug\").unwrap_or_default().to_owned()) }\n\
+         pub fn metadata(Data(title): Data<String>) -> Metadata { Metadata::new().title(title) }\n\
+         pub fn Page(Data(title): Data<String>) -> impl View { h1![title] }\n",
+    )]);
+    let project = analyze_project(&t.config(""));
+    assert!(codes(&project).is_empty(), "{:?}", codes(&project));
+    let code = generate_code(&project);
+    let metadata_fn = code.split("fn __metadata_").nth(1).expect("a metadata function is generated");
+    let body = &metadata_fn[..metadata_fn.find("\n}\n").unwrap_or(metadata_fn.len())];
+    assert!(body.contains("let __data ="), "metadata must load its data first:\n{body}");
+    assert!(
+        body.find("let __data =").unwrap() < body.find("metadata(__nr::Data(__data))").unwrap(),
+        "the load has to come before the call:\n{body}"
+    );
+}

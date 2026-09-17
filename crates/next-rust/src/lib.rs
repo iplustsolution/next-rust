@@ -62,10 +62,10 @@ pub mod prelude {
     pub use next_rust_macros::{action, asset, client, css_module, global_css, server, server_action};
     pub use next_rust_router::Params;
     pub use next_rust_server::{
-        ActionContext, Auth, AuthUser, Body, Cookie, Cookies, CsrfToken, Data, Error, ErrorInfo, Extension, FormState,
-        Headers, Html, IntoResponse, Json, Next, Nonce, OrNotFound, Path, Query, Rendering, Request, RequestInfo,
-        Response, ResponseHeaders, Result, Robots, SameSite, Session, Sitemap, SseEvent, not_found, permanent_redirect,
-        redirect,
+        ActionContext, Auth, AuthUser, Body, Cookie, Cookies, CsrfToken, Data, Error, ErrorInfo, Extension, Feed,
+        FeedEntry, FormState, Headers, Html, IntoResponse, Json, Next, Nonce, OrNotFound, Path, Query, Rendering,
+        Request, RequestInfo, Response, ResponseHeaders, Result, Robots, RobotsRule, SameSite, Session, Sitemap,
+        SitemapEntry, SseEvent, not_found, permanent_redirect, redirect,
     };
     pub use next_rust_view::metadata::{Icon, OgImage, OpenGraph, Twitter};
     pub use next_rust_view::*;

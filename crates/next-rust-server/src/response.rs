@@ -64,6 +64,18 @@ impl Response {
             .with_content_type("text/html; charset=utf-8")
     }
 
+    /// XML response (feeds, sitemaps).
+    pub fn xml(body: impl Into<String>) -> Self {
+        Response::new(StatusCode::OK, Body::Bytes(Bytes::from(body.into())))
+            .with_content_type("application/xml; charset=utf-8")
+    }
+
+    /// SVG response, for images generated on the fly.
+    pub fn svg(body: impl Into<String>) -> Self {
+        Response::new(StatusCode::OK, Body::Bytes(Bytes::from(body.into())))
+            .with_content_type("image/svg+xml; charset=utf-8")
+    }
+
     /// JSON response. Serialization failures produce a 500.
     pub fn json<T: Serialize + ?Sized>(data: &T) -> Self {
         match serde_json::to_vec(data) {

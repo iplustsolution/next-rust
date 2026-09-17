@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The project follows
 [Semantic Versioning](https://semver.org/); until 1.0, minor versions may
 contain breaking changes.
 
+## Unreleased
+
+- **Feeds.** `Feed` and `FeedEntry` render a syndication feed as RSS 2.0, Atom
+  1.0 or JSON Feed 1.1, handling the date format and escaping each one wants.
+  Serve them from a route: `Response::xml(feed().to_rss())`.
+- `Metadata::feed(title, href, type)` and `Metadata::link(rel, href)` add the
+  `<link>` tags feed readers and browsers look for.
+- `Response::xml` and `Response::svg`, for feeds, sitemaps and images generated
+  on the fly.
+- `SitemapEntry` and `RobotsRule` are in the prelude, so `app/sitemap.rs` no
+  longer needs an import to set `lastmod` or a crawl rule.
+- **Fixed:** a `metadata` function taking `Data<T>` generated code that referred
+  to data nobody had loaded. It now gets the same `load` call a page does.
+- **Fixed:** a form posting to a server action did not pull in the client
+  runtime, so it submitted with a full page load unless the page happened to
+  contain a link.
+- `Params::with` accepts `&String`.
+
 ## 0.0.1
 
 Initial release.

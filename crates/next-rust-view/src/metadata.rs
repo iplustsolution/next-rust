@@ -35,6 +35,17 @@ pub struct Metadata {
     pub stylesheets: Vec<String>,
     /// Preloaded resources (fonts, images).
     pub preloads: Vec<Preload>,
+    /// Extra `<link>` tags: feeds, `preconnect`, `me`, …
+    pub links: Vec<LinkTag>,
+}
+
+/// A `<link>` tag beyond the ones [`Metadata`] models directly.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct LinkTag {
+    pub rel: String,
+    pub href: String,
+    pub mime: Option<String>,
+    pub title: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -182,6 +193,25 @@ impl Metadata {
         self
     }
 
+    /// A `<link>` tag: `link("preconnect", "https://cdn.example.com")`.
+    pub fn link(mut self, rel: impl Into<String>, href: impl Into<String>) -> Self {
+        self.links.push(LinkTag { rel: rel.into(), href: href.into(), ..Default::default() });
+        self
+    }
+
+    /// A feed readers can subscribe to. Browsers and feed readers look for
+    /// `rel="alternate"` with a feed media type:
+    /// `feed("RSS", "/feed.xml", "application/rss+xml")`.
+    pub fn feed(mut self, title: impl Into<String>, href: impl Into<String>, mime: impl Into<String>) -> Self {
+        self.links.push(LinkTag {
+            rel: "alternate".into(),
+            href: href.into(),
+            mime: Some(mime.into()),
+            title: Some(title.into()),
+        });
+        self
+    }
+
     /// Merge `child` into `self` (child wins).
     pub fn merge(mut self, child: Metadata) -> Metadata {
         if let Some(t) = child.title {
@@ -214,6 +244,11 @@ impl Metadata {
                 slot.1 = v;
             } else {
                 self.other.push((k, v));
+            }
+        }
+        for l in child.links {
+            if !self.links.contains(&l) {
+                self.links.push(l);
             }
         }
         for s in child.stylesheets {
@@ -270,6 +305,16 @@ impl Metadata {
         }
         if let Some(m) = &self.manifest {
             link(&mut h, "manifest", m, &[]);
+        }
+        for l in &self.links {
+            let mut extra: Vec<(&str, &str)> = Vec::new();
+            if let Some(t) = &l.mime {
+                extra.push(("type", t));
+            }
+            if let Some(t) = &l.title {
+                extra.push(("title", t));
+            }
+            link(&mut h, &l.rel, &l.href, &extra);
         }
         if let Some(icons) = &self.icons {
             for i in icons {

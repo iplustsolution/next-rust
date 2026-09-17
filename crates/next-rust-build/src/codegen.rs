@@ -507,8 +507,15 @@ impl<'a> Gen<'a> {
         let f = self.info(path).get("metadata")?.clone();
         let m = self.module(path);
         let name = format!("__metadata_{m}");
+        // A `metadata` that takes `Data<T>` gets the same `load` call a page
+        // does: a title or description almost always needs the record the
+        // page is about.
+        let load = match (f.args.contains(&ArgKind::Data), self.info(path).get("load").cloned()) {
+            (true, Some(load)) => format!("        let __data = {}?;\n", self.call(&m, &load, true)),
+            _ => String::new(),
+        };
         let body = format!(
-            "#[allow(unused_variables)]\nfn {name}(ctx: __nr::Ctx) -> __nr::BoxFuture<__nr::Result<__nr::Metadata>> {{\n    ::std::boxed::Box::pin(async move {{\n        __nr::IntoResult::<__nr::Metadata>::into_result({})\n    }})\n}}\n",
+            "#[allow(unused_variables)]\nfn {name}(ctx: __nr::Ctx) -> __nr::BoxFuture<__nr::Result<__nr::Metadata>> {{\n    ::std::boxed::Box::pin(async move {{\n{load}        __nr::IntoResult::<__nr::Metadata>::into_result({})\n    }})\n}}\n",
             self.call(&m, &f, true)
         );
         self.emit_once(&name, body);

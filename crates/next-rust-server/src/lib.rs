@@ -59,7 +59,7 @@ pub use middleware::{
 pub use request::Request;
 pub use response::{Body, Html, IntoResponse, Json, Response};
 pub use runtime::{run, run_with};
-pub use seo::{Robots, RobotsRule, Sitemap, SitemapEntry};
+pub use seo::{Feed, FeedEntry, Robots, RobotsRule, Sitemap, SitemapEntry};
 pub use session::{MemorySessionStore, Session, SessionStore, sessions};
 pub use sse::SseEvent;
 pub use testing::{TestClient, TestResponse};
@@ -156,7 +156,7 @@ pub mod __private {
     pub use crate::render::is_bot;
     pub use crate::request::Request;
     pub use crate::response::{IntoResponse, Response};
-    pub use crate::seo::{Robots, Sitemap};
+    pub use crate::seo::{Feed, FeedEntry, Robots, RobotsRule, Sitemap, SitemapEntry};
     pub use crate::server::into_hyper;
 
     pub fn log_error(msg: &str) {

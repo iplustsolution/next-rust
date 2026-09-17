@@ -320,7 +320,8 @@ pub fn metadata() -> Metadata {
 ```
 
 Layouts and pages merge outside-in; the child wins. `metadata` may be async, take extractors and return
-`Result`. Returning `not_found()` from it renders the 404 page — but note it renders the **app-root**
+`Result`, and it may take `Data<T>` — it then gets the same `load` call the page does. Returning
+`not_found()` from it renders the 404 page — but note it renders the **app-root**
 `not-found.rs`, not a per-segment one, because metadata is resolved before the page tree. If you want a
 segment's own 404 page, raise `not_found()` from `load` or `Page` and keep `metadata` infallible.
 
@@ -330,6 +331,31 @@ pub async fn sitemap() -> Sitemap { Sitemap::new().url("https://acme.dev/").url(
 // app/robots.rs → /robots.txt
 pub fn robots() -> Robots { Robots::allow_all().sitemap("https://acme.dev/sitemap.xml") }
 ```
+
+`SitemapEntry { url, last_modified, change_frequency, priority }` and
+`RobotsRule { user_agent, allow, disallow, crawl_delay }` are in the prelude for the detailed forms.
+
+Feeds are a route, not a special file — `Feed` renders the same entries three ways:
+
+```rust
+// app/feed.xml/route.rs
+pub async fn GET() -> Response {
+    let feed = Feed::new("Acme", "https://acme.dev", "https://acme.dev/feed.xml")
+        .description("Notes from the team")
+        .language("en")
+        .entry(
+            FeedEntry::new(post.url(), post.title)
+                .summary(post.summary)
+                .content_html(html)         // full text
+                .published("2026-09-18")    // YYYY-MM-DD or RFC 3339
+                .tag("rust"),
+        );
+    Response::xml(feed.to_rss())            // .to_atom() | .to_json()
+}
+```
+
+Advertise it with `Metadata::feed(title, href, mime)`; `Metadata::link(rel, href)` covers `preconnect`,
+`me` and other link tags. `Response::xml` and `Response::svg` set the media types.
 
 ## Rendering modes, ISR and caching
 
