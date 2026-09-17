@@ -63,7 +63,7 @@ use next_rust::prelude::*;
 pub const REVALIDATE: u64 = 3600;
 
 pub async fn generate_params() -> Vec<Params> {
-    posts::all().await.iter().map(|p| Params::new().with("slug", &p.slug)).collect()
+    posts::all().await.iter().map(|p| Params::new().with("slug", p.slug.as_str())).collect()
 }
 
 pub async fn Page(params: Params) -> Result<impl View> {
@@ -431,6 +431,7 @@ crates/
 ├── next-rust-core     config, .env loading, diagnostics
 └── next-rust-assets   hashing, MIME types, CSS processing
 examples/              small runnable apps, each with tests
+skills/next-rust/      the skill that teaches AI tools this framework
 website/               the documentation site, built with Next Rust
 benchmarks/            the benchmark harness
 ```
@@ -487,6 +488,56 @@ next-rust dev        # http://localhost:3000/docs
 to deploy. The site is pure Rust: each page is a module in
 [`website/src/content/`](website/src/content) written with the same view
 macros your app uses.
+
+## Building with an AI coding agent
+
+If you use Claude, Cursor, Copilot, Windsurf or any other AI coding tool, install
+the Next Rust skill first. It teaches the tool this framework: the filenames and
+export names that are compile-time contracts, the view macros, loaders, server
+actions, the CLI and every configuration key, and how to work on the framework
+itself. Without it, tools guess from Next.js or Axum and produce code that does
+not compile.
+
+The skill lives in [`skills/next-rust/`](skills/next-rust) and is plain Markdown,
+so anything can read it.
+
+**Claude Code, Claude Desktop, claude.ai**
+
+```sh
+git clone https://github.com/iplustsolution/next-rust
+mkdir -p ~/.claude/skills
+cp -r next-rust/skills/next-rust ~/.claude/skills/
+```
+
+That is it — the skill is offered automatically when a task involves Next Rust.
+For one project only, copy it to `.claude/skills/` inside that project instead.
+
+**Cursor, GitHub Copilot, Windsurf, Zed, Cline and similar**
+
+These read a project instructions file. Copy the folder into your project:
+
+```sh
+cp -r next-rust/skills/next-rust my-app/skills/next-rust
+```
+
+then point your tool's instructions file at it with one line:
+
+```md
+For any work in this repository, read skills/next-rust/SKILL.md first and follow it.
+```
+
+Put that in `AGENTS.md`, `.cursor/rules/next-rust.mdc` or
+`.github/copilot-instructions.md`, whichever your tool reads. This repository
+ships an [`AGENTS.md`](AGENTS.md) that already does it.
+
+**Any other agent, API integration, or a plain chat**
+
+Paste [`skills/next-rust/SKILL.md`](skills/next-rust/SKILL.md) into the system
+prompt or attach it to the conversation, and add the file from
+[`skills/next-rust/references/`](skills/next-rust/references) that the task needs.
+
+See [`skills/next-rust/README.md`](skills/next-rust/README.md) for what the skill
+covers and how to keep it accurate.
 
 ## License
 

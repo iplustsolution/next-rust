@@ -84,6 +84,12 @@ impl From<&str> for ParamValue {
     }
 }
 
+impl From<&String> for ParamValue {
+    fn from(s: &String) -> Self {
+        ParamValue::One(s.clone())
+    }
+}
+
 impl From<String> for ParamValue {
     fn from(s: String) -> Self {
         ParamValue::One(s)
@@ -127,5 +133,21 @@ impl<K: Into<String>, V: Into<ParamValue>> FromIterator<(K, V)> for Params {
             p.insert(k, v);
         }
         p
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn values_come_from_every_string_shape() {
+        let owned = String::from("hello");
+        let params =
+            Params::new().with("a", "hello").with("b", owned.clone()).with("c", &owned).with("d", vec!["x", "y"]);
+        assert_eq!(params.get("a"), Some("hello"));
+        assert_eq!(params.get("b"), Some("hello"));
+        assert_eq!(params.get("c"), Some("hello"));
+        assert_eq!(params.get_all("d"), Some(&["x".to_owned(), "y".to_owned()][..]));
     }
 }

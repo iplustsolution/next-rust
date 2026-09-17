@@ -44,7 +44,8 @@ type PendingBoundary = Pin<Box<dyn std::future::Future<Output = (u32, Node)> + S
 /// which (if any) client scripts to include.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct RenderFlags {
-    /// A `Link!` with client navigation was rendered.
+    /// Something needing the navigation runtime was rendered: a `Link!`, a
+    /// same-origin anchor, or a form posting to a server action.
     pub links: bool,
     /// An interactive island was rendered.
     pub islands: bool,
@@ -161,8 +162,13 @@ impl Writer {
                     self.out.push('"');
                 }
             }
-            // `Link!` and plain same-origin anchors both enable client navigation.
-            if a.name == "data-nr-link" || (tag == "a" && a.name == "href" && is_internal_href(value)) {
+            // `Link!`, plain same-origin anchors and action forms all need the
+            // client runtime: the first two for navigation, the last so the
+            // form submits without a full page load.
+            if a.name == "data-nr-link"
+                || a.name == "data-nr-action"
+                || (tag == "a" && a.name == "href" && is_internal_href(value))
+            {
                 self.flags.links = true;
             }
         }

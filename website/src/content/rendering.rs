@@ -125,7 +125,7 @@ pub fn Page(Data(posts): Data<Vec<Post>>) -> impl View {
             class("language-rust"),
             r#"// app/blog/[slug]/page.rs
 pub async fn generate_params() -> Vec<Params> {
-    posts::all().await.iter().map(|p| Params::new().with("slug", &p.slug)).collect()
+    posts::all().await.iter().map(|p| Params::new().with("slug", p.slug.as_str())).collect()
 }
 
 /// false: slugs not in the list render the 404 page.

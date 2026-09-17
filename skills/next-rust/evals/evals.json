@@ -1,0 +1,51 @@
+{
+  "skill_name": "next-rust",
+  "evals": [
+    {
+      "id": 0,
+      "name": "blog-listing-and-dynamic-detail-page",
+      "prompt": "This is a Next Rust app. Add a blog: /blog lists the posts (title, date, one-line summary) and /blog/<slug> shows one post. The posts can be a hard-coded list in Rust for now. Visiting a slug that doesn't exist must return a real 404, not an error page. Build it and make sure both pages actually render.",
+      "expected_output": "app/blog/page.rs and app/blog/[slug]/page.rs (dynamic segment directory), the detail page using params + or_not_found()/not_found, Tailwind classes for styling, and a passing `cargo build` / verified rendering.",
+      "files": [],
+      "assertions": [
+        "Uses a dynamic segment directory literally named [slug]",
+        "load returns Result in the same file, consumed as Data<T>",
+        "Unknown slug returns HTTP 404",
+        "Compiles",
+        "Rendering verified with real output",
+        "No invented API"
+      ]
+    },
+    {
+      "id": 1,
+      "name": "api-route-plus-server-action-form",
+      "prompt": "In this Next Rust app I need a contact form. Add a POST API route at /api/contact that takes {name, email, message} as JSON and returns the created record, plus a page at /contact with a form that submits without a full page reload and shows a validation error under the email field when it's not a valid email. Keep it server-rendered, no client framework.",
+      "expected_output": "app/api/contact/route.rs with a POST handler and typed JSON body, a server action for the form (Form!/data-nr-action + data-nr-error wiring) with validation errors returned per field, and a page that renders the form.",
+      "files": [],
+      "assertions": [
+        "route.rs exports pub async fn POST taking one Request",
+        "Invalid email returns 4xx with per-field errors",
+        "No-reload form uses #[server_action] + action!, not hand-written fetch",
+        "Email error wired via data-nr-error / FormState",
+        "Compiles",
+        "Verified with real request output",
+        "No invented API"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "framework-change-to-embedded-client-runtime",
+      "prompt": "I'm working on the Next Rust framework itself (this repo). After a client-side navigation finishes, any open <dialog> element should be closed, the same way open <details> menus already are. Make that change in the framework and make sure the whole test suite and CI checks still pass.",
+      "expected_output": "Edit RUNTIME_JS in crates/next-rust-server/src/client_runtime.rs, regenerate/patch RUNTIME_JS_MIN, update RUNTIME_JS_SOURCE_HASH, keep the public-contract test passing, and run fmt + clippy -D warnings + tests (ideally cargo doc too).",
+      "files": [],
+      "assertions": [
+        "RUNTIME_JS edited to close open dialogs",
+        "RUNTIME_JS_MIN updated, single line",
+        "RUNTIME_JS_SOURCE_HASH updated",
+        "cargo test passes including client_runtime tests",
+        "fmt + clippy -D warnings run",
+        "No hand-bumped versions, no edits to generated code"
+      ]
+    }
+  ]
+}

@@ -230,6 +230,12 @@ fn plain_internal_anchors_enable_client_navigation() {
     assert!(flags_for(a![href("/about"), "About"].into_node()).contains("[links=true]"));
     assert!(flags_for(a![href("https://example.com"), "x"].into_node()).contains("[links=false]"));
     assert!(flags_for(a![href("//cdn.example.com/x"), "x"].into_node()).contains("[links=false]"));
+    // A form posting to a server action needs the runtime too, or it would
+    // submit with a full page load.
+    assert!(
+        flags_for(form![data("nr-action", "/_nr/action/abc"), button!["Send"]].into_node()).contains("[links=true]")
+    );
+    assert!(flags_for(form![action("/elsewhere"), button!["Send"]].into_node()).contains("[links=false]"));
     let html = render_static(a![href("/logout"), reload(true), "Log out"]);
     assert_eq!(html, r#"<a href="/logout" data-nr-reload="">Log out</a>"#);
 }
