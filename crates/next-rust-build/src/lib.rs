@@ -25,6 +25,7 @@
 #![allow(clippy::result_large_err)]
 
 pub mod analyze;
+pub mod class_names;
 pub mod codegen;
 pub mod css_usage;
 pub mod tailwind;
@@ -185,10 +186,19 @@ impl Generator {
             let _ = std::fs::remove_file(&usage_file);
         }
         let tailwind = config.tailwind.enabled;
-        if tailwind {
-            generate_tailwind(&config, &out_dir, minify_html)?;
-        }
-        let mut code = generate_code_with(&project, CodegenOptions { minify_html, embed_files, tailwind });
+        // Release builds give Tailwind classes short random names;
+        // `NEXT_RUST_MINIFY_CLASSES=0|1` overrides.
+        let minify_classes = tailwind
+            && match std::env::var("NEXT_RUST_MINIFY_CLASSES").ok().as_deref() {
+                Some("0") => false,
+                Some(_) => true,
+                None => config.tailwind.minify_classes && std::env::var("PROFILE").is_ok_and(|p| p == "release"),
+            };
+        println!("cargo:rerun-if-env-changed=NEXT_RUST_MINIFY_CLASSES");
+        println!("cargo:rerun-if-env-changed=NEXT_RUST_CLASS_SEED");
+        let class_names =
+            if tailwind { generate_tailwind(&config, &out_dir, minify_html, minify_classes)? } else { None };
+        let mut code = generate_code_with(&project, CodegenOptions { minify_html, embed_files, tailwind, class_names });
         for p in &self.plugins {
             if let Some(extra) = p.extra_code(&project) {
                 code.push_str(&format!("\n// plugin: {}\n{extra}\n", p.name()));
@@ -202,7 +212,13 @@ impl Generator {
 }
 
 /// Compile Tailwind CSS for the app into `$OUT_DIR` (the stylesheet and its id).
-fn generate_tailwind(config: &Config, out_dir: &Path, minify: bool) -> Result<(), String> {
+/// Returns the class name seed when classes were shortened.
+fn generate_tailwind(
+    config: &Config,
+    out_dir: &Path,
+    minify: bool,
+    minify_classes: bool,
+) -> Result<Option<u64>, String> {
     println!("cargo:rerun-if-env-changed=NEXT_RUST_TAILWIND_BIN");
     for dir in tailwind::scanned_dirs(config) {
         println!("cargo:rerun-if-changed={}", dir.display());
@@ -210,9 +226,23 @@ fn generate_tailwind(config: &Config, out_dir: &Path, minify: bool) -> Result<()
     // `next-rust dev` / `build` download the engine with a progress bar
     // first; a plain `cargo build` downloads it here, silently.
     let bin = tailwind::ensure(&mut |_, _| {})?;
-    let css = tailwind::compile(&bin, config, out_dir, minify)?;
+    let mut css = tailwind::compile(&bin, config, out_dir, minify)?;
+    let mut seed = None;
+    if minify_classes {
+        if !minify {
+            css = next_rust_assets::css::minify(&css);
+        }
+        let build_seed = class_names::seed();
+        let shortened = class_names::shorten(&css, config, build_seed);
+        css = shortened.css;
+        write_if_changed(&out_dir.join("next_rust_tailwind.css"), css.as_bytes()).map_err(|e| e.to_string())?;
+        write_if_changed(&out_dir.join(class_names::FILE), class_names::table_source(&shortened.names).as_bytes())
+            .map_err(|e| e.to_string())?;
+        seed = Some(build_seed);
+    }
     let id = format!("tw-{}", &next_rust_assets::content_hash(css.as_bytes())[..10]);
-    write_if_changed(&out_dir.join("next_rust_tailwind.id"), id.as_bytes()).map_err(|e| e.to_string())
+    write_if_changed(&out_dir.join("next_rust_tailwind.id"), id.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(seed)
 }
 
 /// Run the default generator from `build.rs`.

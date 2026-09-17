@@ -241,6 +241,10 @@ How it works:
 - Only the classes found in `app/` and `src/` are generated. Development
   builds get readable CSS, release builds get it minified, and it's compiled
   into the binary, so servers need nothing extra.
+- Release builds rename every class to a short random name, in the CSS and in
+  the HTML (`mt-4 rounded-xl border` → `dx ce g`), with new names on every
+  build. Development keeps the names you wrote. Turn it off with
+  `minify_classes = false`, or keep single classes with `keep_classes`.
 - Offline or locked-down CI? Download the executable yourself from the
   [v4.3.3 release](https://github.com/tailwindlabs/tailwindcss/releases/tag/v4.3.3)
   and set `NEXT_RUST_TAILWIND_BIN=/path/to/tailwindcss`.

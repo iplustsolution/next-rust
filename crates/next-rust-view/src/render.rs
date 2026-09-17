@@ -23,12 +23,14 @@
 //! visible, so pages that must work without JS should avoid suspense or be
 //! rendered non-streaming (bots and static generation always are).
 
+use std::borrow::Cow;
 use std::collections::HashSet;
 use std::pin::Pin;
 
 use futures_util::future::join_all;
 use futures_util::stream::{FuturesUnordered, Stream, StreamExt};
 
+use crate::class_names::{map_class_list, map_raw_html};
 use crate::escape::{escape_attr, escape_raw_text, escape_text, is_safe_url, is_url_attr, is_valid_attr_name};
 use crate::node::{AttrValue, BoxNodeFuture, Element, Node, View};
 use crate::style::Stylesheet;
@@ -97,7 +99,7 @@ impl Writer {
                     self.out.push_str(&escape_text(&t));
                 }
             }
-            Node::Raw(r) => self.out.push_str(&r),
+            Node::Raw(r) => self.out.push_str(&map_raw_html(&r)),
             Node::Fragment(children) => {
                 for c in children {
                     self.node(c, raw_text);
@@ -143,13 +145,17 @@ impl Writer {
             match value {
                 AttrValue::Bool(true) => {
                     self.out.push(' ');
-                    self.out.push_str(&a.name);
+                    self.out.push_str(&attr_name(&a.name));
                 }
                 AttrValue::Bool(false) => {}
                 AttrValue::Text(t) => {
-                    let safe = if is_url_attr(&a.name) && !is_safe_url(t) { "#" } else { t.as_ref() };
+                    let t = match a.name.as_ref() {
+                        "class" | "data-nr-active" | "data-nr-active-prefix" => map_class_list(t),
+                        _ => Cow::Borrowed(t.as_ref()),
+                    };
+                    let safe = if is_url_attr(&a.name) && !is_safe_url(&t) { "#" } else { t.as_ref() };
                     self.out.push(' ');
-                    self.out.push_str(&a.name);
+                    self.out.push_str(&attr_name(&a.name));
                     self.out.push_str("=\"");
                     self.out.push_str(&escape_attr(safe));
                     self.out.push('"');
@@ -174,6 +180,15 @@ impl Writer {
         self.out.push_str("</");
         self.out.push_str(&tag);
         self.out.push('>');
+    }
+}
+
+/// An attribute name as written: `data-nr-class-<class>` toggles a class on
+/// the client, so the class part gets its short name.
+fn attr_name(name: &str) -> Cow<'_, str> {
+    match name.strip_prefix("data-nr-class-").and_then(crate::class_names::short_class_name) {
+        Some(short) => Cow::Owned(format!("data-nr-class-{short}")),
+        None => Cow::Borrowed(name),
     }
 }
 

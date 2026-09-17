@@ -146,6 +146,14 @@ pub struct TailwindConfig {
     /// Raw CSS appended after everything else (`@keyframes`, `@layer`, …), for
     /// what the options above can't express.
     pub css: String,
+    /// Release builds rename every Tailwind class to a short random name
+    /// (`rounded-lg` → `k7`) in the CSS and the HTML. Development builds
+    /// always keep the names you wrote.
+    pub minify_classes: bool,
+    /// Classes that keep their names in release builds, for code outside the
+    /// view tree that refers to them (a script in a Rust string, HTML from an
+    /// external service).
+    pub keep_classes: Vec<String>,
 }
 
 impl Default for TailwindConfig {
@@ -161,6 +169,8 @@ impl Default for TailwindConfig {
             safelist: Vec::new(),
             sources: Vec::new(),
             css: String::new(),
+            minify_classes: true,
+            keep_classes: Vec::new(),
         }
     }
 }

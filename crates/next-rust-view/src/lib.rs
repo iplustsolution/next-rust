@@ -24,6 +24,7 @@
 #![forbid(unsafe_code)]
 
 pub mod attrs;
+pub mod class_names;
 pub mod components;
 mod escape;
 pub mod metadata;

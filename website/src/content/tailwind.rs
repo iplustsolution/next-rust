@@ -220,6 +220,83 @@ css = """
 """
 # preflight = false   # leave out Tailwind's base styles"#,
         ],],
+        h2![
+            id("short-class-names"),
+            a![class("anchor"), href("#short-class-names"), "Short class names in production"]
+        ],
+        p![
+            "Release builds (",
+            code!["next-rust build"],
+            ") rename every Tailwind class to a short name, in the CSS and in the HTML. What you write stays readable; what the browser downloads is small:",
+        ],
+        pre![code![
+            class("language-html"),
+            r#"<!-- next-rust dev -->
+<div class="mt-4 rounded-xl border border-zinc-200 px-6 py-4 hover:bg-zinc-50">
+
+<!-- next-rust build -->
+<div class="dx ce g e7 k2 q9 ty">"#,
+        ],],
+        ul![
+            li![
+                "Names are ",
+                strong!["random for every build"],
+                ": the same class gets a different name next time. Classes you use most get the shortest names.",
+            ],
+            li![
+                "Development builds keep the names you wrote, so the browser's developer tools show ",
+                code!["rounded-xl"],
+                ", not ",
+                code!["ce"],
+                ".",
+            ],
+            li![
+                "Everything the renderer writes is covered: ",
+                code!["class(…)"],
+                ", ",
+                code!["active_class"],
+                ", ",
+                code!["data-nr-class-<name>"],
+                " and ",
+                code!["class=\"…\""],
+                " inside ",
+                code!["raw_html"],
+                ". Classes that only give context to other classes (",
+                code!["group"],
+                ", ",
+                code!["peer"],
+                ", the ",
+                code![".tk"],
+                " in ",
+                code!["[&_.tk]:text-red-500"],
+                ") keep their names.",
+            ],
+        ],
+        p!["On this site the HTML of a docs page went from 97 KB to 71 KB, and the CSS from 47 KB to 38 KB.",],
+        div![
+            class("callout"),
+            p![
+                "Classes that appear in ",
+                code!["public/"],
+                " or ",
+                code!["client/"],
+                " files (a script calling ",
+                code!["classList.add(\"hidden\")"],
+                ") keep their names automatically. For other code that refers to a class by name, list it in ",
+                code!["keep_classes"],
+                ", or turn renaming off with ",
+                code!["minify_classes = false"],
+                ". ",
+                code!["NEXT_RUST_CLASS_SEED=<number>"],
+                " gives the same names on every build (reproducible builds, or several servers running different builds behind one load balancer); ",
+                code!["NEXT_RUST_MINIFY_CLASSES=1"],
+                " renames in a development build too.",
+            ],
+        ],
+        pre![code![
+            class("language-toml"),
+            "[tailwind]\nminify_classes = true          # default\nkeep_classes = [\"hidden\", \"is-open\"]",
+        ],],
         h2![id("build-rs"), a![class("anchor"), href("#build-rs"), "Configure it in Rust"]],
         p![
             "Every option above can also be set in ",

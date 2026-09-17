@@ -16,7 +16,7 @@ use crate::codegen::embeddable_files;
 pub const FILE: &str = "next_rust_css_usage.txt";
 
 /// Extensions never read: stylesheets and common binary formats.
-const SKIP: &[&str] = &[
+pub(crate) const SKIP: &[&str] = &[
     "css", "png", "jpg", "jpeg", "gif", "webp", "avif", "ico", "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm",
     "mp3", "wav", "pdf", "zip", "gz", "br", "wasm",
 ];

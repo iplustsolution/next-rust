@@ -322,6 +322,7 @@ fn statements(css: &str) -> Vec<(&str, Option<&str>)> {
     while i < b.len() {
         match b[i] {
             b'"' | b'\'' => i = skip_string(b, i),
+            b'\\' => i += 2,
             b'(' => {
                 paren += 1;
                 i += 1;
@@ -373,6 +374,7 @@ fn matching_brace(b: &[u8], open: usize) -> usize {
                 i = skip_string(b, i);
                 continue;
             }
+            b'\\' => i += 1,
             b'{' => depth += 1,
             b'}' => {
                 depth -= 1;
@@ -556,6 +558,147 @@ fn keyframes_name(prelude: &str) -> Option<&str> {
     (!name.is_empty()).then_some(name.trim_matches(|c| c == '"' || c == '\''))
 }
 
+/// Class names in the selectors of a minified stylesheet.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ClassSelectors {
+    /// Every class name that appears in a selector (unescaped).
+    pub all: std::collections::BTreeSet<String>,
+    /// Classes that come first in at least one selector, like `mt-4` in
+    /// `.mt-4` or `.hover\:underline:hover`, and `space-y-2` in
+    /// `:where(.space-y-2>:not(:last-child))`. For generated utility CSS these
+    /// are the utilities; classes only used as context (`.group` in
+    /// `.group-hover\:x:is(:where(.group):hover *)`) are not included.
+    pub leading: std::collections::BTreeSet<String>,
+}
+
+/// Collect the class names used in the selectors of a minified stylesheet.
+pub fn class_selectors(css: &str) -> ClassSelectors {
+    let mut found = ClassSelectors::default();
+    for_each_selector(css, &mut |prelude| {
+        for selector in split_top_level(prelude, b',') {
+            let mut first = true;
+            scan_classes(selector, &mut |_, name| {
+                if first {
+                    found.leading.insert(name.clone());
+                    first = false;
+                }
+                found.all.insert(name);
+            });
+        }
+    });
+    found
+}
+
+/// Rename class selectors in a minified stylesheet. `rename` receives each
+/// class name (unescaped) and returns the new name, or `None` to keep it.
+/// New names are written as they are, so they must be plain identifiers
+/// (`[a-z][a-z0-9]*`). Declarations, `@keyframes` and everything else are
+/// copied byte for byte.
+pub fn rename_classes(css: &str, rename: &dyn Fn(&str) -> Option<String>) -> String {
+    let mut edits: Vec<(usize, usize, String)> = Vec::new();
+    for_each_selector(css, &mut |prelude| {
+        let base = prelude.as_ptr() as usize - css.as_ptr() as usize;
+        scan_classes(prelude, &mut |range, name| {
+            if let Some(new) = rename(&name) {
+                edits.push((base + range.start, base + range.end, new));
+            }
+        });
+    });
+    let mut out = String::with_capacity(css.len());
+    let mut at = 0;
+    for (start, end, new) in edits {
+        out.push_str(&css[at..start]);
+        out.push_str(&new);
+        at = end;
+    }
+    out.push_str(&css[at..]);
+    out
+}
+
+/// Calls `f` with the prelude of every style rule, including rules nested in
+/// at-rules and in other rules. `@keyframes` bodies are skipped.
+fn for_each_selector<'a>(css: &'a str, f: &mut dyn FnMut(&'a str)) {
+    for (prelude, body) in statements(css) {
+        let Some(body) = body else { continue };
+        if let Some(at) = prelude.strip_prefix('@') {
+            if keyframes_name(prelude).is_none() && !at.starts_with("font-face") && !at.starts_with("property") {
+                for_each_selector(body, f);
+            }
+            continue;
+        }
+        f(prelude);
+        for_each_selector(body, f);
+    }
+}
+
+/// Finds the class selectors (`.name`) in a selector, outside strings and
+/// attribute selectors, and calls `f` with the byte range of the name (after
+/// the dot) and the unescaped name.
+fn scan_classes(selector: &str, f: &mut dyn FnMut(std::ops::Range<usize>, String)) {
+    let b = selector.as_bytes();
+    let mut i = 0;
+    let mut brackets = 0usize;
+    while i < b.len() {
+        match b[i] {
+            b'"' | b'\'' => {
+                i = skip_string(b, i);
+                continue;
+            }
+            b'\\' => i += 1,
+            b'[' => brackets += 1,
+            b']' => brackets = brackets.saturating_sub(1),
+            b'.' if brackets == 0 && b.get(i + 1).is_some_and(|c| is_ident_start(*c)) => {
+                let start = i + 1;
+                let (end, name) = read_ident(selector, start);
+                if !name.is_empty() {
+                    f(start..end, name);
+                }
+                i = end.max(start);
+                continue;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+}
+
+/// Reads a CSS identifier starting at `start`, resolving escapes
+/// (`\:` → `:`, `\32 ` → `2`). Returns the end offset and the name.
+fn read_ident(text: &str, start: usize) -> (usize, String) {
+    let b = text.as_bytes();
+    let mut name = String::new();
+    let mut i = start;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\\' {
+            let hex = b[i + 1..].iter().take(6).take_while(|h| h.is_ascii_hexdigit()).count();
+            if hex > 0 {
+                let code = u32::from_str_radix(&text[i + 1..i + 1 + hex], 16).unwrap_or(0xFFFD);
+                name.push(char::from_u32(code).filter(|&c| c != '\0').unwrap_or('\u{FFFD}'));
+                i += 1 + hex;
+                if b.get(i).is_some_and(|w| *w == b' ' || *w == b'\t' || *w == b'\n') {
+                    i += 1;
+                }
+            } else if let Some(ch) = text.get(i + 1..).and_then(|rest| rest.chars().next()) {
+                name.push(ch);
+                i += 1 + ch.len_utf8();
+            } else {
+                i += 1;
+            }
+        } else if c.is_ascii_alphanumeric() || c == b'-' || c == b'_' {
+            name.push(c as char);
+            i += 1;
+        } else if c >= 0x80 {
+            let ch = text[i..].chars().next().expect("char boundary");
+            name.push(ch);
+            i += ch.len_utf8();
+        } else {
+            break;
+        }
+    }
+    (i, name)
+}
+
 fn classify_prelude(prelude: &[u8]) -> Block {
     let text = String::from_utf8_lossy(prelude);
     let text = text.trim();
@@ -707,5 +850,34 @@ mod tests {
     fn deterministic_names() {
         assert_eq!(scoped_class_name("x", "salt"), scoped_class_name("x", "salt"));
         assert_ne!(scoped_class_name("x", "a"), scoped_class_name("x", "b"));
+    }
+
+    #[test]
+    fn collects_leading_and_context_classes() {
+        let css = r".mt-4{margin:0}.hover\:underline{&:hover{@media (hover:hover){text-decoration:underline}}}@layer utilities{:where(.space-y-2\.5>:not(:last-child)){margin:0}.group-open\:block:is(:where(.group):is([open]) *){display:block}.\[\&_\.tk\]\:text-red .tk{color:red}.\32 xl\:grid{display:grid}}@keyframes spin{0%{x:y}50.5%{x:z}}[class~=not-prose]{a:b}";
+        let found = class_selectors(css);
+        let leading: Vec<_> = found.leading.iter().map(String::as_str).collect();
+        assert_eq!(
+            leading,
+            ["2xl:grid", "[&_.tk]:text-red", "group-open:block", "hover:underline", "mt-4", "space-y-2.5"]
+        );
+        assert!(found.all.contains("group") && found.all.contains("tk"));
+        assert!(!found.all.contains("not-prose"));
+    }
+
+    #[test]
+    fn renames_classes_in_selectors_only() {
+        let css = r".mt-4{margin:0;background:url(a.mt-4.png)}.hover\:underline{&:hover{text-decoration:underline}}@media (width>=40rem){.\32 xl\:grid,.mt-4>.x{display:grid}}:where(.space-y-2\.5>:not(:last-child)){content:'.mt-4'}@keyframes k{12.5%{opacity:0}}";
+        let renamed = rename_classes(css, &|name| match name {
+            "mt-4" => Some("a".into()),
+            "hover:underline" => Some("b".into()),
+            "2xl:grid" => Some("c".into()),
+            "space-y-2.5" => Some("d".into()),
+            _ => None,
+        });
+        assert_eq!(
+            renamed,
+            ".a{margin:0;background:url(a.mt-4.png)}.b{&:hover{text-decoration:underline}}@media (width>=40rem){.c,.a>.x{display:grid}}:where(.d>:not(:last-child)){content:'.mt-4'}@keyframes k{12.5%{opacity:0}}"
+        );
     }
 }

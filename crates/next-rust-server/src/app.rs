@@ -160,6 +160,9 @@ pub struct Routes {
     pub toml: Option<next_rust_core::config::TomlParser>,
     /// Stylesheets added to every page, such as the generated Tailwind CSS.
     pub stylesheets: &'static [&'static next_rust_view::Stylesheet],
+    /// Release builds with Tailwind: `(class, short name)` pairs sorted by
+    /// class, applied to every page this app renders.
+    pub class_names: next_rust_view::class_names::ClassNames,
 }
 
 pub(crate) type CustomHandlers = Vec<(Option<Method>, Arc<dyn Endpoint>)>;
@@ -254,6 +257,7 @@ impl App {
     /// Start building an application from generated routes.
     #[allow(clippy::new_ret_no_self)]
     pub fn new(routes: Routes) -> AppBuilder {
+        next_rust_view::class_names::set_class_names(routes.class_names);
         AppBuilder {
             routes,
             config: None,

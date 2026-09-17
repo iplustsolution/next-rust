@@ -639,6 +639,10 @@ pub struct CodegenOptions {
     /// Include the Tailwind CSS stylesheet written to `$OUT_DIR` by the
     /// generator (`[tailwind] enabled = true`).
     pub tailwind: bool,
+    /// Seed of the short class names written to `$OUT_DIR` by the generator
+    /// (release builds with Tailwind). Part of the build id, so a browser
+    /// never mixes pages from builds with different names.
+    pub class_names: Option<u64>,
 }
 
 /// Files under `dir` as `(relative path with '/', absolute path)`, sorted.
@@ -930,9 +934,21 @@ pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String 
     } else {
         "&[]"
     };
+    let class_names = if options.class_names.is_some() {
+        out.push_str(
+            "/// Short class names of this build (Tailwind class → short name).\nstatic __NR_CLASS_NAMES: &[(&str, &str)] = include!(concat!(env!(\"OUT_DIR\"), \"/next_rust_class_names.rs\"));\n\n",
+        );
+        "__NR_CLASS_NAMES"
+    } else {
+        "&[]"
+    };
+    let mut id = build_id(&project.config);
+    if let Some(seed) = options.class_names {
+        id.push_str(&format!("-{seed:016x}"));
+    }
     let _ = write!(
         out,
-        "/// All routes discovered in the app directory.\npub fn routes() -> ::next_rust::Routes {{\n    __nr::Routes {{\n        pages: vec![\n{}\n        ],\n        apis: vec![\n{}\n        ],\n        actions: vec![\n{}\n        ],\n        root: {},\n        middleware: {},\n        global_error: {},\n        sitemap: {},\n        robots: {},\n        project_root: {},\n        embedded: {},\n        build_id: {},\n        toml: {},\n        stylesheets: {},\n    }}\n}}\n",
+        "/// All routes discovered in the app directory.\npub fn routes() -> ::next_rust::Routes {{\n    __nr::Routes {{\n        pages: vec![\n{}\n        ],\n        apis: vec![\n{}\n        ],\n        actions: vec![\n{}\n        ],\n        root: {},\n        middleware: {},\n        global_error: {},\n        sitemap: {},\n        robots: {},\n        project_root: {},\n        embedded: {},\n        build_id: {},\n        toml: {},\n        stylesheets: {},\n        class_names: {},\n    }}\n}}\n",
         pages.join(",\n"),
         apis.join(",\n"),
         actions.join(",\n"),
@@ -945,9 +961,10 @@ pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String 
         // TOML parser in them.
         if options.embed_files { "None".to_owned() } else { format!("Some({})", lit(&root.to_string_lossy())) },
         embedded,
-        lit(&build_id(&project.config)),
+        lit(&id),
         if options.embed_files { "None" } else { "__nr::TOML" },
         stylesheets,
+        class_names,
     );
     out
 }

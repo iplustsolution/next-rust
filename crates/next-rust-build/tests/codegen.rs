@@ -214,12 +214,13 @@ fn generated_code_shape() {
     // Release builds embed minified HTML instead of include_str!.
     let minified = next_rust_build::generate_code_with(
         &project,
-        next_rust_build::CodegenOptions { minify_html: true, embed_files: false, tailwind: false },
+        next_rust_build::CodegenOptions { minify_html: true, embed_files: false, tailwind: false, class_names: None },
     );
     assert!(minified.contains("body: __nr::PageBody::Html(\"<p>legacy</p>\")"), "{minified}");
     assert!(code.contains("embedded: None") && !code.contains("__NR_EMBEDDED"), "{code}");
     assert!(code.contains("toml: __nr::TOML") && code.contains("project_root: Some("), "{code}");
     assert!(code.contains("stylesheets: &[],") && !code.contains("__NR_TAILWIND"), "{code}");
+    assert!(code.contains("class_names: &[],") && !code.contains("__NR_CLASS_NAMES"), "{code}");
 
     // Deterministic output.
     assert_eq!(code, generate_code(&analyze_project(&t.config(""))));
@@ -248,7 +249,12 @@ fn release_code_embeds_config_and_static_files() {
     let project = analyze_project(&config);
     let code = next_rust_build::generate_code_with(
         &project,
-        next_rust_build::CodegenOptions { minify_html: true, embed_files: true, tailwind: true },
+        next_rust_build::CodegenOptions {
+            minify_html: true,
+            embed_files: true,
+            tailwind: true,
+            class_names: Some(0xabc),
+        },
     );
     for needle in [
         "embedded: Some(&__NR_EMBEDDED)",
@@ -262,6 +268,9 @@ fn release_code_embeds_config_and_static_files() {
         "static __NR_EMBED_CLIENT: &[__nr::EmbeddedFile] = &[\n];",
         "css: include_str!(concat!(env!(\"OUT_DIR\"), \"/next_rust_tailwind.css\")),",
         "stylesheets: __NR_STYLESHEETS,",
+        "include!(concat!(env!(\"OUT_DIR\"), \"/next_rust_class_names.rs\"))",
+        "class_names: __NR_CLASS_NAMES,",
+        "0000000000000abc\",",
     ] {
         assert!(code.contains(needle), "missing `{needle}` in:\n{code}");
     }
