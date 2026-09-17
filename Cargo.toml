@@ -4,7 +4,7 @@ members = ["crates/*", "examples/*", "benchmarks", "website"]
 default-members = ["crates/*"]
 
 [workspace.package]
-version = "0.1.2"
+version = "0.1.4"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
@@ -14,15 +14,15 @@ authors = ["Next Rust contributors"]
 
 [workspace.dependencies]
 # internal
-next-rust = { path = "crates/next-rust", version = "0.1.2" }
-next-rust-core = { path = "crates/next-rust-core", version = "0.1.2" }
-next-rust-router = { path = "crates/next-rust-router", version = "0.1.2" }
-next-rust-view = { path = "crates/next-rust-view", version = "0.1.2" }
-next-rust-assets = { path = "crates/next-rust-assets", version = "0.1.2" }
-next-rust-cache = { path = "crates/next-rust-cache", version = "0.1.2" }
-next-rust-server = { path = "crates/next-rust-server", version = "0.1.2", default-features = false }
-next-rust-macros = { path = "crates/next-rust-macros", version = "0.1.2" }
-next-rust-build = { path = "crates/next-rust-build", version = "0.1.2" }
+next-rust = { path = "crates/next-rust", version = "0.1.4" }
+next-rust-core = { path = "crates/next-rust-core", version = "0.1.4" }
+next-rust-router = { path = "crates/next-rust-router", version = "0.1.4" }
+next-rust-view = { path = "crates/next-rust-view", version = "0.1.4" }
+next-rust-assets = { path = "crates/next-rust-assets", version = "0.1.4" }
+next-rust-cache = { path = "crates/next-rust-cache", version = "0.1.4" }
+next-rust-server = { path = "crates/next-rust-server", version = "0.1.4", default-features = false }
+next-rust-macros = { path = "crates/next-rust-macros", version = "0.1.4" }
+next-rust-build = { path = "crates/next-rust-build", version = "0.1.4" }
 
 # external (every entry is justified in docs/dependencies.md)
 serde = { version = "1", features = ["derive"] }
