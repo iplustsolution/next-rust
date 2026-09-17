@@ -66,7 +66,7 @@ pub async fn GET(req: Request) -> Response {
 
 pub fn readme(name: &str) -> String {
     format!(
-        "# {name}\n\nA [Next Rust](https://github.com/iplustsolution/next-rust) application.\n\n```sh\nnext-rust dev     # http://localhost:3000\nnext-rust build   # production build + static generation\nnext-rust start   # run the production build\n```\n\nRoutes live in `app/`: `page.rs` files are pages, `layout.rs` files wrap their children, `route.rs` files are API endpoints. Shared components (icons, header, footer) are in `src/components.rs`.\n"
+        "# {name}\n\nA [Next Rust](https://github.com/iplustsolution/next-rust) application.\n\n```sh\nnext-rust dev     # http://localhost:3000\nnext-rust build   # production build + static generation\nnext-rust start   # run the production build\n```\n\nRoutes live in `app/`: `page.rs` files are pages, `layout.rs` files wrap their children, `route.rs` files are API endpoints.\n"
     )
 }
 

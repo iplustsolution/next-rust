@@ -39,19 +39,16 @@ my-app/
 ├── Cargo.toml          # depends on next-rust, build-depends on next-rust-build
 ├── build.rs            # fn main() { next_rust_build::generate(); }
 ├── next-rust.toml      # optional configuration
-├── src/
-│   ├── main.rs         # mod components; next_rust::app!();
-│   └── components.rs   # icons, site header and footer
+├── src/main.rs         # next_rust::app!();
 ├── public/
 │   ├── favicon.svg     # the Next Rust logo (replace with yours)
 │   └── robots.txt
 ├── .env.example
 └── app/
-    ├── layout.rs       # root layout: header, footer, metadata
-    ├── globals.css     # responsive dark/light theme
-    ├── page.rs         # / — landing page
-    ├── not-found.rs    # styled 404 page
-    ├── about/page.rs   # /about — explains the project
+    ├── layout.rs       # root layout and metadata
+    ├── globals.css     # styles (dark and light)
+    ├── page.rs         # / — a single hero to replace with your own
+    ├── not-found.rs    # 404 page
     └── api/hello/route.rs  # GET /api/hello
 ```
 

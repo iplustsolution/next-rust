@@ -58,21 +58,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
         ),
         (
             "Theme & layout",
-            "responsive dark/light theme, header, footer",
-            vec![
-                ("app/layout.rs", starter::layout_rs(pkg)),
-                ("app/globals.css", starter::GLOBALS_CSS.into()),
-                ("src/components.rs", starter::COMPONENTS_RS.into()),
-            ],
+            "one centered hero, dark & light",
+            vec![("app/layout.rs", starter::layout_rs(pkg)), ("app/globals.css", starter::GLOBALS_CSS.into())],
         ),
         (
             "Pages",
-            "landing  ·  about  ·  404",
-            vec![
-                ("app/page.rs", starter::PAGE_RS.into()),
-                ("app/about/page.rs", starter::ABOUT_RS.into()),
-                ("app/not-found.rs", starter::NOT_FOUND_RS.into()),
-            ],
+            "home  ·  404",
+            vec![("app/page.rs", starter::PAGE_RS.into()), ("app/not-found.rs", starter::NOT_FOUND_RS.into())],
         ),
         ("API route", "GET /api/hello", vec![("app/api/hello/route.rs", templates::API_RS.into())]),
         (
@@ -112,7 +104,6 @@ pub fn run(args: &[String]) -> Result<(), String> {
         String::new(),
         ui::dim("Routes"),
         route("/", "app/page.rs"),
-        route("/about", "app/about/page.rs"),
         route("/api/hello", "app/api/hello/route.rs"),
     ]);
     eprintln!();
