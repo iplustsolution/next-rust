@@ -2,6 +2,7 @@
 
 mod commands;
 mod project;
+mod scaffold;
 mod starter;
 mod templates;
 mod ui;
@@ -31,6 +32,7 @@ COMMANDS:
                         not-found, template, api, middleware
     doctor              Diagnose the project and toolchain
     docker              Write a production Dockerfile
+    editor              Add VS Code snippets and settings to this project
     upgrade             Update the CLI and this project's framework to the latest version
     clean               Remove build output
 
@@ -68,6 +70,7 @@ fn main() -> ExitCode {
         "generate" | "g" => commands::generate::run(rest),
         "doctor" => commands::doctor::run(rest),
         "docker" => commands::docker::run(rest),
+        "editor" => commands::editor::run(rest),
         "clean" => commands::clean::run(rest),
         "upgrade" | "update" => commands::upgrade::run(rest),
         other => Err(format!("unknown command `{other}`\n\n{HELP}")),

@@ -139,11 +139,18 @@ If you had an older Rust already, update it with `rustup update stable`.
 ### 2. Install the Next Rust CLI
 
 ```sh
+cargo install next-rust-cli
+```
+
+This installs the `next-rust` command from crates.io, and takes a minute or
+two the first time. To use the newest code from `main` instead, install from
+GitHub:
+
+```sh
 cargo install --git https://github.com/iplustsolution/next-rust next-rust-cli
 ```
 
-This builds the `next-rust` command from this repository, which takes a
-minute or two the first time. Check it worked:
+Check it worked:
 
 ```sh
 next-rust --version
@@ -158,6 +165,13 @@ If your terminal can't find `next-rust`, make sure `~/.cargo/bin` (on Windows,
 next-rust new my-app
 cd my-app
 ```
+
+New projects use the Next Rust version published on crates.io. Pass `--git`
+to track the GitHub repository instead.
+
+Adding Next Rust to an existing Cargo project instead? `cargo add next-rust`
+and `cargo add --build next-rust-build`, then see
+[getting started](docs/getting-started.md#adding-to-an-existing-cargo-project).
 
 ### 4. Run it
 

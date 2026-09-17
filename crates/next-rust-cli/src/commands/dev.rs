@@ -45,6 +45,14 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let mut child: Option<Child> = None;
 
     let mut fingerprint = watch_fingerprint(&info);
+    // Fill empty special files that exist at startup, then watch for new ones.
+    let mut scaffolder = crate::scaffold::Scaffolder::default();
+    let scaffold_roots: Vec<std::path::PathBuf> =
+        std::iter::once(info.config.app_dir()).chain(info.config.api_dir()).collect();
+    if info.config.dev.scaffold {
+        report_filled(&info, scaffolder.fill_new(&scaffold_roots));
+    }
+
     if rebuild(&info, &status_file, &port, &mut child) {
         eprintln!("  {}\n", ui::dim(&format!("{} routes", routes.len())));
     }
@@ -56,6 +64,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
         {
             ui::warn(&format!("server exited ({status}); waiting for changes"));
             child = None;
+        }
+        if info.config.dev.scaffold {
+            report_filled(&info, scaffolder.fill_new(&scaffold_roots));
         }
         let next = watch_fingerprint(&info);
         if next == fingerprint {
@@ -74,6 +85,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
         routes = new_routes;
         rebuild(&info, &status_file, &port, &mut child);
+    }
+}
+
+fn report_filled(info: &ProjectInfo, files: Vec<std::path::PathBuf>) {
+    for file in files {
+        let shown = file.strip_prefix(&info.root).unwrap_or(&file).display().to_string();
+        ui::ok(&format!("filled {} with starter code", ui::bold(&shown)));
     }
 }
 

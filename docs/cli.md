@@ -33,7 +33,14 @@ Development server:
 - sends compile errors to the browser as an overlay
   (`.next-rust/dev/status.json`, streamed via `/_nr/dev/events`);
 - reloads the browser without a rebuild when `public/` or `client/` change;
-- prints `route added` / `route removed` when files appear or disappear.
+- prints `route added` / `route removed` when files appear or disappear;
+- **fills new empty special files with starter code.** Create an empty
+  `app/about/page.rs` and it becomes a working `/about` page within a
+  moment. The same goes for `layout.rs`, `route.rs`, `loading.rs`,
+  `error.rs`, `not-found.rs`, `middleware.rs`, `template.rs`,
+  `metadata.rs` and `default.rs`. Only brand-new, empty files are filled:
+  files with content, files you empty later, and files in `_private`
+  folders are never touched. Turn it off with `[dev] scaffold = false`.
 
 Watched for rebuilds: the app directory, `src/`, `assets/`, `build.rs`,
 `Cargo.toml`, the config file, `[api] directory` and `[dev] watch`. Watching
@@ -104,6 +111,22 @@ next-rust generate page /products/[id]
 next-rust generate api /api/orders
 next-rust generate loading /dashboard
 ```
+
+## `editor`
+
+Adds editor support for VS Code:
+
+- `.vscode/next-rust.code-snippets`: type a prefix and pick the suggestion.
+  `nrpage`, `nrparams`, `nrlayout`, `nrroute`, `nrget`, `nrpost`, `nrmeta`,
+  `nrload`, `nraction`, `nrform`, `nrloading`, `nrerror`, `nrnotfound`,
+  `nrmiddleware`, `nrcomponent`, `nrlink`, `nrimage`, `nrcss`.
+- `.vscode/extensions.json`: recommends rust-analyzer, which provides
+  completion for everything in `next_rust::prelude` (element macros,
+  attributes, extractors, `Response`, …).
+- `.vscode/settings.json`: re-runs build scripts on save, so a page you just
+  created is part of the crate, and gets completions, right away.
+
+New projects include these files. Existing files are kept unless `--force`.
 
 ## `doctor`
 

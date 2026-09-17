@@ -10,7 +10,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let a = Args::new(args);
     if a.flag(&["-h", "--help"]) {
         println!(
-            "next-rust new <name> [--framework-path <path to next-rust checkout>]\n\nCreates a project with app/, public/, build.rs and next-rust.toml.\nBy default the project depends on the Next Rust GitHub repository."
+            "next-rust new <name> [--git | --framework-path <path to next-rust checkout>]\n\nCreates a project with app/, public/, build.rs and next-rust.toml.\nThe project depends on next-rust from crates.io (matching this CLI's version) when it is published there;\notherwise, or with --git, on the GitHub repository."
         );
         return Ok(());
     }
@@ -32,6 +32,12 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let framework =
         a.value(&["--framework-path"]).map(str::to_owned).or_else(|| std::env::var("NEXT_RUST_FRAMEWORK_PATH").ok());
     let framework = framework.map(|p| std::fs::canonicalize(&p).map(|c| c.to_string_lossy().into_owned()).unwrap_or(p));
+    let source = match framework {
+        Some(p) => templates::FrameworkSource::Path(p),
+        None if a.flag(&["--git"]) => templates::FrameworkSource::Git,
+        None if published_on_crates_io() => templates::FrameworkSource::Registry,
+        None => templates::FrameworkSource::Git,
+    };
 
     let started = Instant::now();
     ui::banner();
@@ -46,7 +52,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             "Project manifest",
             "Cargo.toml, build.rs, src/main.rs",
             vec![
-                ("Cargo.toml", templates::cargo_toml(pkg, framework.as_deref())),
+                ("Cargo.toml", templates::cargo_toml(pkg, &source)),
                 ("build.rs", templates::BUILD_RS.into()),
                 ("src/main.rs", starter::MAIN_RS.into()),
             ],
@@ -67,6 +73,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
             vec![("app/page.rs", starter::PAGE_RS.into()), ("app/not-found.rs", starter::NOT_FOUND_RS.into())],
         ),
         ("API route", "GET /api/hello", vec![("app/api/hello/route.rs", templates::API_RS.into())]),
+        (
+            "Editor setup",
+            "VS Code snippets (nrpage, nrroute, …)",
+            super::editor::files().iter().map(|(path, contents)| (*path, (*contents).to_owned())).collect(),
+        ),
         (
             "Logo & static files",
             "favicon.svg, robots.txt, README.md",
@@ -90,11 +101,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
         ui::done_step(label, detail);
     }
-    let source = match &framework {
-        Some(p) => format!("local checkout · {p}"),
-        None => crate::REPO_URL.trim_start_matches("https://").to_owned(),
-    };
-    ui::done_step("Framework", &source);
+
+    ui::done_step("Framework", &source.describe());
     eprintln!();
 
     let route = |path: &str, file: &str| format!("{}  {}", ui::pad(&ui::bold(path), 13), ui::dim(file));
@@ -130,4 +138,26 @@ pub fn run(args: &[String]) -> Result<(), String> {
     eprintln!();
     crate::update_check::notify_if_outdated();
     Ok(())
+}
+
+/// Whether this CLI's version of `next-rust` is available on crates.io.
+/// Offline or on any error the answer is "no", and the project uses GitHub.
+fn published_on_crates_io() -> bool {
+    let url = format!("https://crates.io/api/v1/crates/next-rust/{}", env!("CARGO_PKG_VERSION"));
+    let out = crate::update_check::run_with_timeout(
+        std::process::Command::new("curl").args([
+            "-s",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "--max-time",
+            "4",
+            "-A",
+            "next-rust-cli (https://github.com/iplustsolution/next-rust)",
+            &url,
+        ]),
+        std::time::Duration::from_secs(5),
+    );
+    out.is_some_and(|code| code.trim() == "200")
 }

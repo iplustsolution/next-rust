@@ -25,6 +25,10 @@ Initial release.
   form enhancement.
 - CLI: new, dev, build, start, check, routes, analyze, generate, doctor,
   docker, upgrade, clean.
+- `next-rust dev` fills newly created, empty special files with starter code
+  (`[dev] scaffold`).
+- VS Code snippets and settings (`next-rust editor`, included in new
+  projects).
 - Production prints only errors: request logs, the startup line and warnings
   are development-only unless enabled with `[logging]`.
 - Production builds minify what browsers receive: `page.html` files are

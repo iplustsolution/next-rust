@@ -27,6 +27,12 @@ next-rust dev
 Open <http://localhost:3000>. Edit `app/page.rs` and save: the dev server
 rebuilds and the browser reloads.
 
+Adding a page is just creating a file. While `next-rust dev` runs, create an
+empty `app/about/page.rs` and it's filled with a starter page, so `/about`
+works immediately. The same works for `layout.rs`, `route.rs`, `loading.rs`
+and the other special files. In VS Code, type `nrpage`, `nrroute` or
+`nrlayout` for snippets.
+
 New projects depend on the GitHub repository. Update the project and the CLI
 with `next-rust upgrade`; see [the CLI reference](cli.md#upgrade). To develop
 against a local clone instead, use

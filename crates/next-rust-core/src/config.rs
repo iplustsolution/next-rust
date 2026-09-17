@@ -310,11 +310,14 @@ pub struct DevConfig {
     pub overlay: bool,
     /// Extra paths (relative to the project root) that trigger rebuilds.
     pub watch: Vec<PathBuf>,
+    /// Fill newly created, empty special files (`page.rs`, `layout.rs`,
+    /// `route.rs`, ...) with starter code while `next-rust dev` runs.
+    pub scaffold: bool,
 }
 
 impl Default for DevConfig {
     fn default() -> Self {
-        Self { poll_interval: 250, overlay: true, watch: Vec::new() }
+        Self { poll_interval: 250, overlay: true, watch: Vec::new(), scaffold: true }
     }
 }
 

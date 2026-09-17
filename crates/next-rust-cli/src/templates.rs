@@ -1,14 +1,38 @@
 //! Project and file templates.
 
-pub fn cargo_toml(name: &str, framework_path: Option<&str>) -> String {
-    let (dep, build_dep) = match framework_path {
-        Some(p) => (
+/// Where a new project gets the framework from.
+pub enum FrameworkSource {
+    /// A local checkout (`--framework-path`).
+    Path(String),
+    /// crates.io, pinned to this CLI's version.
+    Registry,
+    /// The GitHub repository's default branch.
+    Git,
+}
+
+impl FrameworkSource {
+    /// Human-readable description for terminal output.
+    pub fn describe(&self) -> String {
+        match self {
+            FrameworkSource::Path(p) => format!("local checkout · {p}"),
+            FrameworkSource::Registry => format!("crates.io · next-rust {}", env!("CARGO_PKG_VERSION")),
+            FrameworkSource::Git => crate::REPO_URL.trim_start_matches("https://").to_owned(),
+        }
+    }
+}
+
+pub fn cargo_toml(name: &str, source: &FrameworkSource) -> String {
+    let (dep, build_dep) = match source {
+        FrameworkSource::Path(p) => (
             format!("{{ path = \"{}/crates/next-rust\" }}", p.trim_end_matches('/')),
             format!("{{ path = \"{}/crates/next-rust-build\" }}", p.trim_end_matches('/')),
         ),
-        // Until the crates are published, projects track the GitHub repository.
-        // `next-rust upgrade` moves them to the latest commit.
-        None => (format!("{{ git = \"{}\" }}", crate::REPO_URL), format!("{{ git = \"{}\" }}", crate::REPO_URL)),
+        FrameworkSource::Registry => {
+            (format!("\"{}\"", env!("CARGO_PKG_VERSION")), format!("\"{}\"", env!("CARGO_PKG_VERSION")))
+        }
+        FrameworkSource::Git => {
+            (format!("{{ git = \"{}\" }}", crate::REPO_URL), format!("{{ git = \"{}\" }}", crate::REPO_URL))
+        }
     };
     format!(
         r#"[package]
@@ -70,46 +94,23 @@ pub fn readme(name: &str) -> String {
     )
 }
 
-/// Template for `next-rust generate <kind>`.
+/// Template for `next-rust generate <kind> <route>`: (file name, contents).
 pub fn generate(kind: &str, route: &str) -> Option<(&'static str, String)> {
-    let title = route.trim_matches('/').rsplit('/').next().filter(|s| !s.is_empty()).unwrap_or("Home").to_owned();
-    let params: Vec<String> = route
-        .split('/')
-        .filter_map(|s| s.strip_prefix('[').and_then(|s| s.strip_suffix(']')))
-        .map(|s| s.trim_start_matches('[').trim_end_matches(']').trim_start_matches("...").to_owned())
-        .collect();
-    Some(match kind {
-        "page" if !params.is_empty() => (
-            "page.rs",
-            format!(
-                "use next_rust::prelude::*;\n\npub fn Page(params: Params) -> impl View {{\n    div![\n{}    ]\n}}\n",
-                params.iter().map(|p| format!("        p![format!(\"{p}: {{:?}}\", params.get_all({p:?}))],\n")).collect::<String>()
-            ),
-        ),
-        "page" => (
-            "page.rs",
-            format!(
-                "use next_rust::prelude::*;\n\npub fn metadata() -> Metadata {{\n    Metadata::new().title({title:?})\n}}\n\npub fn Page() -> impl View {{\n    h1![{title:?}]\n}}\n"
-            ),
-        ),
-        "layout" => ("layout.rs", "use next_rust::prelude::*;\n\npub fn Layout(children: Children) -> impl View {\n    section![children]\n}\n".into()),
-        "template" => ("template.rs", "use next_rust::prelude::*;\n\npub fn Template(children: Children) -> impl View {\n    div![children]\n}\n".into()),
-        "loading" => ("loading.rs", "use next_rust::prelude::*;\n\npub fn Loading() -> impl View {\n    p![aria(\"busy\", \"true\"), \"Loading…\"]\n}\n".into()),
-        "error" => (
-            "error.rs",
-            "use next_rust::prelude::*;\n\npub fn ErrorBoundary(info: ErrorInfo) -> impl View {\n    div![role(\"alert\"), h2![\"Something went wrong\"], p![info.message], small![format!(\"Reference: {}\", info.digest)]]\n}\n".into(),
-        ),
-        "not-found" => ("not-found.rs", "use next_rust::prelude::*;\n\npub fn NotFound() -> impl View {\n    h1![\"Not found\"]\n}\n".into()),
-        "api" | "route" => (
-            "route.rs",
-            "use next_rust::prelude::*;\n\npub async fn GET(req: Request) -> Response {\n    Response::json(&serde_json::json!({ \"path\": req.path() }))\n}\n\npub async fn POST(mut req: Request) -> Result<Response> {\n    let body: serde_json::Value = req.json().await?;\n    Ok(Response::json(&body).with_status(201))\n}\n".into(),
-        ),
-        "middleware" => (
-            "middleware.rs",
-            "use next_rust::prelude::*;\n\npub async fn middleware(req: Request, next: Next) -> Response {\n    next.run(req).await\n}\n".into(),
-        ),
+    let file = match kind {
+        "page" => "page.rs",
+        "layout" => "layout.rs",
+        "template" => "template.rs",
+        "loading" => "loading.rs",
+        "error" => "error.rs",
+        "not-found" => "not-found.rs",
+        "api" | "route" => "route.rs",
+        "middleware" => "middleware.rs",
+        "metadata" => "metadata.rs",
+        "default" => "default.rs",
         _ => return None,
-    })
+    };
+    let kind = if kind == "route" { "api" } else { kind };
+    crate::scaffold::template(kind, &format!("/{}", route.trim_matches('/'))).map(|code| (file, code))
 }
 
 pub fn dockerfile(bin: &str) -> String {
@@ -146,3 +147,20 @@ CMD ["/usr/local/bin/app"]
 }
 
 pub const DOCKERIGNORE: &str = "target\n.next-rust\n.git\n.env*.local\n";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cargo_toml_for_each_framework_source() {
+        let v = env!("CARGO_PKG_VERSION");
+        let registry = cargo_toml("app", &FrameworkSource::Registry);
+        assert!(registry.contains(&format!("next-rust = \"{v}\"")));
+        assert!(registry.contains(&format!("next-rust-build = \"{v}\"")));
+        let git = cargo_toml("app", &FrameworkSource::Git);
+        assert!(git.contains("next-rust = { git = \"https://github.com/iplustsolution/next-rust\" }"));
+        let path = cargo_toml("app", &FrameworkSource::Path("/src/next-rust/".into()));
+        assert!(path.contains("next-rust = { path = \"/src/next-rust/crates/next-rust\" }"));
+    }
+}

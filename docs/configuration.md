@@ -78,6 +78,7 @@ public_prefix = "NEXT_RUST_PUBLIC_"
 poll_interval = 250          # ms
 overlay = true
 watch = []                   # extra paths that trigger rebuilds
+scaffold = true              # fill new, empty page.rs/layout.rs/route.rs/... with starter code
 
 [logging]
 format = "auto"              # auto (pretty in dev, JSON in prod) | pretty | json

@@ -98,11 +98,11 @@ limitations · ❌ not implemented yet
   `next-rust-cli` were **not taken on crates.io** when checked on 2026-09-17.
   Check again right before publishing.
 - `repository`/`homepage` point to `github.com/iplustsolution/next-rust`.
-- Until the crates are published, `next-rust new` creates projects that
-  depend on the GitHub repository. Switch the template to crates.io versions
-  after the first release.
-- Publish order (dependencies first): assets → core → router → view → cache →
-  server → macros → build → next-rust → cli.
+- Publishing is automated by `.github/workflows/release.yml` after CI passes
+  on `main` (see CONTRIBUTING.md → Releasing). Publish order: assets → core →
+  router → view → cache → server → macros → build → next-rust → cli.
+- `next-rust new` uses the crates.io version when it's published, and the
+  GitHub repository otherwise (or with `--git`).
 
 ## Roadmap (proposed)
 

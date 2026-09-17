@@ -5,6 +5,7 @@ pub mod clean;
 pub mod dev;
 pub mod docker;
 pub mod doctor;
+pub mod editor;
 pub mod generate;
 pub mod new;
 pub mod routes;

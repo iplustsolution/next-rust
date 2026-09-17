@@ -98,6 +98,21 @@ Include the Next Rust version, your Rust version, your OS, and the smallest
 `app/` layout that reproduces the problem. Output from `next-rust doctor`
 and `next-rust routes --layouts` is often enough to find the cause.
 
+## Releasing
+
+Releases are automatic. When CI passes on `main`, the
+[Release workflow](.github/workflows/release.yml) publishes every crate whose
+version isn't on crates.io yet, then tags `vX.Y.Z` and creates a GitHub
+release. To cut a release:
+
+1. Bump `version` under `[workspace.package]` in the root `Cargo.toml`, and
+   the matching `version = "…"` values in `[workspace.dependencies]`.
+2. Add the release notes to `CHANGELOG.md`.
+3. Merge to `main`.
+
+The workflow needs the `CARGO_REGISTRY_TOKEN` repository secret: a crates.io
+API token with the `publish-new` and `publish-update` scopes.
+
 ## Security issues
 
 Please **don't** open a public issue for a vulnerability. Report it privately

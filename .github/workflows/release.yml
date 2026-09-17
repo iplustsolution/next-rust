@@ -1,0 +1,136 @@
+name: Release
+
+# Publishes to crates.io after CI has passed on `main`.
+#
+# A release happens when the version in the root Cargo.toml
+# ([workspace.package] version) is not on crates.io yet. Pushes that don't
+# change the version pass through without publishing anything.
+#
+# Requires the repository secret CARGO_REGISTRY_TOKEN (a crates.io API token
+# with the "publish-new" and "publish-update" scopes).
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  publish:
+    name: Publish to crates.io
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          # Publish exactly the commit that passed CI.
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check the crates.io token
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::error::The CARGO_REGISTRY_TOKEN secret is not set. Create a token at https://crates.io/settings/tokens and add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+      - name: Publish crates
+        id: publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          # Dependency order: every crate is published after the crates it uses.
+          crates=(
+            next-rust-assets
+            next-rust-core
+            next-rust-router
+            next-rust-view
+            next-rust-cache
+            next-rust-server
+            next-rust-macros
+            next-rust-build
+            next-rust
+            next-rust-cli
+          )
+
+          metadata=$(cargo metadata --no-deps --format-version 1)
+          version=$(echo "$metadata" | jq -r '.packages[] | select(.name == "next-rust") | .version')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          published=false
+
+          for crate in "${crates[@]}"; do
+            crate_version=$(echo "$metadata" | jq -r --arg c "$crate" '.packages[] | select(.name == $c) | .version')
+            status=$(curl -s -o /dev/null -w '%{http_code}' \
+              -A "next-rust release workflow (https://github.com/${{ github.repository }})" \
+              "https://crates.io/api/v1/crates/$crate/$crate_version")
+            if [ "$status" = "200" ]; then
+              echo "✓ $crate $crate_version is already on crates.io, skipping"
+              continue
+            fi
+            echo "→ publishing $crate $crate_version"
+            # `cargo publish` waits until the crate is available before returning,
+            # so the next crate can depend on it. crates.io limits how many new
+            # crates can be created in a short time (the first release creates
+            # ten), so rate-limited attempts wait and retry.
+            attempt=1
+            until cargo publish -p "$crate" 2>&1 | tee "$RUNNER_TEMP/publish.log"; [ "${PIPESTATUS[0]}" -eq 0 ]; do
+              if grep -qiE "429|too many|rate limit" "$RUNNER_TEMP/publish.log" && [ "$attempt" -lt 8 ]; then
+                echo "crates.io rate limit reached; waiting 10 minutes before retrying $crate (attempt $attempt)"
+                attempt=$((attempt + 1))
+                sleep 600
+              else
+                echo "::error::Publishing $crate failed"
+                exit 1
+              fi
+            done
+            published=true
+          done
+
+          echo "published=$published" >> "$GITHUB_OUTPUT"
+          if [ "$published" = "false" ]; then
+            echo "Nothing to publish: version $version is already released."
+          fi
+
+      - name: Tag and create GitHub release
+        if: steps.publish.outputs.published == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="v${{ steps.publish.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "Tag $tag already exists"
+          else
+            git tag "$tag" "${{ github.event.workflow_run.head_sha }}"
+            git push origin "$tag"
+          fi
+          if ! gh release view "$tag" >/dev/null 2>&1; then
+            gh release create "$tag" --title "Next Rust $tag" --generate-notes --verify-tag
+          fi
+          {
+            echo "### Published Next Rust $tag"
+            echo ""
+            echo '```sh'
+            echo "cargo install next-rust-cli"
+            echo "cargo add next-rust"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
