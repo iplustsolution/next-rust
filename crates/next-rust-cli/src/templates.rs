@@ -56,6 +56,17 @@ serde_json = "1"
 [build-dependencies]
 next-rust-build = {build_dep}
 
+# Strict checks: `next-rust dev` and `next-rust build` report every unused
+# import, variable, function, type, field, `mut`, assignment, macro rule and
+# ignored `#[must_use]` result. Change "warn" to "deny" to fail the build instead.
+[lints.rust]
+unused = {{ level = "warn", priority = -1 }}
+unused_qualifications = "warn"
+unused_lifetimes = "warn"
+unused_import_braces = "warn"
+unused_macro_rules = "warn"
+unused_extern_crates = "warn"
+
 # Production builds. `next-rust build` always uses these settings (see
 # [build] in next-rust.toml); they also apply to a plain `cargo build --release`.
 [profile.release]

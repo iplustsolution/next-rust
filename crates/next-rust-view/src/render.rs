@@ -31,6 +31,7 @@ use futures_util::future::join_all;
 use futures_util::stream::{FuturesUnordered, Stream, StreamExt};
 
 use crate::class_names::{map_class_list, map_raw_html};
+use crate::css_split::{self, Pieces};
 use crate::escape::{escape_attr, escape_raw_text, escape_text, is_safe_url, is_url_attr, is_valid_attr_name};
 use crate::node::{AttrValue, BoxNodeFuture, Element, Node, View};
 use crate::style::Stylesheet;
@@ -51,6 +52,9 @@ pub struct RenderFlags {
     pub islands: bool,
     /// At least one suspense boundary was streamed.
     pub streamed: bool,
+    /// An interactive UI component was rendered (`data-nr-ui`): the page
+    /// needs the component script.
+    pub ui: bool,
 }
 
 struct Writer {
@@ -60,6 +64,15 @@ struct Writer {
     styles_known: HashSet<String>,
     /// When set, stylesheets are collected here instead of written inline.
     hoisted: Option<Vec<&'static Stylesheet>>,
+    /// Documents send per-class stylesheets rule by rule (see `css_split`).
+    split: bool,
+    /// Per-class stylesheets in the document, with the pieces the browser has.
+    split_sheets: Vec<(&'static Stylesheet, Pieces)>,
+    /// Classes rendered so far, as written to the HTML.
+    classes: HashSet<String>,
+    /// Something rendered markup of its own on the client (a module island):
+    /// every rule is needed.
+    all_classes: bool,
     flags: RenderFlags,
     streaming: bool,
     next_id: u32,
@@ -73,6 +86,10 @@ impl Writer {
             styles_seen: HashSet::new(),
             styles_known: HashSet::new(),
             hoisted: hoist.then(Vec::new),
+            split: false,
+            split_sheets: Vec::new(),
+            classes: HashSet::new(),
+            all_classes: false,
             flags: RenderFlags::default(),
             streaming,
             next_id: 0,
@@ -81,6 +98,13 @@ impl Writer {
     }
 
     fn style(&mut self, sheet: &'static Stylesheet) {
+        if self.split && sheet.per_class.is_some() {
+            if !self.split_sheets.iter().any(|(s, _)| std::ptr::eq(*s, sheet)) {
+                let known = css_split::split(sheet).known(sheet, &self.styles_known);
+                self.split_sheets.push((sheet, known));
+            }
+            return;
+        }
         if !self.styles_seen.insert(sheet.id) || self.styles_known.contains(sheet.id) {
             return;
         }
@@ -100,7 +124,13 @@ impl Writer {
                     self.out.push_str(&escape_text(&t));
                 }
             }
-            Node::Raw(r) => self.out.push_str(&map_raw_html(&r)),
+            Node::Raw(r) => {
+                let html = map_raw_html(&r);
+                if self.split {
+                    collect_raw_classes(&html, &mut self.classes);
+                }
+                self.out.push_str(&html);
+            }
             Node::Fragment(children) => {
                 for c in children {
                     self.node(c, raw_text);
@@ -151,12 +181,28 @@ impl Writer {
                 AttrValue::Bool(false) => {}
                 AttrValue::Text(t) => {
                     let t = match a.name.as_ref() {
-                        "class" | "data-nr-active" | "data-nr-active-prefix" => map_class_list(t),
+                        "class" | "data-nr-active" | "data-nr-active-prefix" => {
+                            let mapped = map_class_list(t);
+                            if self.split {
+                                self.classes.extend(mapped.split_ascii_whitespace().map(str::to_owned));
+                            }
+                            mapped
+                        }
                         _ => Cow::Borrowed(t.as_ref()),
                     };
                     let safe = if is_url_attr(&a.name) && !is_safe_url(&t) { "#" } else { t.as_ref() };
+                    let name = attr_name(&a.name);
+                    if self.split {
+                        if let Some(class) = name.strip_prefix("data-nr-class-") {
+                            self.classes.insert(class.to_owned());
+                        }
+                        if tag == "nr-island" && a.name == "data-module" {
+                            // Renders its own markup on the client.
+                            self.all_classes = true;
+                        }
+                    }
                     self.out.push(' ');
-                    self.out.push_str(&attr_name(&a.name));
+                    self.out.push_str(&name);
                     self.out.push_str("=\"");
                     self.out.push_str(&escape_attr(safe));
                     self.out.push('"');
@@ -165,6 +211,9 @@ impl Writer {
             // `Link!`, plain same-origin anchors and action forms all need the
             // client runtime: the first two for navigation, the last so the
             // form submits without a full page load.
+            if a.name == "data-nr-ui" {
+                self.flags.ui = true;
+            }
             if a.name == "data-nr-link"
                 || a.name == "data-nr-action"
                 || (tag == "a" && a.name == "href" && is_internal_href(value))
@@ -186,6 +235,39 @@ impl Writer {
         self.out.push_str("</");
         self.out.push_str(&tag);
         self.out.push('>');
+    }
+}
+
+impl Writer {
+    /// `<style>` elements with the per-class rules needed by what was
+    /// rendered since the last call and not yet sent.
+    fn split_styles(&mut self) -> String {
+        let mut out = String::new();
+        for (sheet, sent) in &mut self.split_sheets {
+            let split = css_split::split(sheet);
+            let keep = sheet.per_class.unwrap_or_default();
+            let keep: Vec<&str> = keep.iter().map(|c| crate::class_names::short_class_name(c).unwrap_or(c)).collect();
+            let classes = &self.classes;
+            let used = |c: &str| classes.contains(c) || keep.contains(&c);
+            let pieces = split.delta(&used, self.all_classes, sent);
+            out.push_str(&split.style(sheet, &pieces));
+            split.record(sent, &pieces);
+        }
+        out
+    }
+}
+
+/// Class names in `class="…"` attributes of raw HTML.
+fn collect_raw_classes(html: &str, into: &mut HashSet<String>) {
+    let lower = html.to_ascii_lowercase();
+    let mut from = 0;
+    while let Some(at) = lower[from..].find("class=") {
+        let start = from + at + "class=".len();
+        from = start;
+        let Some(q @ (b'"' | b'\'')) = html.as_bytes().get(start).copied() else { continue };
+        let Some(len) = html[start + 1..].find(q as char) else { break };
+        into.extend(html[start + 1..start + 1 + len].split_ascii_whitespace().map(str::to_owned));
+        from = start + 1 + len;
     }
 }
 
@@ -276,6 +358,8 @@ fn open_document(parts: &DocumentParts, w: &mut Writer, body: &str) -> String {
     s.push_str(&escape_attr(&parts.lang));
     s.push_str("\"><head>");
     s.push_str(&parts.head);
+    // Utility sheets first, so page and module styles can override them.
+    s.push_str(&w.split_styles());
     if let Some(sheets) = w.hoisted.take() {
         for sheet in sheets {
             write_style(&mut s, sheet);
@@ -317,6 +401,7 @@ pub fn stream_document(parts: DocumentParts, streaming: bool) -> impl Stream<Ite
                 let body = std::mem::take(&mut parts.body);
                 let body = if streaming { body } else { resolve(body).await };
                 let mut w = Writer::new(streaming, true);
+                w.split = true;
                 w.styles_known = std::mem::take(&mut parts.known_styles).into_iter().collect();
                 w.node(body, false);
                 let body_html = std::mem::take(&mut w.out);
@@ -342,6 +427,9 @@ pub fn stream_document(parts: DocumentParts, streaming: bool) -> impl Stream<Ite
                     w.out.push_str(&format!("<template id=\"nr-t{id}\">"));
                     w.node(node, false);
                     w.out.push_str(&format!("</template><script{}>$nr({id})</script>", nonce_attr(&nonce)));
+                    // Rules for classes first used in this chunk, ahead of it.
+                    let styles = w.split_styles();
+                    w.out.insert_str(0, &styles);
                     for (nid, fut) in w.pending.drain(..) {
                         pending.push(Box::pin(async move { (nid, fut.await) }));
                     }

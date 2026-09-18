@@ -111,9 +111,10 @@ max_age = 2592000
 [security]
 headers = true               # nosniff, frame options, referrer policy, COOP, permissions policy
 # csp = "default-src 'self'" # {nonce} is substituted per response
-csrf = "origin"              # origin | token | off
+csrf = "origin"              # origin | token | off (off skips only the origin check)
 hsts_max_age = 0             # 0 = no header
 allowed_origins = []
+action_token_ttl = 43200     # seconds a signed server-action URL stays valid
 
 [env]
 public_prefix = "NEXT_RUST_PUBLIC_"   # only these variables reach the browser

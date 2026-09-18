@@ -203,7 +203,8 @@ pub(crate) struct AppInner {
     pub global_stack: Arc<[Arc<dyn Middleware>]>,
     pub page_stacks: Vec<Arc<[Arc<dyn Middleware>]>>,
     pub api_stacks: Vec<Arc<[Arc<dyn Middleware>]>>,
-    pub actions: HashMap<String, usize>,
+    /// Keyed action id → index into `routes.actions`.
+    pub(crate) actions: HashMap<crate::action_token::ActionKey, usize>,
     pub revalidating: Mutex<HashSet<String>>,
     pub static_params: Mutex<HashMap<usize, Arc<Vec<Params>>>>,
     pub plugins: Vec<Arc<dyn crate::plugin::Plugin>>,
@@ -355,6 +356,7 @@ impl App {
 
     fn finish(&self, mut res: Response, cookies: &crate::Cookies, nonce: &str, path: &str) -> Response {
         let config = &self.inner.config;
+        crate::action_token::seal(&mut res, cookies, config.security.action_token_ttl, config.security.csrf);
         for value in cookies.set_cookie_headers() {
             res.append_header("set-cookie", &value);
         }
@@ -636,8 +638,16 @@ impl AppBuilder {
             .map(|p| stack_of(p.segments.iter().filter_map(|s| s.middleware).collect()))
             .collect();
         let api_stacks = self.routes.apis.iter().map(|a| stack_of(a.middleware.clone())).collect();
+        crate::action_token::check_secret()?;
+        if !self.routes.actions.is_empty() && !env.is_dev() && !crate::action_token::keys().from_env {
+            crate::log::warn(&format!(
+                "{} is not set: server-action links are signed with a random key, so open pages stop working \
+                 after a restart and links don't work across instances",
+                crate::SECRET_ENV
+            ));
+        }
         let actions =
-            self.routes.actions.iter().enumerate().map(|(i, a)| (crate::actions::action_hash(a.id), i)).collect();
+            self.routes.actions.iter().enumerate().map(|(i, a)| (crate::action_token::action_key(a.id), i)).collect();
 
         let output_dir = config.output_dir();
         let page_store: Arc<dyn CacheStore> = match self.page_store {

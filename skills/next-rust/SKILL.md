@@ -73,6 +73,11 @@ These are the mistakes that cost real time, all of them mechanical:
 9. **Release builds rename Tailwind classes** to short random names and prune unused CSS. Anything that names
    a class outside the view tree (a JS string in Rust, third-party HTML) needs `[tailwind] keep_classes` or
    `[assets] css_safelist`. Don't "fix" a production-only styling bug by turning Tailwind off.
+   Pages also receive only the utility rules for classes they render: a class that only a script adds
+   (outside `public/`/`client/`) must be in `keep_classes`.
+10. **Reach for `next_rust::ui` before hand-building controls.** Buttons, fields, select, date picker, toggles,
+    avatars, cards and layout exist (`use next_rust::ui::*;`, see `references/app-api.md#ui-components`).
+    Restyle them with `class(..)`; don't copy their markup.
 
 ## Building an app
 

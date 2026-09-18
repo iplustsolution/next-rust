@@ -4,3 +4,4 @@
 .DS_Store
 /website/.next-rust
 .claude/worktrees/
+local.sh

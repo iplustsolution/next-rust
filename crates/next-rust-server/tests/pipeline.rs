@@ -96,6 +96,9 @@ fn static_page(_ctx: Ctx) -> R {
         Ok(p![format!("render #{n}")].into_node())
     })
 }
+fn static_form(_ctx: Ctx) -> R {
+    Box::pin(async { Ok(form![ActionRef::new(CREATE_USER_ID), button!["Go"]].into_node()) })
+}
 fn static_needs_cookies(ctx: Ctx) -> R {
     Box::pin(async move {
         let _c = Cookies::from_context(&ctx)?;
@@ -184,6 +187,10 @@ impl Drop for TestApp {
 }
 
 fn build(env: Environment) -> TestApp {
+    build_with(env, |_| {})
+}
+
+fn build_with(env: Environment, tweak: impl FnOnce(&mut Config)) -> TestApp {
     static N: AtomicUsize = AtomicUsize::new(0);
     let dir =
         std::env::temp_dir().join(format!("nr-pipeline-{}-{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
@@ -211,6 +218,8 @@ fn build(env: Environment) -> TestApp {
     let mut static_p = page("/static", PageBody::Rust(static_page), vec![root_seg(), SegmentDef::default()]);
     static_p.rendering = Rendering::Static;
     static_p.revalidate = Some(3600);
+    let mut static_form_p = page("/static-form", PageBody::Rust(static_form), vec![root_seg(), SegmentDef::default()]);
+    static_form_p.rendering = Rendering::Static;
     let mut static_bad =
         page("/static-bad", PageBody::Rust(static_needs_cookies), vec![root_seg(), SegmentDef::default()]);
     static_bad.rendering = Rendering::Static;
@@ -231,6 +240,7 @@ fn build(env: Environment) -> TestApp {
                 vec![root_seg(), SegmentDef::default()],
             ),
             static_p,
+            static_form_p,
             static_bad,
             page("/photo/[id]", PageBody::Rust(photo), vec![root_seg(), SegmentDef::default()]),
             modal,
@@ -264,6 +274,7 @@ fn build(env: Environment) -> TestApp {
     )
     .unwrap();
     config.root = dir.clone();
+    tweak(&mut config);
     let app = App::new(routes)
         .config(config)
         .environment(env)
@@ -482,28 +493,30 @@ async fn public_files() {
 #[tokio::test]
 async fn server_actions() {
     let t = build(Environment::Test);
-    let url = action_url(CREATE_USER_ID);
+    let client = TestClient::from_app(t.app.clone());
+    let url = client.action_url(CREATE_USER_ID);
+    assert_ne!(url, client.action_url(CREATE_USER_ID), "every URL is unique");
 
-    let json = |body: &str, origin: Option<&str>| {
-        let mut b =
-            http::Request::post(url.as_str()).header("host", "example.com").header("content-type", "application/json");
+    let json = |url: &str, body: &str, origin: Option<&str>| {
+        let mut b = http::Request::post(url).header("host", "example.com").header("content-type", "application/json");
         if let Some(o) = origin {
             b = b.header("origin", o);
         }
         b.body(Bytes::from(body.to_owned())).unwrap()
     };
-    let (status, _, body) = send(&t.app, json(r#"{"name":"Ada"}"#, Some("https://example.com"))).await;
-    assert_eq!((status, body.as_str()), (200, r#"{"data":"hello Ada","ok":true}"#));
+    let res = client.send(json(&url, r#"{"name":"Ada"}"#, Some("https://example.com"))).await;
+    assert_eq!((res.status, res.text.as_str()), (200, r#"{"data":"hello Ada","ok":true}"#));
+    assert_eq!(res.header("cache-control"), Some("no-store"));
 
-    let (status, _, body) = send(&t.app, json(r#"{"name":" "}"#, None)).await;
-    assert_eq!(status, 422);
-    assert_eq!(body, r#"{"errors":{"name":"Name is required"},"ok":false}"#);
+    let res = client.send(json(&url, r#"{"name":" "}"#, None)).await;
+    assert_eq!(res.status, 422);
+    assert_eq!(res.text, r#"{"errors":{"name":"Name is required"},"ok":false}"#);
 
-    let (status, _, body) = send(&t.app, json(r#"{"name":"admin"}"#, None)).await;
-    assert_eq!((status, body.as_str()), (200, r#"{"ok":false,"redirect":"/login"}"#));
+    let res = client.send(json(&url, r#"{"name":"admin"}"#, None)).await;
+    assert_eq!((res.status, res.text.as_str()), (200, r#"{"ok":false,"redirect":"/login"}"#));
 
-    let (status, _, _) = send(&t.app, json(r#"{"name":"Ada"}"#, Some("https://evil.example"))).await;
-    assert_eq!(status, 403, "cross-origin actions are rejected");
+    let res = client.send(json(&url, r#"{"name":"Ada"}"#, Some("https://evil.example"))).await;
+    assert_eq!(res.status, 403, "cross-origin actions are rejected");
 
     let req = http::Request::post(url.as_str())
         .header("host", "example.com")
@@ -511,32 +524,112 @@ async fn server_actions() {
         .header("content-type", "application/json")
         .body(Bytes::from(r#"{"name":"Ada"}"#))
         .unwrap();
-    assert_eq!(send(&t.app, req).await.0, 403);
+    assert_eq!(client.send(req).await.status, 403);
+
+    // A URL copied out of this browser is useless anywhere else: without the
+    // binding cookie, and with another browser's cookie.
+    let (status, _, body) = send(&t.app, json(&url, r#"{"name":"Ada"}"#, None)).await;
+    assert_eq!(status, 403, "no binding cookie");
+    assert!(body.contains("nr_stale"), "{body}");
+    let other = TestClient::from_app(t.app.clone());
+    other.action_url(CREATE_USER_ID);
+    assert_eq!(other.send(json(&url, r#"{"name":"Ada"}"#, None)).await.status, 403, "another browser's cookie");
+
+    // Static, guessable or tampered URLs never reach the action.
+    for bad in ["/_nr/action/unknown", "/_nr/action/661d1685c535653e", "/_nr/action/x~y"] {
+        assert_eq!(client.send(json(bad, "{}", None)).await.status, 403, "{bad}");
+    }
+    let mut tampered = url.clone().into_bytes();
+    let last = tampered.len() - 1;
+    tampered[last] = if tampered[last] == b'A' { b'B' } else { b'A' };
+    let tampered = String::from_utf8(tampered).unwrap();
+    assert_eq!(client.send(json(&tampered, r#"{"name":"Ada"}"#, None)).await.status, 403);
+
+    // `text/plain` bodies (a cross-site form trick) never reach the JSON parser.
+    let req = http::Request::post(url.as_str())
+        .header("host", "example.com")
+        .header("content-type", "text/plain")
+        .body(Bytes::from(r#"{"name":"Ada"}"#))
+        .unwrap();
+    assert_eq!(client.send(req).await.status, 415);
 
     // Progressive enhancement: plain HTML form post.
-    let form = |body: &str| {
-        http::Request::post(url.as_str())
+    let form = |url: &str, body: &str| {
+        http::Request::post(url)
             .header("host", "example.com")
             .header("referer", "http://example.com/signup?step=1")
             .header("content-type", "application/x-www-form-urlencoded")
             .body(Bytes::from(body.to_owned()))
             .unwrap()
     };
-    let (status, headers, _) = send(&t.app, form("name=Ada")).await;
-    assert_eq!(status, 303);
-    assert_eq!(headers["location"], "/signup?step=1");
-    let (status, headers, _) = send(&t.app, form("name=&password=hunter2")).await;
-    assert_eq!(status, 303);
-    let cookie = headers["set-cookie"].to_str().unwrap();
-    assert!(cookie.starts_with("nr_flash="));
+    let res = client.send(form(&url, "name=Ada")).await;
+    assert_eq!(res.status, 303);
+    assert_eq!(res.header("location"), Some("/signup?step=1"));
+    let res = client.send(form(&url, "name=&password=hunter2")).await;
+    assert_eq!(res.status, 303);
+    let cookie = res.cookies().into_iter().find(|c| c.starts_with("nr_flash=")).unwrap();
     assert!(!cookie.contains("hunter2"), "passwords are never echoed back");
-    let (status, headers, _) = send(&t.app, form("name=Ada&_redirect=//evil.com")).await;
-    assert_eq!((status, headers["location"].to_str().unwrap()), (303, "/signup?step=1"), "open redirects are ignored");
+    let res = client.send(form(&url, "name=Ada&_redirect=//evil.com")).await;
+    assert_eq!((res.status, res.header("location")), (303, Some("/signup?step=1")), "open redirects are ignored");
+
+    // A stale link in a plain form goes back to the page with a message.
+    let (status, headers, _) = send(&t.app, form(&url, "name=Ada")).await;
+    assert_eq!((status, headers["location"].to_str().unwrap()), (303, "/signup?step=1"));
+    assert!(headers["set-cookie"].to_str().unwrap().starts_with("nr_flash="));
 
     let req = http::Request::get(url.as_str()).body(Bytes::new()).unwrap();
-    assert_eq!(send(&t.app, req).await.0, 405);
-    let req = http::Request::post("/_nr/action/unknown").body(Bytes::new()).unwrap();
-    assert_eq!(send(&t.app, req).await.0, 404);
+    assert_eq!(client.send(req).await.status, 405);
+}
+
+#[tokio::test]
+async fn csrf_token_mode_requires_double_submit() {
+    let t = build_with(Environment::Test, |c| {
+        c.security.csrf = next_rust_core::config::CsrfMode::Token;
+        c.server.body_limit = 1024;
+    });
+    let client = TestClient::from_app(t.app.clone());
+    let page = client.get("/static-form").await;
+    let csrf = page.cookies().iter().find_map(|c| c.strip_prefix("nr_csrf=")).unwrap().split(';').next().unwrap();
+    let csrf = csrf.to_owned();
+    let url = client.action_url(CREATE_USER_ID);
+    let call = |token: Option<&str>| {
+        let mut b = http::Request::post(url.as_str()).header("content-type", "application/json");
+        if let Some(t) = token {
+            b = b.header("x-csrf-token", t);
+        }
+        b.body(Bytes::from(r#"{"name":"Ada"}"#)).unwrap()
+    };
+    assert_eq!(client.send(call(None)).await.status, 403);
+    assert_eq!(client.send(call(Some("wrong"))).await.status, 403);
+    assert_eq!(client.send(call(Some(&csrf))).await.status, 200);
+    let form = http::Request::post(url.as_str())
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("referer", "http://localhost/static-form")
+        .body(Bytes::from(format!("name=Ada&_csrf={csrf}")))
+        .unwrap();
+    assert_eq!(client.send(form).await.status, 303, "hidden `_csrf` field");
+}
+
+#[tokio::test]
+async fn cached_pages_get_per_visitor_action_urls() {
+    let t = build(Environment::Production);
+    let action_of = |html: &str| html.split("action=\"").nth(1).unwrap().split('"').next().unwrap().to_owned();
+    let (alice, bob) = (TestClient::from_app(t.app.clone()), TestClient::from_app(t.app.clone()));
+    let a = alice.get("/static-form").await;
+    let b = bob.get("/static-form").await;
+    assert_eq!((a.header("x-nr-cache"), b.header("x-nr-cache")), (Some("MISS"), Some("HIT")));
+    assert_eq!(b.header("cache-control"), Some("private, no-store"), "shared caches must not keep personal URLs");
+    let (url_a, url_b) = (action_of(&a.text), action_of(&b.text));
+    assert_ne!(url_a, url_b);
+    let call = |url: &str| {
+        http::Request::post(url)
+            .header("content-type", "application/json")
+            .body(Bytes::from(r#"{"name":"Ada"}"#))
+            .unwrap()
+    };
+    assert_eq!(alice.send(call(&url_a)).await.status, 200);
+    assert_eq!(bob.send(call(&url_b)).await.status, 200);
+    assert_eq!(bob.send(call(&url_a)).await.status, 403, "Alice's URL doesn't work for Bob");
 }
 
 #[tokio::test]

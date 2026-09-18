@@ -17,6 +17,10 @@ pub struct Stylesheet {
     pub id: &'static str,
     /// Minified CSS text.
     pub css: &'static str,
+    /// `Some` for utility stylesheets (Tailwind): each page gets only the
+    /// rules for the classes it renders, plus those for the listed classes
+    /// (used by code outside the view tree). `None`: sent whole.
+    pub per_class: Option<&'static [&'static str]>,
 }
 
 impl View for &'static Stylesheet {

@@ -1,14 +1,22 @@
 //! Server actions: `#[server_action]` functions exposed at
-//! `POST /_nr/action/<id>`.
+//! `POST /_nr/action/<token>`.
 //!
-//! Security:
+//! Security (in the order the checks run):
 //!
 //! * Only `POST` is accepted.
 //! * Cross-site requests are rejected using `Sec-Fetch-Site` / `Origin`
-//!   compared to the request host (`[security] csrf = "origin"`, default),
-//!   plus a double-submit token with `csrf = "token"`.
-//! * Action ids are hashes; the function body is never sent to clients.
-//! * Errors are reduced to public messages in production.
+//!   compared to the request host (`[security] csrf = "origin"`, default).
+//! * There is no fixed URL per action. Every page view gets its own signed,
+//!   expiring token bound to the visitor's `HttpOnly`, `SameSite=Strict`
+//!   binding cookie (see `action_token.rs`). Unknown, expired, tampered
+//!   or copied tokens are rejected before any action code runs.
+//! * Only `application/json` and `application/x-www-form-urlencoded` bodies
+//!   are accepted, so `text/plain` cross-site form tricks can't reach the
+//!   JSON parser.
+//! * With `csrf = "token"`, a double-submit token (`x-csrf-token` header or
+//!   `_csrf` field matching the `nr_csrf` cookie) is also required.
+//! * Errors are reduced to public messages in production, and responses are
+//!   never cached.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -19,6 +27,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::Cookie;
+use crate::action_token;
 use crate::app::AppInner;
 use crate::cookies::Cookies;
 use crate::error::{Error, ErrorKind, Result};
@@ -27,15 +36,9 @@ use crate::response::Response;
 
 pub const FLASH_COOKIE: &str = "nr_flash";
 
-/// Stable URL-safe hash of an action id.
-pub fn action_hash(id: &str) -> String {
-    next_rust_assets::content_hash(id.as_bytes())
-}
-
-/// URL of an action.
-pub fn action_url(id: &str) -> String {
-    format!("/_nr/action/{}", action_hash(id))
-}
+/// Shown when an action link is expired, copied from another browser or
+/// minted by a server with a different secret.
+const STALE_MESSAGE: &str = "This page is out of date. Reload it and try again.";
 
 /// Request data available to actions declared as `fn(ctx: ActionContext, input: T)`.
 #[derive(Clone)]
@@ -51,19 +54,76 @@ impl ActionContext {
     }
 }
 
-pub(crate) async fn handle(inner: &AppInner, req: Request) -> Response {
+pub(crate) async fn handle(inner: &AppInner, mut req: Request) -> Response {
     if req.method() != http::Method::POST {
         return Response::text("Method Not Allowed").with_status(405).with_header("allow", "POST");
     }
-    let hash = req.path().trim_start_matches("/_nr/action/");
-    let Some(&index) = inner.actions.get(hash) else {
-        return Response::text("Unknown server action").with_status(404);
-    };
-    if inner.config.security.csrf != CsrfMode::Off && !same_origin(&req, &inner.config.security.allowed_origins) {
+    let security = &inner.config.security;
+    if security.csrf != CsrfMode::Off && !same_origin(&req, &security.allowed_origins) {
         crate::log::warn("server action rejected: cross-origin request");
         return Response::text("Forbidden: cross-origin server action").with_status(403);
     }
-    (inner.routes.actions[index].handler)(req).await
+    let token = req.path().trim_start_matches("/_nr/action/");
+    let binding = action_token::binding(req.cookies());
+    let found = action_token::verify(token, binding.as_deref())
+        .and_then(|key| inner.actions.get(&key).copied().ok_or(action_token::Rejection::Forged));
+    let index = match found {
+        Ok(index) => index,
+        Err(reason) => {
+            match reason {
+                action_token::Rejection::Expired => crate::log::debug("server action rejected: expired token"),
+                other => crate::log::warn(&format!("server action rejected: {}", other.as_str())),
+            }
+            return stale(&req);
+        }
+    };
+    if let Some(res) = check_content_type(&req) {
+        return res;
+    }
+    if security.csrf == CsrfMode::Token && !double_submit_ok(&mut req).await {
+        crate::log::warn("server action rejected: missing or invalid CSRF token");
+        return Response::text("Invalid CSRF token").with_status(403);
+    }
+    let mut res = (inner.routes.actions[index].handler)(req).await;
+    res.set_header("cache-control", "no-store");
+    res
+}
+
+/// Mint a URL for action `id` bound to `binding` (used by [`crate::TestClient`]).
+pub(crate) fn signed_url(id: &str, binding: &str, ttl: u64) -> String {
+    format!("/_nr/action/{}", action_token::mint(&action_token::action_key(id), binding, ttl))
+}
+
+fn stale(req: &Request) -> Response {
+    let res = if wants_json(req) {
+        Response::json(&serde_json::json!({ "ok": false, "error": STALE_MESSAGE, "code": "nr_stale" })).with_status(403)
+    } else {
+        // Plain form post: show the message on the page it came from.
+        flash_back(req, &[], BTreeMap::new(), Some(STALE_MESSAGE.to_owned()))
+    };
+    res.with_header("cache-control", "no-store")
+}
+
+fn check_content_type(req: &Request) -> Option<Response> {
+    let ct = req.header("content-type")?;
+    let base = ct.split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+    match base.as_str() {
+        "application/json" | "application/x-www-form-urlencoded" => None,
+        b if b.starts_with("multipart/") => Some(
+            Response::text("multipart bodies are not supported by server actions; use an API route").with_status(415),
+        ),
+        _ => Some(Response::text("Unsupported Media Type").with_status(415)),
+    }
+}
+
+async fn double_submit_ok(req: &mut Request) -> bool {
+    let Some(cookie) = req.cookies().get(crate::CSRF_COOKIE) else { return false };
+    let provided = match req.header("x-csrf-token") {
+        Some(v) => Some(v.to_owned()),
+        None if is_form(req) => crate::middleware::form_field(req, "_csrf").await,
+        None => None,
+    };
+    provided.is_some_and(|p| crate::constant_time_eq(cookie.as_bytes(), p.as_bytes()))
 }
 
 /// `true` unless a browser signals a cross-site request.
@@ -267,7 +327,7 @@ where
 ///
 /// As a part of `form![..]` it sets `method="post"` and the action URL, so
 /// the form works without JavaScript and is enhanced when the client runtime
-/// is loaded.
+/// is loaded. The URL is different for every visitor and page view.
 #[derive(Debug, Clone, Copy)]
 pub struct ActionRef {
     pub id: &'static str,
@@ -278,8 +338,17 @@ impl ActionRef {
         ActionRef { id }
     }
 
+    /// Placeholder URL for rendered HTML. Every HTML response replaces it
+    /// with a URL signed for the visitor, so it only works inside a page.
     pub fn url(&self) -> String {
-        action_url(self.id)
+        action_token::marker_url(self.id)
+    }
+}
+
+/// `on_press = action!(save)` on UI components.
+impl From<ActionRef> for next_rust_ui::Press {
+    fn from(action: ActionRef) -> Self {
+        next_rust_ui::Press::action(action.url())
     }
 }
 

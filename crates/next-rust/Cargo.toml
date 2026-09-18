@@ -27,6 +27,8 @@ next-rust-view.workspace = true
 next-rust-cache.workspace = true
 next-rust-server = { workspace = true, default-features = false }
 next-rust-macros.workspace = true
+next-rust-ui.workspace = true
+next-rust-icons.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 

@@ -1,4 +1,4 @@
-use next_rust::{TestClient, action_url, http};
+use next_rust::{TestClient, http};
 
 fn signed_in() -> http::Request<next_rust::bytes::Bytes> {
     http::Request::get("/dashboard").header("cookie", "user=ada").body(Default::default()).unwrap()
@@ -57,7 +57,7 @@ async fn error_boundary_contains_failures() {
 #[tokio::test]
 async fn login_action_with_validation() {
     let client = TestClient::new(example_dashboard::routes());
-    let url = action_url("app/(auth)/login/page.rs::login");
+    let url = client.action_url("app/(auth)/login/page.rs::login");
     let res = client.post_form(&url, "username=").await;
     assert_eq!(res.status, 303);
     let page = client.get("/login").await;

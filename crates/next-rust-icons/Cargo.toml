@@ -1,0 +1,21 @@
+[package]
+name = "next-rust-icons"
+description = "Every Lucide icon (lucide.dev) as a customizable Next Rust component."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# Next Rust's license for the code; the icon artwork is Lucide's (ISC, see LICENSE-LUCIDE).
+license = "(MIT OR Apache-2.0) AND ISC"
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["next-rust", "icons", "lucide", "svg", "web"]
+categories = ["web-programming", "multimedia::images"]
+readme = "../../README.md"
+include = ["src/**", "examples/**", "tests/**", "Cargo.toml", "LICENSE-LUCIDE"]
+
+[dependencies]
+next-rust-view.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true

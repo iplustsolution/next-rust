@@ -31,9 +31,33 @@ pub(crate) fn runtime_version(dev: bool) -> &'static str {
     cell.get_or_init(|| next_rust_assets::content_hash(runtime_js(dev).as_bytes())[..10].to_owned())
 }
 
+fn ui_js(dev: bool) -> &'static str {
+    if dev { next_rust_ui::UI_JS } else { next_rust_ui::UI_JS_MIN }
+}
+
+/// Cache-busting version of `/_nr/ui.js`.
+pub(crate) fn ui_version(dev: bool) -> &'static str {
+    static DEV: OnceLock<String> = OnceLock::new();
+    static PROD: OnceLock<String> = OnceLock::new();
+    let cell = if dev { &DEV } else { &PROD };
+    cell.get_or_init(|| next_rust_assets::content_hash(ui_js(dev).as_bytes())[..10].to_owned())
+}
+
 pub(crate) async fn handle(inner: &AppInner, req: &Request) -> Option<Response> {
     let path = req.path();
     match path {
+        "/_nr/ui.js" => {
+            let cc = if req.query_string().starts_with("v=") && !inner.env.is_dev() {
+                "public, max-age=31536000, immutable"
+            } else {
+                "no-cache"
+            };
+            Some(
+                Response::text(ui_js(inner.env.is_dev()))
+                    .with_content_type("text/javascript; charset=utf-8")
+                    .with_cache_control(cc),
+            )
+        }
         "/_nr/runtime.js" => {
             let cc = if req.query_string().starts_with("v=") && !inner.env.is_dev() {
                 "public, max-age=31536000, immutable"

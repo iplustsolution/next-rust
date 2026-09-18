@@ -175,9 +175,11 @@ impl App {
 
         if config.logging.requests(self.environment()) && !path.starts_with("/_nr/dev/") {
             let id = res.header("x-request-id").map(str::to_owned);
+            // Action URLs carry per-visitor tokens: keep them out of logs.
+            let logged = if path.starts_with("/_nr/action/") { "/_nr/action/…" } else { path.as_str() };
             crate::log::request(
                 method.as_str(),
-                &path,
+                logged,
                 res.status.as_u16(),
                 start.elapsed().as_secs_f64() * 1000.0,
                 id.as_deref(),

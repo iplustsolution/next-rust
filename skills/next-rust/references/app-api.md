@@ -14,6 +14,7 @@ Verified against Next Rust 0.1.7. Signatures are copy-paste accurate. Search for
 - [API routes: Request and Response](#api-routes-request-and-response)
 - [Cookies, sessions, CSRF](#cookies-sessions-csrf)
 - [Server actions and forms](#server-actions-and-forms)
+- [UI components](#ui-components)
 - [Client interactivity](#client-interactivity)
 - [Metadata, sitemap, robots](#metadata-sitemap-robots)
 - [Rendering modes, ISR and caching](#rendering-modes-isr-and-caching)
@@ -261,8 +262,17 @@ then `Extension<Session>` with `get`, `insert`, `remove`, `regenerate`, `destroy
 ```
 
 At most two arguments (`NR0210`), no `self`, sync allowed. Discovered in `app/` and `src/`. Served at
-`POST /_nr/action/<hash>`; reference one from a view with `action!(path::to::fn)`, which sets `action`,
+`POST /_nr/action/<token>`; reference one from a view with `action!(path::to::fn)`, which sets `action`,
 `method="post"` and `data-nr-action` on the `<form>`.
+
+Action URLs are never fixed. `action!(f)` / `ActionRef::url()` render a placeholder, and every HTML response
+replaces it with a token signed (HMAC-SHA256) under `NEXT_RUST_SECRET` (32+ bytes; set it in production, or
+links break on restart and across instances), expiring after `[security] action_token_ttl`, and bound to the
+visitor's `HttpOnly`, `SameSite=Strict` binding cookie (`__Host-nr_bind`, `nr_bind` in development). Copied,
+expired, tampered or guessed URLs get 403 before the action runs. So: never build action URLs by hand, never
+return `.url()` from a JSON API, and still check authentication/authorization inside the action (tokens prove
+"this browser loaded a page", not "who the user is"). Pages with action URLs are sent `private, no-store`.
+Only `application/json` and `application/x-www-form-urlencoded` bodies are accepted.
 
 Without JavaScript: success redirects (303) to the `_redirect` field or the referrer; a validation error
 redirects back with a 60-second flash cookie that the `FormState` extractor consumes once. Fields starting
@@ -271,6 +281,51 @@ with `_` or containing `password`/`token` are never echoed back.
 With JavaScript: `{"ok":true,"data":…}` / `{"ok":false,"errors":{…}}` (422) / `{"ok":false,"redirect":"/…"}`.
 Elements with `data-nr-error="field"` are filled in automatically; the form gets `aria-busy` while submitting
 and dispatches `nr:success` / `nr:error`.
+
+## UI components
+
+`use next_rust::ui::*;` (crate `next-rust-ui`). Every component is a builder with a same-named macro:
+`key = value` sets a property, anything else is added like in an element macro (`class(..)`, `id(..)`,
+`aria(..)`, `data(..)`, children). Every property is optional.
+
+```rust
+Button![color = Color::Danger, variant = Variant::Bordered, size = Size::Sm, "Delete"]   // primary/solid/md by default
+Button![submit = true, full_width = true, "Save"]    // type="submit"; `type="button"` otherwise
+Button![href = "/x", "Go"]                           // a link (client-side navigation)
+Button![on_press = action!(like), "Like"]            // or Press::from(action!(like)).input(&v).no_refresh(),
+                                                     // Press::navigate("/x"), Press::emit("name"), Press::script("js")
+Input![name = "email", label = "Email", kind = "email", value = form.value("email"), error_message = form.error("email")]
+PasswordInput![name = "password", label = "Password", new_password = true]
+Textarea![label = "Message", rows = 4]
+Select![name = "plan", label = "Plan", placeholder = "Choose", SelectItem![value = "pro", description = "Teams", "Pro"]]
+Select![multiple = true, values = ["a"], [("a", "A"), ("b", "B")]]
+DatePicker![name = "day", label = "Day", min = "2026-01-01", max = "2026-12-31", first_day_of_week = 1]   // ISO values
+Checkbox![name = "terms", required = true, "I agree"]   Switch![checked = true, "Wi-Fi"]
+RadioGroup![name = "plan", value = "pro", Radio![value = "free", "Free"], Radio![value = "pro", "Pro"]]
+Avatar![src = url, name = "Ada Lovelace"]   AvatarGroup![max = 3, total = 10, avatars…]
+Card![CardHeader![..], CardBody![..], CardFooter![..]]   Chip![color = Color::Success, dot = true, "Online"]
+Spinner![]   Divider![]   Container![width = Width::Lg, ..]   Stack![row = true, gap = 4, align = Align::Center, ..]
+Grid![cols = 3, ..]   AppShell![navbar = Navbar![brand = .., menu_toggle = true, NavbarItem![href = "/", "Home"]],
+                                sidebar = Sidebar![SidebarItem![href = "/", "Home"]], children]
+```
+
+Icons: every Lucide icon as `next_rust::icons::PascalName()` (`icons::ArrowRight()`, former names like
+`icons::Home()` too), returning an `Icon` with `.size(24 | "1.25em")`, `.color(..)`, `.stroke_width(2.0)`,
+`.absolute_stroke_width(true)`, `.fill(..)`, `.title(..)` (else `aria-hidden`), `.class(..)`, `.unstyled(true)`,
+`.with(attr)`; `icons::by_name("house")` for names from data. Use them in `start_content`/`end_content`.
+
+Common properties: `color` (`Color::{Default, Primary, Secondary, Success, Warning, Danger}`), `size`
+(`Size::{Sm, Md, Lg}`), `radius` (`Radius::{None, Sm, Md, Lg, Full}`), `variant` (`Variant::…` for buttons and
+chips, `FieldVariant::{Flat, Bordered, Faded, Underlined}` for fields), `label_placement`
+(`LabelPlacement::{Inside, Outside, OutsideLeft}`), `class`, `unstyled`. Fields also take `label_class`,
+`wrapper_class`, `input_class`, `description_class`, `error_class`; their non-class attributes go to the control.
+
+Styling: default classes (`nr-*`) live in the CSS `components` layer, so any class you add (Tailwind or your own
+CSS) wins without `!important`. Theme with CSS variables on `:root` (`--nr-primary`, `--nr-radius-md`,
+`--nr-font`, ...); dark mode follows the system or `class="dark"`/`data-theme="dark"`. Fields with a `name`
+render `data-nr-error=name`, so server-action validation errors appear under them. Interactive components load
+`/_nr/ui.js` only on pages that use them and fall back to native controls without it. Select and date-picker
+popovers render in the browser's top layer (never clipped by `overflow: hidden`).
 
 ## Client interactivity
 
@@ -426,7 +481,7 @@ let res = client.get("/blog/hello").await;
 res.status; res.text; res.header("x-nr-cache"); res.json::<T>(); res.cookies(); res.chunks;
 client.get_with_headers("/", &[("accept-language", "de")]).await;
 client.post_json("/api/users", &body).await;
-client.post_form("/_nr/action/<hash>", "email=a%40b.c").await;
+client.post_form(&client.action_url("src/actions.rs::signup"), "email=a%40b.c").await;  // signed for this client
 client.navigate("/blog", &previous_html).await;   // client-side navigation, partial rendering
 client.app().export().await;                      // pre-render every static page
 next_rust::layout_keys(&res.text);                // which layouts were rendered

@@ -50,7 +50,7 @@ async fn api_and_cookies() {
     let todo: serde_json::Value = created.json();
 
     // Cookies set by responses are sent on later requests.
-    client.post_form("/_nr/action/…", "username=ada").await;
+    client.post_form(&client.action_url("app/login/page.rs::login"), "username=ada").await;
 
     let req = http::Request::delete(format!("/api/todos/{}", todo["id"])).body(Default::default()).unwrap();
     assert_eq!(client.send(req).await.status, 204);
@@ -89,10 +89,8 @@ async fn api_and_cookies() {
             ],
             li![
                 "Action URLs: ",
-                code!["next_rust::action_url(\"src/actions.rs::create_user\")"],
-                ", or ",
-                code!["action!(create_user).url()"],
-                " from the crate.",
+                code!["client.action_url(\"src/actions.rs::create_user\")"],
+                " signs a URL for that client, like the pages it loads do. You can also take the URL from a page the client fetched.",
             ],
         ],
         h2![

@@ -91,8 +91,8 @@ fn links_and_images() {
     assert!(html.contains("srcset=\"/_nr/image?url=%2Fhero.jpg&amp;w=640&amp;q=75 640w, /_nr/image?url=%2Fhero.jpg&amp;w=750&amp;q=75 750w, /_nr/image?url=%2Fhero.jpg&amp;w=800&amp;q=75 800w\""), "{html}");
 }
 
-static SHEET: Stylesheet = Stylesheet { id: "abc", css: ".card_1{color:red}" };
-static GLOBAL: Stylesheet = Stylesheet { id: "glob", css: "body{margin:0}" };
+static SHEET: Stylesheet = Stylesheet { id: "abc", css: ".card_1{color:red}", per_class: None };
+static GLOBAL: Stylesheet = Stylesheet { id: "glob", css: "body{margin:0}", per_class: None };
 
 #[test]
 fn stylesheets_are_deduplicated() {

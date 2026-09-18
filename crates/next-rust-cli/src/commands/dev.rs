@@ -137,7 +137,7 @@ fn rebuild(info: &ProjectInfo, status_file: &Path, port: &str, child: &mut Optio
         eprintln!("{}", w.render(ui::color()));
     }
 
-    match project::cargo_build(info, false, true) {
+    match project::cargo_build(info, false, false) {
         Ok(exe) => {
             if let Some(mut old) = child.take() {
                 let _ = old.kill();

@@ -49,9 +49,9 @@ fn page_a(_ctx: Ctx) -> R {
     Box::pin(async { Ok(h1!["Page A"].into_node()) })
 }
 /// Stands in for the generated Tailwind CSS.
-static APP_CSS: Stylesheet = Stylesheet { id: "tw-app", css: ".p-4{padding:1rem}" };
+static APP_CSS: Stylesheet = Stylesheet { id: "tw-app", css: ".p-4{padding:1rem}", per_class: None };
 static APP_STYLESHEETS: &[&Stylesheet] = &[&APP_CSS];
-static PAGE_B_CSS: Stylesheet = Stylesheet { id: "pagebcss", css: "h1{color:red}" };
+static PAGE_B_CSS: Stylesheet = Stylesheet { id: "pagebcss", css: "h1{color:red}", per_class: None };
 fn page_b(_ctx: Ctx) -> R {
     Box::pin(async { Ok(fragment![&PAGE_B_CSS, h1!["Page B"]]) })
 }

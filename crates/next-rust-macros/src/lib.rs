@@ -417,7 +417,7 @@ pub fn css_module(input: TokenStream) -> TokenStream {
     quote! {{
         const _: &[u8] = include_bytes!(#abs);
         #track
-        static __NR_SHEET: ::next_rust::Stylesheet = ::next_rust::Stylesheet { id: #id, css: #css };
+        static __NR_SHEET: ::next_rust::Stylesheet = ::next_rust::Stylesheet { id: #id, css: #css, per_class: None };
         #[allow(non_camel_case_types, dead_code)]
         #[derive(Clone, Copy)]
         struct __NrCssModule { #(#fields,)* }
@@ -448,7 +448,7 @@ pub fn global_css(input: TokenStream) -> TokenStream {
     quote! {{
         const _: &[u8] = include_bytes!(#abs);
         #track
-        static __NR_SHEET: ::next_rust::Stylesheet = ::next_rust::Stylesheet { id: #id, css: #css };
+        static __NR_SHEET: ::next_rust::Stylesheet = ::next_rust::Stylesheet { id: #id, css: #css, per_class: None };
         &__NR_SHEET
     }}
     .into()

@@ -129,6 +129,12 @@ pub const SECTIONS: &[Section] = &[
                 "Tailwind CSS",
                 "Style with Tailwind classes. Built in: no Node.js, no CSS files, your theme in next-rust.toml."
             ),
+            doc!(
+                "components",
+                components,
+                "UI components",
+                "Buttons, fields, select, date picker, toggles, avatars, cards and layout, ready to use."
+            ),
             doc!("caching", caching, "Caching", "The data cache, the page store, revalidation and custom stores."),
         ],
     },

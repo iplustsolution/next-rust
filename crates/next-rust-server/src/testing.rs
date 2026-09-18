@@ -130,6 +130,26 @@ impl TestClient {
         TestResponse { status, headers, text: chunks.concat(), chunks }
     }
 
+    /// URL of server action `id` (`"src/actions.rs::create_user"`), signed
+    /// for this client like the URLs in the pages it loads. Adds the binding
+    /// cookie to the client's jar when it has none yet.
+    pub fn action_url(&self, id: &str) -> String {
+        // Test requests are plain HTTP (`Request::from_http`): no `__Host-` prefix.
+        let name = crate::action_token::BIND_COOKIE;
+        let binding = {
+            let mut jar = self.cookies.lock().unwrap_or_else(|e| e.into_inner());
+            match jar.iter().find(|(k, _)| k == name) {
+                Some((_, v)) => v.clone(),
+                None => {
+                    let v = crate::random_hex(32);
+                    jar.push((name.to_owned(), v.clone()));
+                    v
+                }
+            }
+        };
+        crate::actions::signed_url(id, &binding, self.app.config().security.action_token_ttl)
+    }
+
     pub async fn get(&self, uri: &str) -> TestResponse {
         self.send(http::Request::get(uri).body(Bytes::new()).expect("valid request")).await
     }

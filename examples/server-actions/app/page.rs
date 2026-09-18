@@ -22,6 +22,7 @@ pub fn Page(form: FormState) -> impl View {
             small![data("nr-error", "name"), form.error("name").unwrap_or_default().to_owned()],
             label!["Message ", textarea![name("message"), form.value("message").to_owned()]],
             small![data("nr-error", "message"), form.error("message").unwrap_or_default().to_owned()],
+            p![data("nr-error", "_form"), form.message.clone().unwrap_or_default()],
             button![r#type("submit"), "Sign"],
         ],
         EntryCounter(entries.len(), action!(actions::count_entries).url()),

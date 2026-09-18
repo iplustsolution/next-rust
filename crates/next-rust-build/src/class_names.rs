@@ -84,6 +84,26 @@ pub fn shorten(css: &str, config: &Config, seed: u64) -> Shortened {
     Shortened { css, names: map.into_iter().collect() }
 }
 
+/// Utility classes of `css` that code the renderer never sees may add
+/// (scripts and HTML in `client/`, `public/`, extra Tailwind sources), plus
+/// `[tailwind] keep_classes` and `safelist`. Pages always get their rules.
+pub fn outside_classes(css: &str, config: &Config) -> Vec<String> {
+    let outside = outside_texts(config);
+    let mut classes: BTreeSet<String> = next_rust_assets::css::class_selectors(css)
+        .leading
+        .into_iter()
+        .filter(|class| outside.iter().any(|text| contains_class(text, class)))
+        .collect();
+    classes.extend(config.tailwind.keep_classes.iter().cloned());
+    classes.extend(config.tailwind.safelist.iter().cloned());
+    classes.into_iter().collect()
+}
+
+/// A list of strings as a Rust expression of type `&[&str]`.
+pub fn list_source(items: &[String]) -> String {
+    format!("&{items:?}")
+}
+
 /// The renaming table as a Rust expression of type `&[(&str, &str)]`.
 pub fn table_source(names: &[(String, String)]) -> String {
     let mut out = String::from("&[\n");
@@ -245,6 +265,9 @@ mod tests {
         assert_eq!(out.css, expected);
         // Another seed, other names.
         assert_ne!(shorten(css, &config, 43).names, out.names);
+        // Pages always get the rules of classes scripts add, and kept ones.
+        assert_eq!(outside_classes(css, &config), ["is-open", "kept"]);
+        assert_eq!(list_source(&outside_classes(css, &config)), r#"&["is-open", "kept"]"#);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -436,7 +436,9 @@ pub(crate) fn document_response(
     body: Node,
     streaming: bool,
 ) -> Response {
-    document_response_with(inner, ctx, metadata, body, streaming, Vec::new())
+    // Client navigations keep the styles the page already has.
+    let known = if ctx.headers.get("x-nr-nav").is_some_and(|v| v == "1") { known_styles(ctx) } else { Vec::new() };
+    document_response_with(inner, ctx, metadata, body, streaming, known)
 }
 
 /// Point icons from `public/` at a versioned URL (`/logo.svg?v=<hash>`) that
@@ -511,10 +513,18 @@ fn document_response_with(
                     json.replace("</", "<\\/")
                 ));
             }
-            if flags.islands || (flags.links && client_nav) {
+            // UI components call actions and navigate through the runtime.
+            if flags.islands || flags.ui || (flags.links && client_nav) {
                 t.push_str(&format!(
                     "<script type=\"module\" src=\"/_nr/runtime.js?v={}\" nonce=\"{}\"></script>",
                     crate::internal::runtime_version(dev),
+                    escape_attr(&tail_nonce)
+                ));
+            }
+            if flags.ui {
+                t.push_str(&format!(
+                    "<script type=\"module\" src=\"/_nr/ui.js?v={}\" nonce=\"{}\"></script>",
+                    crate::internal::ui_version(dev),
                     escape_attr(&tail_nonce)
                 ));
             }
@@ -695,14 +705,23 @@ async fn serve_static(
     partial: Option<(usize, String)>,
 ) -> Response {
     let res = serve_static_full(inner, index, req, nonce).await;
-    let Some((_, key)) = partial else { return res };
-    if res.status != http::StatusCode::OK {
+    // Client navigations: the browser reports the styles it has, so cached
+    // pages send only the CSS it is missing.
+    let known: Vec<&str> =
+        req.header("x-nr-styles").map(|v| v.split(',').map(str::trim).take(256).collect()).unwrap_or_default();
+    if res.status != http::StatusCode::OK || (partial.is_none() && known.is_empty()) {
         return res;
     }
     let cache = res.headers.get("x-nr-cache").cloned();
-    let html = res.into_text().await;
-    let known: Vec<&str> =
-        req.header("x-nr-styles").map(|v| v.split(',').map(str::trim).take(256).collect()).unwrap_or_default();
+    let html = next_rust_view::restyle_document(&res.into_text().await, inner.routes.stylesheets, &known);
+    let Some((_, key)) = partial else {
+        let mut out =
+            Response::html(html).with_cache_control("private, no-cache, no-store, max-age=0, must-revalidate");
+        if let Some(c) = cache {
+            out.headers.insert("x-nr-cache", c);
+        }
+        return out;
+    };
     match slice_partial(&html, &key, &known) {
         Some(region) => {
             let mut out = Response::html(region);

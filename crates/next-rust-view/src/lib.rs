@@ -26,6 +26,7 @@
 pub mod attrs;
 pub mod class_names;
 pub mod components;
+mod css_split;
 mod escape;
 pub mod metadata;
 mod node;
@@ -35,6 +36,7 @@ mod tags;
 
 pub use attrs::*;
 pub use components::{Children, ImageProps, LinkProps, Slots, each, fragment_of, island, raw_html, suspense, when};
+pub use css_split::restyle_document;
 pub use escape::{escape_attr, escape_text, is_safe_url};
 pub use metadata::Metadata;
 pub use node::{Attr, AttrValue, Element, IntoViewResult, Node, Part, Suspense, View};

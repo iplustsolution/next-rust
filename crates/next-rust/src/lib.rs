@@ -43,6 +43,12 @@ pub use next_rust_router::{ParamValue, Params};
 pub use next_rust_server::*;
 pub use next_rust_view::*;
 
+/// Ready-made components: `use next_rust::ui::*;` (see [`next_rust_ui`]).
+pub use next_rust_ui as ui;
+
+/// Every Lucide icon: `icons::House().size(20)` (see [`next_rust_icons`]).
+pub use next_rust_icons as icons;
+
 /// Re-exported crates for advanced use.
 pub mod deps {
     pub use next_rust_cache as cache;

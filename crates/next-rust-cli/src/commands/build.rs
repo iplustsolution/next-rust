@@ -83,7 +83,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         Err(report) => {
             live.fail("Compiling", &ui::red("failed"));
             eprintln!();
-            eprintln!("{report}");
+            eprintln!("{}", unmap_diagnostic_paths(&report));
             return Err("compilation failed".into());
         }
     };
@@ -101,7 +101,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     live.finish("Compiled", &compiled);
     if !warnings.is_empty() {
         eprintln!();
-        eprint!("{warnings}");
+        eprint!("{}", unmap_diagnostic_paths(&warnings));
         eprintln!();
     }
 
@@ -392,7 +392,7 @@ fn release_env(info: &ProjectInfo) -> Vec<(String, String)> {
     if let Some(cargo_home) = cargo_home {
         remap(cargo_home, "cargo");
     }
-    remap(info.root.clone(), "app");
+    remap(info.root.clone(), PROJECT_ALIAS);
     // Generated code (routes) lives in Cargo's target directory.
     remap(info.target_dir.clone(), "target");
     envs.push(("CARGO_ENCODED_RUSTFLAGS".into(), flags.join("\x1f")));
@@ -424,4 +424,44 @@ fn check_binary(bin: &Path) -> Result<serde_json::Value, (String, String)> {
     }
     let stdout = String::from_utf8_lossy(&output.stdout);
     Ok(stdout.lines().last().and_then(|l| serde_json::from_str(l).ok()).unwrap_or(serde_json::Value::Null))
+}
+
+/// What [`release_env`] renames the project directory to.
+const PROJECT_ALIAS: &str = "app";
+
+/// Diagnostics of a release build name files as `app/<path>` (see
+/// [`release_env`]). Show them relative to the project again, so
+/// `app/app/page.rs` reads (and is clickable) as `app/page.rs`.
+fn unmap_diagnostic_paths(rendered: &str) -> String {
+    let alias = format!("{PROJECT_ALIAS}/");
+    let mut out = String::with_capacity(rendered.len());
+    let mut rest = rendered;
+    while let Some(at) = ["--> ", "::: "].iter().filter_map(|m| rest.find(m)).min() {
+        let (head, tail) = rest.split_at(at + 4);
+        out.push_str(head);
+        // Colored output puts a reset sequence between the arrow and the path.
+        let ansi = tail.len()
+            - tail.trim_start_matches(|c: char| c == '\x1b' || c == '[' || c.is_ascii_digit() || c == 'm').len();
+        out.push_str(&tail[..ansi]);
+        rest = tail[ansi..].strip_prefix(alias.as_str()).unwrap_or(&tail[ansi..]);
+    }
+    out.push_str(rest);
+    out
+}
+
+#[cfg(test)]
+mod unmap_tests {
+    use super::unmap_diagnostic_paths;
+
+    #[test]
+    fn project_paths_are_shown_relative_to_the_project() {
+        assert_eq!(unmap_diagnostic_paths("  --> app/app/page.rs:2:5\n"), "  --> app/page.rs:2:5\n");
+        assert_eq!(
+            unmap_diagnostic_paths("  \x1b[1m\x1b[94m--> \x1b[0mapp/src/lib.rs:1:1"),
+            "  \x1b[1m\x1b[94m--> \x1b[0msrc/lib.rs:1:1"
+        );
+        assert_eq!(unmap_diagnostic_paths("   ::: app/src/x.rs:3:1"), "   ::: src/x.rs:3:1");
+        assert_eq!(unmap_diagnostic_paths("  --> ~/.cargo/x.rs:1:1"), "  --> ~/.cargo/x.rs:1:1");
+        assert_eq!(unmap_diagnostic_paths("no paths here"), "no paths here");
+    }
 }

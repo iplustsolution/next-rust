@@ -371,7 +371,7 @@ async fn csrf_check(mut req: Request, next: Next) -> Response {
     next.run(req).await
 }
 
-async fn form_field(req: &mut Request, name: &str) -> Option<String> {
+pub(crate) async fn form_field(req: &mut Request, name: &str) -> Option<String> {
     let bytes = req.bytes().await.ok()?;
     let fields: Vec<(String, String)> = serde_urlencoded::from_bytes(&bytes).ok()?;
     fields.into_iter().find(|(k, _)| k == name).map(|(_, v)| v)

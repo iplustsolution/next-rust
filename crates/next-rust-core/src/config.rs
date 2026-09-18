@@ -419,11 +419,20 @@ pub struct SecurityConfig {
     pub hsts_max_age: u64,
     /// Additional origins allowed to invoke server actions.
     pub allowed_origins: Vec<String>,
+    /// Seconds a server-action URL stays valid after the page was served.
+    pub action_token_ttl: u64,
 }
 
 impl Default for SecurityConfig {
     fn default() -> Self {
-        Self { headers: true, csp: None, csrf: CsrfMode::Origin, hsts_max_age: 0, allowed_origins: Vec::new() }
+        Self {
+            headers: true,
+            csp: None,
+            csrf: CsrfMode::Origin,
+            hsts_max_age: 0,
+            allowed_origins: Vec::new(),
+            action_token_ttl: 60 * 60 * 12,
+        }
     }
 }
 
@@ -433,9 +442,11 @@ pub enum CsrfMode {
     /// Verify `Origin`/`Sec-Fetch-Site` against the request host (default).
     #[default]
     Origin,
-    /// Additionally require a double-submit token.
+    /// Additionally require a double-submit token (`nr_csrf` cookie echoed in
+    /// `x-csrf-token` or a `_csrf` field).
     Token,
-    /// Disable (not recommended).
+    /// Skip the origin check (not recommended). Signed action URLs are
+    /// always verified.
     Off,
 }
 

@@ -7,6 +7,7 @@ pub mod benchmarks;
 pub mod caching;
 pub mod cli;
 pub mod client;
+pub mod components;
 pub mod configuration;
 pub mod deployment;
 pub mod diagnostics;

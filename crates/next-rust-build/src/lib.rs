@@ -196,8 +196,7 @@ impl Generator {
             };
         println!("cargo:rerun-if-env-changed=NEXT_RUST_MINIFY_CLASSES");
         println!("cargo:rerun-if-env-changed=NEXT_RUST_CLASS_SEED");
-        let class_names =
-            if tailwind { generate_tailwind(&config, &out_dir, minify_html, minify_classes)? } else { None };
+        let class_names = if tailwind { generate_tailwind(&config, &out_dir, minify_classes)? } else { None };
         let mut code = generate_code_with(&project, CodegenOptions { minify_html, embed_files, tailwind, class_names });
         for p in &self.plugins {
             if let Some(extra) = p.extra_code(&project) {
@@ -213,12 +212,7 @@ impl Generator {
 
 /// Compile Tailwind CSS for the app into `$OUT_DIR` (the stylesheet and its id).
 /// Returns the class name seed when classes were shortened.
-fn generate_tailwind(
-    config: &Config,
-    out_dir: &Path,
-    minify: bool,
-    minify_classes: bool,
-) -> Result<Option<u64>, String> {
+fn generate_tailwind(config: &Config, out_dir: &Path, minify_classes: bool) -> Result<Option<u64>, String> {
     println!("cargo:rerun-if-env-changed=NEXT_RUST_TAILWIND_BIN");
     for dir in tailwind::scanned_dirs(config) {
         println!("cargo:rerun-if-changed={}", dir.display());
@@ -226,12 +220,15 @@ fn generate_tailwind(
     // `next-rust dev` / `build` download the engine with a progress bar
     // first; a plain `cargo build` downloads it here, silently.
     let bin = tailwind::ensure(&mut |_, _| {})?;
-    let mut css = tailwind::compile(&bin, config, out_dir, minify)?;
+    // Always minified: browser devtools format CSS on their own, so readable
+    // output in development would only cost bytes.
+    let mut css = tailwind::compile(&bin, config, out_dir, true)?;
+    // Before renaming: these classes keep their names.
+    let keep = class_names::outside_classes(&css, config);
+    write_if_changed(&out_dir.join("next_rust_tailwind_keep.rs"), class_names::list_source(&keep).as_bytes())
+        .map_err(|e| e.to_string())?;
     let mut seed = None;
     if minify_classes {
-        if !minify {
-            css = next_rust_assets::css::minify(&css);
-        }
         let build_seed = class_names::seed();
         let shortened = class_names::shorten(&css, config, build_seed);
         css = shortened.css;

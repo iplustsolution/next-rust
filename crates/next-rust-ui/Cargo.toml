@@ -1,0 +1,25 @@
+[package]
+name = "next-rust-ui"
+description = "Ready-made, themeable UI components for Next Rust: buttons, inputs, select, date picker, avatars, cards and layout."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["next-rust", "ui", "components", "ssr", "web"]
+categories = ["web-programming", "gui"]
+readme = "../../README.md"
+
+[dependencies]
+next-rust-view.workspace = true
+next-rust-icons.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+
+[build-dependencies]
+next-rust-assets.workspace = true
+
+[dev-dependencies]
+next-rust-assets.workspace = true

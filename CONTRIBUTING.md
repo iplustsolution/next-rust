@@ -60,6 +60,13 @@ outside the repository:
 npx terser runtime.js --module --compress passes=3 --mangle toplevel=true -o runtime.min.js
 ```
 
+The UI components are Rust only as well: their browser script is `UI_JS` /
+`UI_JS_MIN` in `crates/next-rust-ui/src/script.rs` (regenerate the minified
+copy the same way and update `UI_JS_SOURCE_HASH`), and their styles are
+`UI_CSS_SOURCE` in `crates/next-rust-ui/src/style.rs`, minified by the crate's
+`build.rs`. Every rule there must start with a class the components render
+(pages only receive those rules); `tests/components.rs` checks it.
+
 Paste the output into `RUNTIME_JS_MIN` and update `RUNTIME_JS_SOURCE_HASH`
 (the failing test prints the expected value). The tests check that the two
 stay in sync and that the minified copy keeps the public attribute and header

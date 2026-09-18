@@ -106,6 +106,7 @@ csp = "default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' '
 csrf = "origin"              # origin | token | off (server actions)
 hsts_max_age = 0             # e.g. 31536000 when served only over HTTPS
 allowed_origins = []         # extra origins allowed to call server actions
+action_token_ttl = 43200     # seconds a server-action URL stays valid (secret: NEXT_RUST_SECRET)
 
 [env]
 public_prefix = "NEXT_RUST_PUBLIC_"

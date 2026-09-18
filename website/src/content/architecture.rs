@@ -153,7 +153,7 @@ cargo/rustc  ── type checks every page against its extractors ──▶ serv
           ├─ pre-routing: base path, /_nr/* framework assets, [[redirects]], trailing slash
           ├─ global middleware stack (App::middleware + plugins + app/middleware.rs)
           │   └─ RouteEndpoint::dispatch
-          │       ├─ /_nr/action/* → CSRF check → action handler
+          │       ├─ /_nr/action/* → origin check → signed token → action handler
           │       ├─ sitemap.xml / robots.txt generators
           │       ├─ intercepting routes (soft navigation headers)
           │       ├─ trie match → page | API | programmatic route
@@ -277,6 +277,12 @@ cargo/rustc  ── type checks every page against its extractors ──▶ serv
                         td!["server"],
                         td!["CSPRNG for nonces, CSRF tokens, session ids, digests"],
                         td![code!["rand"], " (larger)"],
+                    ],
+                    tr![
+                        td![code!["hmac"], ", ", code!["sha2"]],
+                        td!["server"],
+                        td!["HMAC-SHA256 for signed server-action URLs (RustCrypto, audited, constant-time verify)"],
+                        td!["hand-written SHA-256 (not worth the risk)"],
                     ],
                     tr![
                         td![code!["syn"], ", ", code!["quote"], ", ", code!["proc-macro2"]],

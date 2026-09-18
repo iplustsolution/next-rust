@@ -274,6 +274,11 @@ impl Cookies {
         out
     }
 
+    /// Whether cookies default to `Secure` (outside development).
+    pub fn secure_default(&self) -> bool {
+        self.secure_default
+    }
+
     pub fn has_changes(&self) -> bool {
         !self.lock().changes.is_empty()
     }

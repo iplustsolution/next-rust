@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+mod action_token;
 pub mod actions;
 pub mod app;
 mod banner;
@@ -40,7 +41,8 @@ pub mod ws;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-pub use actions::{ActionContext, ActionRef, action_url};
+pub use action_token::SECRET_ENV;
+pub use actions::{ActionContext, ActionRef};
 pub use app::{
     ActionDef, ApiDef, App, AppBuilder, ErrorInfo, PageBody, PageDef, Rendering, Routes, SegmentDef, SlotDef,
     parse_pattern,
@@ -119,11 +121,16 @@ pub(crate) fn set_trust_proxy(v: bool) {
 /// `n` random bytes from the operating system CSPRNG, hex encoded.
 pub fn random_hex(n: usize) -> String {
     let mut buf = vec![0u8; n];
-    if getrandom::fill(&mut buf).is_err() {
+    fill_random(&mut buf);
+    buf.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Fill `buf` from the operating system CSPRNG.
+pub(crate) fn fill_random(buf: &mut [u8]) {
+    if getrandom::fill(buf).is_err() {
         // The OS RNG failing is unrecoverable for security-sensitive tokens.
         panic!("operating system random number generator unavailable");
     }
-    buf.iter().map(|b| format!("{b:02x}")).collect()
 }
 
 /// Constant-time byte comparison (for tokens).
