@@ -31,8 +31,42 @@ pub(crate) fn runtime_version(dev: bool) -> &'static str {
     cell.get_or_init(|| next_rust_assets::content_hash(runtime_js(dev).as_bytes())[..10].to_owned())
 }
 
+/// `(readable, minified)` component script with short class names, when
+/// the build gave the component classes short names.
+static SHORT_UI_JS: OnceLock<(String, String)> = OnceLock::new();
+
 fn ui_js(dev: bool) -> &'static str {
-    if dev { next_rust_ui::UI_JS } else { next_rust_ui::UI_JS_MIN }
+    match (SHORT_UI_JS.get(), dev) {
+        (Some((js, _)), true) => js,
+        (Some((_, min)), false) => min,
+        (None, true) => next_rust_ui::UI_JS,
+        (None, false) => next_rust_ui::UI_JS_MIN,
+    }
+}
+
+/// Release builds shorten the UI component classes (`nr-card` → `k2`) along
+/// with Tailwind's: rename them in the component stylesheet and script too.
+/// The renderer already renames them in the HTML.
+pub(crate) fn install_short_component_names(names: next_rust_view::class_names::ClassNames) {
+    if SHORT_UI_JS.get().is_some() || !names.iter().any(|(class, _)| class.starts_with("nr-")) {
+        return;
+    }
+    let short = |class: &str| {
+        names.binary_search_by(|(original, _)| (*original).cmp(class)).ok().map(|i| names[i].1.to_owned())
+    };
+    let css = next_rust_assets::css::rename_classes(next_rust_ui::UI_CSS.css, &short);
+    let id: &'static str =
+        Box::leak(format!("nr-ui-{}", &next_rust_assets::content_hash(css.as_bytes())[..8]).into_boxed_str());
+    let sheet: &'static next_rust_view::Stylesheet = Box::leak(Box::new(next_rust_view::Stylesheet {
+        id,
+        css: Box::leak(css.into_boxed_str()),
+        per_class: Some(&[]),
+    }));
+    next_rust_view::style::set_overrides(vec![(&next_rust_ui::UI_CSS, sheet)]);
+    let _ = SHORT_UI_JS.set((
+        next_rust_ui::rename_script_classes(next_rust_ui::UI_JS, &short),
+        next_rust_ui::rename_script_classes(next_rust_ui::UI_JS_MIN, &short),
+    ));
 }
 
 /// Cache-busting version of `/_nr/ui.js`.

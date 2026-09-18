@@ -259,6 +259,7 @@ impl App {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(routes: Routes) -> AppBuilder {
         next_rust_view::class_names::set_class_names(routes.class_names);
+        crate::internal::install_short_component_names(routes.class_names);
         AppBuilder {
             routes,
             config: None,

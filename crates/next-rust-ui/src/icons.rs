@@ -5,7 +5,7 @@ use next_rust_view::{Node, View};
 
 /// An icon sized and colored by the component stylesheet (`.nr-icon`).
 pub(crate) fn icon(icon: Icon) -> Node {
-    icon.unstyled(true).class("nr-icon").into_node()
+    icon.class("nr-icon").into_node()
 }
 
 pub(crate) use next_rust_icons::{

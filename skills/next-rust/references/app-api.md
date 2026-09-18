@@ -311,7 +311,7 @@ Grid![cols = 3, ..]   AppShell![navbar = Navbar![brand = .., menu_toggle = true,
 
 Icons: every Lucide icon as `next_rust::icons::PascalName()` (`icons::ArrowRight()`, former names like
 `icons::Home()` too), returning an `Icon` with `.size(24 | "1.25em")`, `.color(..)`, `.stroke_width(2.0)`,
-`.absolute_stroke_width(true)`, `.fill(..)`, `.title(..)` (else `aria-hidden`), `.class(..)`, `.unstyled(true)`,
+`.absolute_stroke_width(true)`, `.fill(..)`, `.title(..)` (else `aria-hidden`), `.class(..)` (no classes by default),
 `.with(attr)`; `icons::by_name("house")` for names from data. Use them in `start_content`/`end_content`.
 
 Common properties: `color` (`Color::{Default, Primary, Secondary, Success, Warning, Danger}`), `size`

@@ -21,7 +21,7 @@ fn renders_like_lucide() {
     let html = render_static(icons::House());
     assert_eq!(
         html,
-        r#"<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-house" aria-hidden="true"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>"#
+        r#"<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"/><path d="M3 10a2 2 0 0 1 .709-1.528l7-6a2 2 0 0 1 2.582 0l7 6A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>"#
     );
 }
 
@@ -44,15 +44,14 @@ fn everything_is_customizable() {
         r#"stroke="var(--brand)""#,
         r#"stroke-width="1""#,
         r#"stroke-linecap="square""#,
-        r#"class="lucide lucide-arrow-right h-4 w-4""#,
+        r#"class="h-4 w-4""#,
         r#"data-kind="nav""#,
     ] {
         assert!(html.contains(part), "{part} in {html}");
     }
     let em = render_static(icons::Check().size("1.25em").absolute_stroke_width(true));
     assert!(em.contains(r#"width="1.25em""#) && em.contains(r#"stroke-width="2""#), "no pixel size: stroke as is");
-    let bare = render_static(icons::Check().unstyled(true).class("mine"));
-    assert!(bare.contains(r#"class="mine""#) && !bare.contains("lucide"));
+    assert!(!render_static(icons::Check()).contains("class="), "no classes unless asked for");
 }
 
 #[test]
@@ -76,8 +75,8 @@ fn lookup_by_name_and_macro() {
     let b = render_static(next_rust_icons::Icon![House, size = 20]);
     assert_eq!(a, b);
     let c = render_static(next_rust_icons::Icon![Search, class("x"), title = "Find"]);
-    assert!(c.contains("lucide-search x") && c.contains("<title>Find</title>"));
+    assert!(c.contains(r#"class="x""#) && c.contains("<title>Find</title>"));
     // Custom drawings work the same way.
     static LOGO: IconData = IconData { name: "logo", body: r#"<circle cx="12" cy="12" r="10"/>"# };
-    assert!(render_static(Icon::new(&LOGO)).contains(r#"class="lucide lucide-logo""#));
+    assert!(render_static(Icon::new(&LOGO)).contains(r#"<circle cx="12" cy="12" r="10"/>"#));
 }

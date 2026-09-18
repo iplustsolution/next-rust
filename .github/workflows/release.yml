@@ -63,7 +63,7 @@ jobs:
         run: |
           set -euo pipefail
           # Every published crate is released with the same version.
-          crates="next-rust-assets next-rust-core next-rust-router next-rust-view next-rust-cache next-rust-server next-rust-macros next-rust-build next-rust next-rust-cli"
+          crates="next-rust-assets next-rust-core next-rust-router next-rust-view next-rust-icons next-rust-ui next-rust-cache next-rust-server next-rust-macros next-rust-build next-rust next-rust-cli"
 
           metadata=$(cargo metadata --no-deps --format-version 1)
           publishable=$(echo "$metadata" | jq -r '.packages[] | select(.publish != []) | .name' | sort | xargs)
@@ -148,6 +148,8 @@ jobs:
             next-rust-core
             next-rust-router
             next-rust-view
+            next-rust-icons
+            next-rust-ui
             next-rust-cache
             next-rust-server
             next-rust-macros

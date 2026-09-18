@@ -11,6 +11,8 @@
 //! * The classes used most often in the source get the shortest names.
 //! * A short name never equals a word used anywhere in the project or a class
 //!   in the CSS, so it can't collide with a class that keeps its name.
+//! * The UI components' classes (`nr-btn`, ...) are shortened with them; the
+//!   server renames the component stylesheet and script to match.
 //! * Classes that appear in `client/`, `public/` or extra Tailwind sources
 //!   (scripts and HTML the renderer never sees) and `[tailwind] keep_classes`
 //!   keep their names.
@@ -50,20 +52,36 @@ pub fn seed() -> u64 {
     h.finish()
 }
 
-/// Give the utility classes of `css` (minified Tailwind output) short names.
-pub fn shorten(css: &str, config: &Config, seed: u64) -> Shortened {
+/// The UI components' classes (`nr-btn`, `nr-field`, ...).
+pub fn component_classes() -> Vec<String> {
+    let mut classes: Vec<String> = next_rust_assets::css::class_selectors(next_rust_ui::UI_CSS.css)
+        .all
+        .into_iter()
+        .filter(|class| class.starts_with("nr-"))
+        .collect();
+    classes.extend(next_rust_ui::EXTRA_CLASSES.iter().map(|c| (*c).to_owned()));
+    classes
+}
+
+/// Give the utility classes of `css` (minified Tailwind output) and the
+/// `extra` classes short names.
+pub fn shorten(css: &str, config: &Config, seed: u64, extra: &[String]) -> Shortened {
     let found = next_rust_assets::css::class_selectors(css);
     let outside = outside_texts(config);
     let keep: BTreeSet<&str> = config.tailwind.keep_classes.iter().map(String::as_str).collect();
-    let candidates: Vec<&String> = found
+    let mut candidates: Vec<&String> = found
         .leading
         .iter()
+        .chain(extra)
         .filter(|class| !keep.contains(class.as_str()) && !outside.iter().any(|text| contains_class(text, class)))
         .collect();
+    candidates.sort();
+    candidates.dedup();
 
     // Names that must never be used as a short name.
     let mut reserved: BTreeSet<String> = css_usage::collect(config).into_iter().collect();
     reserved.extend(found.all.iter().cloned());
+    reserved.extend(extra.iter().cloned());
     reserved.extend(keep.iter().map(|k| (*k).to_owned()));
 
     // Most used first, so they get the shortest names.
@@ -249,7 +267,7 @@ mod tests {
         config.root = root.clone();
         let css = r".mt-4{margin-top:1rem}.hover\:underline{&:hover{text-decoration:underline}}.is-open{display:block}.kept{color:red}.group-hover\:block:is(:where(.group):hover *){display:block}.\[\&_\.tk\]\:text-red .tk{color:red}";
 
-        let out = shorten(css, &config, 42);
+        let out = shorten(css, &config, 42, &[]);
         let names: BTreeMap<_, _> = out.names.iter().cloned().collect();
         let shortened: Vec<&str> = names.keys().map(String::as_str).collect();
         assert_eq!(shortened, ["[&_.tk]:text-red", "group-hover:block", "hover:underline", "mt-4"]);
@@ -264,7 +282,7 @@ mod tests {
         );
         assert_eq!(out.css, expected);
         // Another seed, other names.
-        assert_ne!(shorten(css, &config, 43).names, out.names);
+        assert_ne!(shorten(css, &config, 43, &[]).names, out.names);
         // Pages always get the rules of classes scripts add, and kept ones.
         assert_eq!(outside_classes(css, &config), ["is-open", "kept"]);
         assert_eq!(list_source(&outside_classes(css, &config)), r#"&["is-open", "kept"]"#);

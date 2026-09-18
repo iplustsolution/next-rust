@@ -425,6 +425,8 @@ crates/
 ├── next-rust-build    turns app/ into generated Rust (runs in build.rs)
 ├── next-rust-router   scanning, validation, route matching
 ├── next-rust-view     the HTML macros and the streaming renderer
+├── next-rust-ui       ready-made components (buttons, fields, select, date picker, …)
+├── next-rust-icons    every Lucide icon
 ├── next-rust-server   HTTP, middleware, rendering pipeline, caching, actions
 ├── next-rust-macros   #[client], #[server_action], css_module!, asset!
 ├── next-rust-cache    cache stores

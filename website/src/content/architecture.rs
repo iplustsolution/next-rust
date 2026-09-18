@@ -31,6 +31,13 @@ pub fn content() -> Node {
                 span!["scan · validate · rank · match"],
                 small!["uses core"],
             ],
+            div![
+                class("crate"),
+                code!["next-rust-ui"],
+                span!["components · styles · script"],
+                small!["uses view, icons"],
+            ],
+            div![class("crate"), code!["next-rust-icons"], span!["Lucide icons"], small!["uses view"]],
             div![class("crate"), code!["next-rust-cache"], span!["stores · tags"], small!["uses assets"]],
             div![
                 class("crate"),

@@ -70,7 +70,7 @@ These are the mistakes that cost real time, all of them mechanical:
 8. **Text is escaped for you.** `div!["<b>"]` renders escaped text. Only `raw_html` injects markup, and it
    must never receive user input. `on*` attributes passed to `attr()` are dropped on purpose; use `raw_attr`
    if you truly need one.
-9. **Release builds rename Tailwind classes** to short random names and prune unused CSS. Anything that names
+9. **Release builds rename Tailwind and UI component (`nr-*`) classes** to short random names and prune unused CSS. Anything that names
    a class outside the view tree (a JS string in Rust, third-party HTML) needs `[tailwind] keep_classes` or
    `[assets] css_safelist`. Don't "fix" a production-only styling bug by turning Tailwind off.
    Pages also receive only the utility rules for classes they render: a class that only a script adds

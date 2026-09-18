@@ -28,6 +28,11 @@ contain breaking changes.
   `/_nr/ui.js`, loaded only on pages that need it; without it every component
   falls back to the native control.
 - The per-page CSS splitter also handles `@layer components` and selector lists.
+- Release builds give the UI components' classes short names too (`nr-card` →
+  `cn`), together with Tailwind's, and rename them in the component stylesheet
+  and script to match. This also happens without Tailwind.
+- Cached static pages send only the component CSS the browser lacks on client
+  navigations, like Tailwind's.
 - **Per-page CSS.** Pages no longer get the whole app's Tailwind stylesheet:
   each one gets only the utility rules for the classes it renders, plus theme
   variables and base styles. `@property` registrations, their fallbacks and

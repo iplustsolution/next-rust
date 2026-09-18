@@ -125,11 +125,18 @@ impl Pieces {
 
 /// Split form of `sheet`, parsed on first use.
 pub(crate) fn split(sheet: &'static Stylesheet) -> &'static Split {
-    static CACHE: OnceLock<Mutex<HashMap<usize, &'static Split>>> = OnceLock::new();
-    let mut cache = CACHE.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+    let mut cache = SPLITS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
     // Keyed by address: stylesheets are statics, and ids may repeat in tests.
-    cache.entry(sheet as *const Stylesheet as usize).or_insert_with(|| Box::leak(Box::new(Split::parse(sheet.css))))
+    cache
+        .entry(sheet as *const Stylesheet as usize)
+        .or_insert_with(|| (sheet, Box::leak(Box::new(Split::parse(sheet.css)))))
+        .1
 }
+
+type SplitCache = Mutex<HashMap<usize, (&'static Stylesheet, &'static Split)>>;
+
+/// Every per-class stylesheet rendered so far, split.
+static SPLITS: OnceLock<SplitCache> = OnceLock::new();
 
 impl Split {
     fn parse(css: &str) -> Split {
@@ -273,10 +280,20 @@ impl Split {
 /// Rewrite the per-class `<style>` elements of a rendered document (a cached
 /// static page) for a browser that already has the style ids `known`: only
 /// what it is missing is kept.
+/// Every per-class stylesheet rendered so far (component libraries' too) is
+/// considered, besides `sheets`.
 pub fn restyle_document(html: &str, sheets: &[&'static Stylesheet], known: &[&str]) -> String {
     let known: HashSet<String> = known.iter().map(|s| (*s).to_owned()).collect();
+    let mut all: Vec<&'static Stylesheet> = sheets.iter().map(|s| crate::style::resolve(s)).collect();
+    if let Some(cache) = SPLITS.get() {
+        for (sheet, _) in cache.lock().unwrap_or_else(|e| e.into_inner()).values() {
+            if !all.iter().any(|s| std::ptr::eq(*s, *sheet)) {
+                all.push(sheet);
+            }
+        }
+    }
     let mut out = html.to_owned();
-    for &sheet in sheets.iter().filter(|s| s.per_class.is_some()) {
+    for sheet in all.into_iter().filter(|s| s.per_class.is_some()) {
         let open = format!("<style data-nr-css=\"{}~", sheet.id);
         let Some(at) = out.find(&open) else { continue };
         let bits_start = at + open.len();

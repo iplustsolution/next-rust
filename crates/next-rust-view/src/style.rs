@@ -8,7 +8,26 @@
 //! only ship the CSS they actually use and streaming never produces a flash
 //! of unstyled content.
 
+use std::sync::OnceLock;
+
 use crate::node::{Node, View};
+
+static OVERRIDES: OnceLock<Vec<(&'static Stylesheet, &'static Stylesheet)>> = OnceLock::new();
+
+/// Render `to` wherever the view tree uses `from`, e.g. a stylesheet whose
+/// classes were renamed for a release build. Set once at startup; later
+/// calls are ignored.
+pub fn set_overrides(list: Vec<(&'static Stylesheet, &'static Stylesheet)>) {
+    let _ = OVERRIDES.set(list);
+}
+
+/// The stylesheet to render for `sheet`.
+pub(crate) fn resolve(sheet: &'static Stylesheet) -> &'static Stylesheet {
+    OVERRIDES
+        .get()
+        .and_then(|list| list.iter().find(|(from, _)| std::ptr::eq(*from, sheet)))
+        .map_or(sheet, |(_, to)| to)
+}
 
 /// A compiled stylesheet.
 #[derive(Debug, PartialEq, Eq)]

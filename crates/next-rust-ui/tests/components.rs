@@ -223,4 +223,13 @@ fn every_css_rule_belongs_to_rendered_markup() {
     let leading = next_rust_assets::css::class_selectors(components).leading;
     let missing: Vec<&String> = leading.iter().filter(|c| !rendered.contains(*c)).collect();
     assert!(missing.is_empty(), "CSS rules keyed on classes no component renders: {missing:?}");
+
+    // Release builds shorten the classes of the stylesheet and `EXTRA_CLASSES`:
+    // a rendered `nr-*` class outside both would keep its long name.
+    let styled = next_rust_assets::css::class_selectors(next_rust_ui::UI_CSS.css).all;
+    let unlisted: Vec<&String> = rendered
+        .iter()
+        .filter(|c| c.starts_with("nr-") && !styled.contains(*c) && !next_rust_ui::EXTRA_CLASSES.contains(&c.as_str()))
+        .collect();
+    assert!(unlisted.is_empty(), "add to EXTRA_CLASSES: {unlisted:?}");
 }

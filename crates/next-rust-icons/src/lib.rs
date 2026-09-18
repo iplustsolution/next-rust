@@ -24,7 +24,7 @@
 //! | [`absolute_stroke_width`](Icon::absolute_stroke_width) | `false` | keep the thickness in pixels when resizing |
 //! | [`fill`](Icon::fill) | `none` | fill color |
 //! | [`title`](Icon::title) | none | accessible name; without one the icon is hidden from screen readers |
-//! | [`class`](Icon::class) | `lucide lucide-<name>` | extra classes (Tailwind works) |
+//! | [`class`](Icon::class) | none | classes (Tailwind works) |
 //! | [`with`](Icon::with) | | any attribute: `aria(..)`, `data(..)`, `style(..)`, ... |
 //!
 //! Icons render as inline `<svg>` and add nothing to pages that don't use
@@ -65,7 +65,6 @@ pub struct Icon {
     absolute_stroke_width: bool,
     fill: Option<String>,
     title: Option<String>,
-    unstyled: bool,
     extra: Element,
 }
 
@@ -79,7 +78,6 @@ impl Icon {
             absolute_stroke_width: false,
             fill: None,
             title: None,
-            unstyled: false,
             extra: Element::new("svg"),
         }
     }
@@ -122,15 +120,9 @@ impl Icon {
         self
     }
 
-    /// Extra classes, merged with `lucide lucide-<name>`.
+    /// Classes for the `<svg>` (none by default, to keep pages small).
     pub fn class(self, v: impl Into<String>) -> Self {
         self.with(next_rust_view::attrs::class(v.into()))
-    }
-
-    /// Leave out the default `lucide lucide-<name>` classes.
-    pub fn unstyled(mut self, v: bool) -> Self {
-        self.unstyled = v;
-        self
     }
 
     /// Any attribute (`aria(..)`, `data(..)`, `style(..)`, `id(..)`, ...);
@@ -177,9 +169,6 @@ impl View for Icon {
             ("stroke-linejoin", "round".into()),
         ] {
             svg.set_attr(Attr::new(name, value));
-        }
-        if !self.unstyled {
-            svg.set_attr(Attr::new("class", format!("lucide lucide-{}", self.data.name)));
         }
         match &self.title {
             Some(title) => {

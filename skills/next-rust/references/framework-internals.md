@@ -18,14 +18,17 @@ MSRV 1.88).
 
 ## Crate map
 
-Workspace members: `crates/*`, `examples/*`, `benchmarks`, `website`. All ten published crates share one
-version through `version.workspace = true`.
+Workspace members: `crates/*`, `examples/*`, `benchmarks`, `website`. All twelve published crates share one
+version through `version.workspace = true`. A new publishable crate must also be added, in dependency order, to
+both crate lists in `.github/workflows/release.yml`; the release stops at "Pick the version" otherwise.
 
 | Crate | Responsibility |
 | --- | --- |
 | `next-rust` | Facade: the prelude, `app!`/`routes!`, feature forwarding. What applications depend on. |
 | `next-rust-server` | HTTP runtime on hyper 1: request pipeline, SSR and streaming, partial rendering, ISR, middleware, static files, server actions, the embedded client runtime. |
 | `next-rust-view` | The HTML DSL: elements, attributes, escaping, metadata, streaming renderer, short class names. |
+| `next-rust-ui` | Ready-made components (buttons, fields, select, date picker, toggles, avatars, cards, layout), their stylesheet and browser script, all as Rust. |
+| `next-rust-icons` | Every Lucide icon, generated into `src/generated.rs` by `examples/generate.rs`. |
 | `next-rust-router` | Filesystem routing: scan, segment parsing, validation, ranking, the trie matcher. |
 | `next-rust-cache` | Cache abstraction with in-memory and filesystem stores, tags, revalidation. |
 | `next-rust-core` | Config, `.env` loading, environment/rendering modes, diagnostics, brand strings. |

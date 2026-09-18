@@ -98,6 +98,7 @@ impl Writer {
     }
 
     fn style(&mut self, sheet: &'static Stylesheet) {
+        let sheet = crate::style::resolve(sheet);
         if self.split && sheet.per_class.is_some() {
             if !self.split_sheets.iter().any(|(s, _)| std::ptr::eq(*s, sheet)) {
                 let known = css_split::split(sheet).known(sheet, &self.styles_known);

@@ -76,7 +76,22 @@ pub static UI_CSS: Stylesheet = Stylesheet {
     per_class: Some(&[]),
 };
 
-pub use script::{UI_JS, UI_JS_MIN};
+pub use script::{UI_JS, UI_JS_MIN, rename_classes as rename_script_classes};
+
+/// Classes the components render that no stylesheet rule starts with (hooks
+/// for the script and for your own CSS). Release builds shorten them with the
+/// stylesheet's classes; `tests/components.rs` keeps the list complete.
+#[doc(hidden)]
+pub const EXTRA_CLASSES: &[&str] = &[
+    "nr-checkbox-label",
+    "nr-cols-1",
+    "nr-datepicker-toggle",
+    "nr-label-outside",
+    "nr-password",
+    "nr-radio-label",
+    "nr-shell-with-sidebar",
+    "nr-switch-label",
+];
 
 /// Color of a component.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

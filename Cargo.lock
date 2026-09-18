@@ -562,6 +562,7 @@ dependencies = [
  "next-rust-assets",
  "next-rust-core",
  "next-rust-router",
+ "next-rust-ui",
  "proc-macro2",
  "quote",
  "serde",

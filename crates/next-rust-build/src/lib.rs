@@ -186,17 +186,27 @@ impl Generator {
             let _ = std::fs::remove_file(&usage_file);
         }
         let tailwind = config.tailwind.enabled;
-        // Release builds give Tailwind classes short random names;
-        // `NEXT_RUST_MINIFY_CLASSES=0|1` overrides.
-        let minify_classes = tailwind
-            && match std::env::var("NEXT_RUST_MINIFY_CLASSES").ok().as_deref() {
-                Some("0") => false,
-                Some(_) => true,
-                None => config.tailwind.minify_classes && std::env::var("PROFILE").is_ok_and(|p| p == "release"),
-            };
+        // Release builds give Tailwind and UI component classes short random
+        // names; `NEXT_RUST_MINIFY_CLASSES=0|1` overrides.
+        let minify_classes = match std::env::var("NEXT_RUST_MINIFY_CLASSES").ok().as_deref() {
+            Some("0") => false,
+            Some(_) => true,
+            None => config.tailwind.minify_classes && std::env::var("PROFILE").is_ok_and(|p| p == "release"),
+        };
         println!("cargo:rerun-if-env-changed=NEXT_RUST_MINIFY_CLASSES");
         println!("cargo:rerun-if-env-changed=NEXT_RUST_CLASS_SEED");
-        let class_names = if tailwind { generate_tailwind(&config, &out_dir, minify_classes)? } else { None };
+        let class_names = if tailwind {
+            generate_tailwind(&config, &out_dir, minify_classes)?
+        } else if minify_classes {
+            // No Tailwind: only the component classes.
+            let seed = class_names::seed();
+            let shortened = class_names::shorten("", &config, seed, &class_names::component_classes());
+            write_if_changed(&out_dir.join(class_names::FILE), class_names::table_source(&shortened.names).as_bytes())
+                .map_err(|e| e.to_string())?;
+            Some(seed)
+        } else {
+            None
+        };
         let mut code = generate_code_with(&project, CodegenOptions { minify_html, embed_files, tailwind, class_names });
         for p in &self.plugins {
             if let Some(extra) = p.extra_code(&project) {
@@ -230,7 +240,7 @@ fn generate_tailwind(config: &Config, out_dir: &Path, minify_classes: bool) -> R
     let mut seed = None;
     if minify_classes {
         let build_seed = class_names::seed();
-        let shortened = class_names::shorten(&css, config, build_seed);
+        let shortened = class_names::shorten(&css, config, build_seed, &class_names::component_classes());
         css = shortened.css;
         write_if_changed(&out_dir.join("next_rust_tailwind.css"), css.as_bytes()).map_err(|e| e.to_string())?;
         write_if_changed(&out_dir.join(class_names::FILE), class_names::table_source(&shortened.names).as_bytes())
