@@ -93,7 +93,10 @@ jobs:
           done
           for crate in $crates; do
             var="latest_${crate//-/_}"
-            [ "${!var}" = "$highest" ] || complete=false
+            # A crate that was never published (one added since the last
+            # release) doesn't make that release incomplete: it is released
+            # with the next version, together with the code it depends on.
+            [ -z "${!var}" ] || [ "${!var}" = "$highest" ] || complete=false
           done
 
           newer() { [ "$1" != "$2" ] && [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)" = "$1" ]; }
