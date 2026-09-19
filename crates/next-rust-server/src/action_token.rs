@@ -5,7 +5,7 @@
 //! a freshly minted token, so each page view gets different action URLs:
 //!
 //! ```text
-//! /_nr/action/<base64url(version | action key | expiry | nonce | tag)>
+//! /_next-rust/action/<base64url(version | action key | expiry | nonce | tag)>
 //! ```
 //!
 //! * **action key**: HMAC of the action id under the server secret. It can't
@@ -14,7 +14,7 @@
 //! * **expiry**: tokens stop working after `[security] action_token_ttl`.
 //! * **nonce**: 64 random bits, so no two page views share a URL.
 //! * **tag**: truncated HMAC-SHA256 over all of the above plus the visitor's
-//!   binding cookie (`__Host-nr_bind`, `HttpOnly`, `SameSite=Strict`). A URL
+//!   binding cookie (`__Host-next_rust_bind`, `HttpOnly`, `SameSite=Strict`). A URL
 //!   copied out of one browser is rejected when sent from anywhere else, and
 //!   cross-site requests never carry the cookie.
 //!
@@ -47,10 +47,10 @@ pub const SECRET_ENV: &str = "NEXT_RUST_SECRET";
 /// Minimum secret length in bytes.
 pub const MIN_SECRET_LEN: usize = 32;
 /// Binding cookie over plain HTTP (development).
-pub const BIND_COOKIE: &str = "nr_bind";
+pub const BIND_COOKIE: &str = "next_rust_bind";
 /// Binding cookie when cookies are `Secure`: the `__Host-` prefix forbids a
 /// `Domain` attribute, so sibling subdomains can't plant a value.
-pub const BIND_COOKIE_SECURE: &str = "__Host-nr_bind";
+pub const BIND_COOKIE_SECURE: &str = "__Host-next_rust_bind";
 
 const VERSION: u8 = 1;
 pub(crate) const KEY_LEN: usize = 12;
@@ -141,7 +141,7 @@ pub(crate) fn action_key(id: &str) -> ActionKey {
 
 /// Placeholder URL rendered into HTML; replaced per response by [`seal`].
 pub(crate) fn marker_url(id: &str) -> String {
-    format!("/_nr/action/{}{}~", keys().marker_prefix, hex(&action_key(id)))
+    format!("/_next-rust/action/{}{}~", keys().marker_prefix, hex(&action_key(id)))
 }
 
 fn now() -> u64 {
@@ -256,7 +256,7 @@ pub(crate) fn seal(res: &mut Response, cookies: &Cookies, ttl: u64, csrf: CsrfMo
     }
 }
 
-/// With `csrf = "token"` the client runtime echoes `nr_csrf` in a header.
+/// With `csrf = "token"` the client runtime echoes `next_rust_csrf` in a header.
 fn ensure_csrf_cookie(cookies: &Cookies, csrf: CsrfMode) {
     if csrf == CsrfMode::Token && cookies.get(crate::CSRF_COOKIE).is_none() {
         cookies.set(Cookie::new(crate::CSRF_COOKIE, crate::random_hex(32)).http_only(false));
@@ -489,7 +489,7 @@ mod tests {
     fn markers_become_tokens() {
         let s = sealer();
         let html = format!(
-            r#"<form action="/_nr/action/{m1}"></form><a data-x="/_nr/action/{m2}">{p}zz</a>"#,
+            r#"<form action="/_next-rust/action/{m1}"></form><a data-x="/_next-rust/action/{m2}">{p}zz</a>"#,
             m1 = marker(&s, 1),
             m2 = marker(&s, 2),
             p = s.keys.marker_prefix
@@ -497,7 +497,8 @@ mod tests {
         let out = String::from_utf8(s.replace(html.as_bytes())).unwrap();
         assert!(!out.contains(&marker(&s, 1)) && !out.contains(&marker(&s, 2)));
         assert!(out.contains(&format!("{}zz", s.keys.marker_prefix)), "incomplete markers are left alone");
-        let tokens: Vec<&str> = out.split("/_nr/action/").skip(1).map(|t| t.split('"').next().unwrap()).collect();
+        let tokens: Vec<&str> =
+            out.split("/_next-rust/action/").skip(1).map(|t| t.split('"').next().unwrap()).collect();
         assert_eq!(verify_at(s.keys, tokens[0], Some(BIND), 0), Ok([1; KEY_LEN]));
         assert_eq!(verify_at(s.keys, tokens[1], Some(BIND), 0), Ok([2; KEY_LEN]));
     }
@@ -506,7 +507,7 @@ mod tests {
     async fn markers_split_across_stream_chunks() {
         let s = sealer();
         let keys = s.keys;
-        let html = format!("<p>hi</p><form action=\"/_nr/action/{}\"></form>n", marker(&s, 3));
+        let html = format!("<p>hi</p><form action=\"/_next-rust/action/{}\"></form>n", marker(&s, 3));
         for split in 0..html.len() {
             let chunks: Vec<Result<Bytes, crate::request::BoxError>> = vec![
                 Ok(Bytes::copy_from_slice(&html.as_bytes()[..split])),
@@ -516,7 +517,7 @@ mod tests {
             let sealer = Sealer { keys, binding: BIND.into(), ttl: 60 };
             let parts: Vec<Bytes> = seal_stream(stream, sealer).map(|c| c.unwrap()).collect().await;
             let out = String::from_utf8(parts.concat()).unwrap();
-            let token = out.split("/_nr/action/").nth(1).unwrap().split('"').next().unwrap();
+            let token = out.split("/_next-rust/action/").nth(1).unwrap().split('"').next().unwrap();
             assert_eq!(verify_at(keys, token, Some(BIND), 0), Ok([3; KEY_LEN]), "split at {split}");
             assert!(out.starts_with("<p>hi</p>") && out.ends_with("</form>n"));
         }

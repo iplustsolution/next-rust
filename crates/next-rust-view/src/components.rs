@@ -190,7 +190,7 @@ impl ImageProps {
     }
 
     fn url(&self, w: u32) -> String {
-        format!("/_nr/image?url={}&w={w}&q={}", encode_query(&self.src), self.quality)
+        format!("/_next-rust/image?url={}&w={w}&q={}", encode_query(&self.src), self.quality)
     }
 }
 

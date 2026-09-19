@@ -77,9 +77,9 @@ fn password_select_and_date_picker_work_without_script() {
 
 #[test]
 fn press_and_links() {
-    let h = markup(Button![on_press = Press::action("/_nr/action/x").input(&42), "Go"]);
+    let h = markup(Button![on_press = Press::action("/_next-rust/action/x").input(&42), "Go"]);
     assert!(
-        h.contains(r#"data-nr-press="action" data-nr-press-target="/_nr/action/x" data-nr-press-input="42""#),
+        h.contains(r#"data-nr-press="action" data-nr-press-target="/_next-rust/action/x" data-nr-press-input="42""#),
         "{h}"
     );
     assert!(h.contains("nr-btn-pending"), "pending spinner for actions");
@@ -216,6 +216,80 @@ fn every_css_rule_belongs_to_rendered_markup() {
         footer = "f",
         "main",
     ]);
+
+    for c in colors {
+        for v in [Variant::Solid, Variant::Flat, Variant::Bordered, Variant::Faded] {
+            all += &markup(Alert![color = c, variant = v, title = "t", closable = true, end_content = "e", "x"]);
+            all += &markup(Badge![color = c, variant = v, content = "1", "x"]);
+        }
+        all += &markup(Progress![color = c, value = 10.0, label = "l", show_value = true, striped = true]);
+        all += &markup(CircularProgress![color = c, value = 10.0, label = "l", show_value = true]);
+        all += &markup(Stat![color = c, label = "l", value = "1", delta = "2", icon = "i"]);
+        all += &markup(Tooltip![color = c, content = "t", Button!["x"]]);
+        for v in [TabsVariant::Solid, TabsVariant::Underlined, TabsVariant::Bordered, TabsVariant::Light] {
+            all += &markup(Tabs![
+                color = c,
+                variant = v,
+                full_width = true,
+                Tab![title = "a", href = "/a"],
+                Tab![title = "b", "p"]
+            ]);
+        }
+        all += &markup(Steps![
+            color = c,
+            vertical = true,
+            current = 1,
+            Step![title = "a", href = "/"],
+            Step![title = "b"],
+            Step![title = "c"]
+        ]);
+    }
+    for s in sizes {
+        all += &markup(Badge![size = s, dot = true, "x"]);
+        all += &markup(Progress![size = s]);
+        all += &markup(CircularProgress![size = s]);
+        all += &markup(Tabs![size = s, Tab![title = "a", disabled = true]]);
+        all += &markup(Breadcrumbs![size = s, BreadcrumbItem![href = "/", disabled = true, "a"], BreadcrumbItem!["b"]]);
+        all += &markup(Steps![size = s, Step![title = "a", description = "d", status = StepStatus::Error]]);
+    }
+    for p in [Placement::TopRight, Placement::TopLeft, Placement::BottomRight, Placement::BottomLeft] {
+        all += &markup(Badge![placement = p, content = "9", "x"]);
+    }
+    for side in [Side::Top, Side::Bottom, Side::Left, Side::Right] {
+        all += &markup(Tooltip![side = side, content = "t", Button!["x"]]);
+    }
+    for t in [Trend::Up, Trend::Down, Trend::Flat] {
+        all += &markup(Stat![value = "1", delta = "2", trend = t, description = "d"]);
+    }
+    all += &markup(Skeleton![]);
+    all += &markup(Skeleton![lines = 2]);
+    all += &markup(Kbd!["a", "b"]);
+    all += &markup(EmptyState![title = "t", description = "d", compact = true, Button!["x"]]);
+    for v in [AccordionVariant::Light, AccordionVariant::Bordered, AccordionVariant::Splitted, AccordionVariant::Shadow]
+    {
+        all += &markup(Accordion![
+            variant = v,
+            compact = true,
+            AccordionItem![title = "t", subtitle = "s", start_content = "i", expanded = true, disabled = true, "x"]
+        ]);
+    }
+    for w in [Width::Sm, Width::Md, Width::Lg, Width::Xl, Width::Xxl, Width::Full] {
+        all += &markup(Modal![size = w, title = "t", ModalBody!["b"], ModalFooter!["f"]]);
+    }
+    for p in [ModalPlacement::Center, ModalPlacement::Top, ModalPlacement::Bottom] {
+        all += &markup(Modal![placement = p, scroll_inside = true, open = true, "x"]);
+    }
+    all += &markup(Table![
+        columns = ["a"],
+        caption = "c",
+        striped = true,
+        compact = true,
+        bordered = true,
+        hoverable = true,
+        sticky_header = true,
+        tr![td!["x"]]
+    ]);
+    all += &markup(Table![columns = ["a", "b"], empty = "none"]);
 
     let rendered = classes(&all);
     let css = next_rust_ui::style::UI_CSS_SOURCE;

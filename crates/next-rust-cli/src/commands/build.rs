@@ -78,7 +78,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         live.draw(&label, &detail);
         state.log_milestone();
     });
-    let (exe, warnings) = match result {
+    let (exe, warnings, out_dir) = match result {
         Ok(v) => v,
         Err(report) => {
             live.fail("Compiling", &ui::red("failed"));
@@ -116,6 +116,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let config_file = info.config.source.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned());
     let packed: Vec<String> = config_file.into_iter().chain(embedded).collect();
     ui::done_step("Packed", &if packed.is_empty() { "nothing extra to embed".into() } else { packed.join(" · ") });
+    if let Some(report) = out_dir
+        .map(|d| d.join(next_rust_build::report::FILE))
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<next_rust_build::BuildReport>(&s).ok())
+    {
+        report_build(&report);
+    }
 
     // Only the binary is written; earlier build layouts are removed.
     for old in ["server", "static", "cache", "manifest"] {
@@ -241,6 +248,60 @@ pub fn run(args: &[String]) -> Result<(), String> {
     eprintln!("   {}", ui::dim("Deploy: copy that one file to your server and run it."));
     eprintln!();
     Ok(())
+}
+
+/// What the build did to the code, from the build script's report.
+fn report_build(report: &next_rust_build::BuildReport) {
+    if let Some(c) = &report.classes {
+        let short = c.one_char + c.two_chars;
+        let mut detail = format!("{} classes shortened · {short} to 1–2 characters", c.total);
+        if c.three_chars + c.longer > 0 {
+            detail.push_str(&format!(", {} to 3", c.three_chars + c.longer));
+        }
+        if !c.kept.is_empty() {
+            detail.push_str(&format!(" · {} keep their names", c.kept.len()));
+        }
+        ui::done_step("Classes", &detail);
+    }
+    if !report.scripts.is_empty() {
+        let before: usize = report.scripts.iter().map(|s| s.bytes).sum();
+        let after: usize = report.scripts.iter().map(|s| s.minified).sum();
+        let renamed: usize = report.scripts.iter().map(|s| s.renamed).sum();
+        let mut detail = format!(
+            "{} minified · {} → {}",
+            plural(report.scripts.len(), "script"),
+            ui::bytes(before as u64),
+            ui::bytes(after as u64)
+        );
+        if renamed > 0 {
+            detail.push_str(&format!(" · {renamed} class names rewritten"));
+        }
+        ui::done_step("Scripts", &detail);
+    }
+    let compressed: Vec<_> = report.files.iter().filter(|f| f.brotli.is_some()).collect();
+    if !compressed.is_empty() {
+        let before: usize = compressed.iter().map(|f| f.bytes).sum();
+        let br: usize = compressed.iter().filter_map(|f| f.brotli).sum();
+        ui::done_step(
+            "Compressed",
+            &format!(
+                "{} with Brotli and gzip · {} → {} · served precompressed",
+                plural(compressed.len(), "file"),
+                ui::bytes(before as u64),
+                ui::bytes(br as u64)
+            ),
+        );
+    }
+    if !report.unknown_classes.is_empty() {
+        let names: Vec<String> = report.unknown_classes.iter().take(6).map(|c| ui::truncate(c, 48)).collect();
+        let more = report.unknown_classes.len().saturating_sub(6);
+        ui::warn(&format!(
+            "{} classes in the source match no CSS rule and are left out of pages: {}{}",
+            report.unknown_classes.len(),
+            names.join(", "),
+            if more > 0 { format!(" and {more} more") } else { String::new() }
+        ));
+    }
 }
 
 fn plural(n: usize, word: &str) -> String {

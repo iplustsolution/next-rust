@@ -12,6 +12,10 @@ pub struct EmbeddedFile {
     /// Content hash (`next_rust_assets::content_hash`), used for ETags and
     /// to validate hashed asset URLs.
     pub hash: &'static str,
+    /// The file compressed with Brotli at build time, when that is smaller.
+    pub br: Option<&'static [u8]>,
+    /// The file compressed with gzip at build time, when that is smaller.
+    pub gz: Option<&'static [u8]>,
 }
 
 /// Everything a release binary carries with it.
@@ -60,9 +64,9 @@ mod tests {
     use super::*;
 
     const FILES: &[EmbeddedFile] = &[
-        EmbeddedFile { path: "favicon.svg", bytes: b"<svg/>", hash: "a" },
-        EmbeddedFile { path: "images/logo space.png", bytes: b"png", hash: "b" },
-        EmbeddedFile { path: "robots.txt", bytes: b"ok", hash: "c" },
+        EmbeddedFile { path: "favicon.svg", bytes: b"<svg/>", hash: "a", br: None, gz: None },
+        EmbeddedFile { path: "images/logo space.png", bytes: b"png", hash: "b", br: None, gz: None },
+        EmbeddedFile { path: "robots.txt", bytes: b"ok", hash: "c", br: None, gz: None },
     ];
 
     #[test]

@@ -17,8 +17,25 @@ next-rust-core.workspace = true
 next-rust-router.workspace = true
 next-rust-assets.workspace = true
 next-rust-ui.workspace = true
+next-rust-view.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+flate2.workspace = true
+brotli.workspace = true
 syn = { workspace = true, features = ["full", "parsing"] }
 proc-macro2 = { workspace = true, features = ["span-locations"] }
 quote.workspace = true
+# JavaScript minification for release builds (`[build] minify_js`); the
+# 0.90 line is the newest one whose dependencies build on Rust 1.89, the crate's floor.
+oxc_allocator = { version = "0.90", optional = true }
+oxc_parser = { version = "0.90", optional = true }
+oxc_span = { version = "0.90", optional = true }
+oxc_minifier = { version = "0.90", optional = true }
+oxc_codegen = { version = "0.90", optional = true }
+oxc_ast = { version = "0.90", optional = true }
+oxc_ast_visit = { version = "0.90", optional = true }
+
+[features]
+default = ["minify-js"]
+## Minify and mangle `client/` and `assets/` scripts in release builds.
+minify-js = ["dep:oxc_allocator", "dep:oxc_parser", "dep:oxc_span", "dep:oxc_minifier", "dep:oxc_codegen", "dep:oxc_ast", "dep:oxc_ast_visit"]

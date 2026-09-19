@@ -24,7 +24,7 @@ fn props(rows: &[(&'static str, &'static str)]) -> Node {
 pub fn content() -> Node {
     fragment![
         p![
-            "Next Rust ships a set of ready-made components: buttons, text fields, a password field, a custom select, a date picker, checkboxes, switches, radios, avatars, cards, chips, spinners and layout. They are written, configured and rendered in Rust, look good without any CSS of your own, and every property is optional.",
+            "Next Rust ships a set of ready-made components: buttons, text fields, a password field, a custom select, a date picker, checkboxes, switches, radios, avatars, cards, chips, spinners, alerts, badges, progress bars, skeletons, stats, tabs, breadcrumbs, steps, accordions, modals, tables, tooltips, empty states and layout. They are written, configured and rendered in Rust, look good without any CSS of your own, and every property is optional.",
         ],
         rust(
             r#"use next_rust::prelude::*;
@@ -277,6 +277,190 @@ Chip![color = Color::Success, variant = Variant::Flat, dot = true, "Online"]
 Spinner![color = Color::Secondary, label = "Loading…"]
 Divider![]"#,
         ),
+        h2("alerts", "Alert, Badge and Kbd"),
+        rust(
+            r#"Alert![color = Color::Success, title = "Saved", closable = true, "Your changes are live."]
+Alert![color = Color::Danger, variant = Variant::Bordered, title = "Payment failed",
+    end_content = Button![size = Size::Sm, "Retry"], "The card was declined."]
+Badge![content = "3", Avatar![name = "Ada Lovelace"]]                    // a count on a corner
+Badge![dot = true, color = Color::Success, placement = Placement::BottomRight, Avatar![name = "Grace"]]
+Kbd!["⌘", "K"]"#,
+        ),
+        p![
+            "An alert's icon follows its color (info, check, warning, error) unless you give ",
+            code!["icon"],
+            " or ",
+            code!["hide_icon"],
+            ". Warnings and errors have ",
+            code!["role=\"alert\""],
+            ", so screen readers announce them. ",
+            code!["closable"],
+            " adds a dismiss button; the component script removes the alert and fires ",
+            code!["nr:dismiss"],
+            ".",
+        ],
+        h2("progress", "Progress, CircularProgress and Skeleton"),
+        rust(
+            r#"Progress![label = "Uploading", value = 62.0, show_value = true]          // 62%
+Progress![color = Color::Success, size = Size::Sm, value = 8.0, max = 10.0, value_label = "8 of 10"]
+Progress![label = "Working…", striped = true]                             // no value: indeterminate
+CircularProgress![value = 75.0, show_value = true, label = "Mastery"]
+Skeleton![class("h-40")]                                                  // one shimmering box
+Skeleton![lines = 3]                                                      // three text lines"#,
+        ),
+        p![
+            "Both progress components are ",
+            code!["role=\"progressbar\""],
+            " with the ARIA values set, and animate between values.",
+        ],
+        h2("stat", "Stat"),
+        rust(
+            r#"Stat![label = "Students", value = "1,204", delta = "12%", trend = Trend::Up,
+    icon = icons::Users().size(20), color = Color::Primary]
+Stat![label = "Average score", value = "81%", delta = "3%", trend = Trend::Down, description = "vs. last term"]"#,
+        ),
+        h2("tabs", "Tabs"),
+        rust(
+            r#"// Panels switched in place (the component script does the switching):
+Tabs![selected = "grades",
+    Tab![key = "overview", title = "Overview", p!["…"]],
+    Tab![key = "grades", title = "Grades", end_content = Chip![size = Size::Sm, "12"], p!["…"]],
+    Tab![key = "settings", title = "Settings", disabled = true, p!["…"]],
+]
+// Links between pages (no script; the server marks the current one):
+Tabs![variant = TabsVariant::Underlined, color = Color::Primary,
+    Tab![title = "Photos", href = "/album?tab=photos", selected = tab == "photos"],
+    Tab![title = "Music", href = "/album?tab=music", selected = tab == "music"],
+]"#,
+        ),
+        p![
+            "Variants: ",
+            code!["Solid"],
+            " (a segmented control, the default), ",
+            code!["Underlined"],
+            ", ",
+            code!["Bordered"],
+            " and ",
+            code!["Light"],
+            "; plus ",
+            code!["size"],
+            ", ",
+            code!["color"],
+            ", ",
+            code!["radius"],
+            " and ",
+            code!["full_width"],
+            ". Tabs with panels follow the ARIA tabs pattern: arrow keys, Home and End move between them, and the strip fires ",
+            code!["nr:change"],
+            " with the new key. Without the script, the selected panel shows and the others stay hidden, so prefer link tabs for pages that must work without JavaScript.",
+        ],
+        h2("breadcrumbs", "Breadcrumbs and Steps"),
+        rust(
+            r#"Breadcrumbs![
+    BreadcrumbItem![href = "/", start_content = icons::House().size(14), "Home"],
+    BreadcrumbItem![href = "/classes", "Classes"],
+    BreadcrumbItem!["Grade 9 Maths"],                              // the last one is the current page
+]
+Steps![current = 1,
+    Step![title = "Account", description = "Name and email", href = "/signup"],  // done: a check mark
+    Step![title = "Plan"],                                                       // current
+    Step![title = "Payment"], Step![title = "Done"],                             // upcoming
+]
+Steps![vertical = true, Step![title = "Ordered"], Step![title = "Shipped", status = StepStatus::Error]]"#,
+        ),
+        h2("accordion", "Accordion"),
+        rust(
+            r#"Accordion![variant = AccordionVariant::Splitted,
+    AccordionItem![title = "What is Next Rust?", subtitle = "The short version", expanded = true, p!["…"]],
+    AccordionItem![title = "Do I need JavaScript?", p!["No."]],
+]
+Accordion![multiple = true, compact = true, ..]     // several open at once, tighter"#,
+        ),
+        p![
+            "Each item is a ",
+            code!["<details>"],
+            " element: it opens and closes with no script at all, and items of one accordion share a ",
+            code!["name"],
+            " so opening one closes the others (unless ",
+            code!["multiple"],
+            ").",
+        ],
+        h2("modal", "Modal"),
+        rust(
+            r#"Button![on_press = Press::open_modal("archive"), "Archive…"]
+
+Modal![id = "archive", title = "Archive this class?",
+    ModalBody![p!["Students keep their work; the class leaves your list."]],
+    ModalFooter![
+        Button![variant = Variant::Light, on_press = Press::close_modal(), "Cancel"],
+        form![action!(crate::actions::archive), input![r#type("hidden"), name("id"), value(id)],
+              Button![submit = true, color = Color::Danger, "Archive"]],
+    ],
+]"#,
+        ),
+        p![
+            "A ",
+            code!["<dialog>"],
+            " element. ",
+            code!["Press::open_modal"],
+            " shows it as a true modal: focus stays inside, the page behind is inert, ",
+            code!["Escape"],
+            " and a click on the backdrop close it (",
+            code!["dismissable = false"],
+            " keeps the backdrop click from closing). Its close button is a ",
+            code!["method=\"dialog\""],
+            " form, so it works without the script too; ",
+            code!["open = true"],
+            " shows a modal on page load. Sizes are ",
+            code!["Width::Sm"],
+            " to ",
+            code!["Width::Full"],
+            "; ",
+            code!["placement"],
+            " puts it at the top or as a bottom sheet; ",
+            code!["scroll_inside"],
+            " keeps the header and footer in place while a long body scrolls. The dialog fires ",
+            code!["nr:open"],
+            " and ",
+            code!["nr:close"],
+            ".",
+        ],
+        h2("table", "Table"),
+        rust(
+            r#"Table![columns = ["Student", "Score", "Status"], striped = true, hoverable = true,
+    each(rows, |r| tr![td![r.name.clone()], td![r.score.to_string()], td![Chip![size = Size::Sm, r.status.clone()]]]),
+    empty = EmptyState![compact = true, title = "No students yet", Button![size = Size::Sm, "Invite"]],
+]"#,
+        ),
+        p![
+            "Rows are ordinary ",
+            code!["tr!"],
+            " elements; the table adds the header, the styling (",
+            code!["striped"],
+            ", ",
+            code!["compact"],
+            ", ",
+            code!["bordered"],
+            ", ",
+            code!["hoverable"],
+            ", ",
+            code!["sticky_header"],
+            "), a ",
+            code!["caption"],
+            ", horizontal scrolling for wide tables, and shows ",
+            code!["empty"],
+            " across the table when there are no rows.",
+        ],
+        h2("tooltip", "Tooltip and EmptyState"),
+        rust(
+            r#"Tooltip![content = "Copy the link", side = Side::Bottom, Button![icon_only = true, icons::Link().size(18)]]
+EmptyState![title = "No classes yet", description = "Create one to get started.", Button!["New class"]]"#,
+        ),
+        p![
+            "Tooltips are CSS only: they appear on hover and on keyboard focus, and the anchor gets ",
+            code!["aria-describedby"],
+            ". Make the anchor focusable (a button, a link) so keyboard users get the text too.",
+        ],
         h2("layout", "Layout"),
         rust(
             r#"// app/layout.rs: a responsive app layout in a few lines.
@@ -331,9 +515,9 @@ Input![label = "Search", start_content = icons::Search().size(18)]"##,
         p![
             "Interactive components (select, date picker, password toggle, clear buttons, ",
             code!["on_press"],
-            ", the drawer) are driven by a small script, ",
-            code!["/_nr/ui.js"],
-            " (about 4.6 KB gzipped). It is added only to pages that render one of them. Without it, every component falls back to the native control, so forms still submit.",
+            ", the drawer, tab panels, modals, closable alerts) are driven by a small script, ",
+            code!["/_next-rust/ui.js"],
+            " (about 5 KB gzipped). It is added only to pages that render one of them. Without it, every component falls back to the native control, so forms still submit.",
         ],
     ]
 }

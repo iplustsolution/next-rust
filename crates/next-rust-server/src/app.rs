@@ -163,6 +163,9 @@ pub struct Routes {
     /// Release builds with Tailwind: `(class, short name)` pairs sorted by
     /// class, applied to every page this app renders.
     pub class_names: next_rust_view::class_names::ClassNames,
+    /// Classes the build knows a rule, script or static file for (sorted);
+    /// empty means every class is kept (see `next_rust_view::class_names::set_known_classes`).
+    pub known_classes: &'static [&'static str],
 }
 
 pub(crate) type CustomHandlers = Vec<(Option<Method>, Arc<dyn Endpoint>)>;
@@ -259,6 +262,7 @@ impl App {
     #[allow(clippy::new_ret_no_self)]
     pub fn new(routes: Routes) -> AppBuilder {
         next_rust_view::class_names::set_class_names(routes.class_names);
+        next_rust_view::class_names::set_known_classes(routes.known_classes);
         crate::internal::install_short_component_names(routes.class_names);
         AppBuilder {
             routes,
@@ -290,6 +294,7 @@ impl App {
         let inner = self.inner.clone();
         let nonce = crate::random_hex(16);
         req.insert_extension(crate::CspNonce(nonce.clone()));
+        req.insert_extension(inner.config.clone());
         req.limit_body(inner.config.server.body_limit);
 
         if let Some(res) = self.pre_routing(&mut req).await {
@@ -324,7 +329,7 @@ impl App {
         }
 
         let path = req.path();
-        if path.starts_with("/_nr/")
+        if path.starts_with("/_next-rust/")
             && let Some(res) = crate::internal::handle(inner, req).await
         {
             return Some(res);
@@ -710,7 +715,7 @@ impl Endpoint for RouteEndpoint {
 async fn dispatch(inner: Arc<AppInner>, mut req: Request) -> Response {
     let path = req.path().to_owned();
 
-    if path.starts_with("/_nr/action/") {
+    if path.starts_with("/_next-rust/action/") {
         return crate::actions::handle(&inner, req).await;
     }
     if req.method() == Method::GET || req.method() == Method::HEAD {

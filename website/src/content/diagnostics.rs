@@ -36,6 +36,11 @@ pub fn content() -> Node {
                         td!["a redirect ", code!["source"], " does not start with ", code!["/"]],
                     ],
                     tr![td!["NR0007"], td!["warning"], td!["unknown ", code!["[logging] level"]]],
+                    tr![
+                        td!["NR0008"],
+                        td!["error"],
+                        td!["a file in ", code!["[tailwind] stylesheets"], " does not exist"],
+                    ],
                 ],
             ],
         ],

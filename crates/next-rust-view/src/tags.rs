@@ -657,6 +657,108 @@ macro_rules! stop {
     ($($part:expr),* $(,)?) => { $crate::Element::new("stop")$(.with($part))* };
 }
 
+/// `<text>` element (SVG).
+#[macro_export]
+macro_rules! text {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("text")$(.with($part))* };
+}
+
+/// `<tspan>` element (SVG).
+#[macro_export]
+macro_rules! tspan {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("tspan")$(.with($part))* };
+}
+
+/// `<textPath>` element (SVG).
+#[macro_export]
+macro_rules! textPath {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("textPath")$(.with($part))* };
+}
+
+/// `<foreignObject>` element (SVG).
+#[macro_export]
+macro_rules! foreignObject {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("foreignObject")$(.with($part))* };
+}
+
+/// `<mask>` element (SVG).
+#[macro_export]
+macro_rules! mask {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("mask")$(.with($part))* };
+}
+
+/// `<pattern>` element (SVG).
+#[macro_export]
+macro_rules! pattern {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("pattern")$(.with($part))* };
+}
+
+/// `<marker>` element (SVG).
+#[macro_export]
+macro_rules! marker {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("marker")$(.with($part))* };
+}
+
+/// `<filter>` element (SVG).
+#[macro_export]
+macro_rules! filter {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("filter")$(.with($part))* };
+}
+
+/// `<feGaussianBlur>` element (SVG).
+#[macro_export]
+macro_rules! feGaussianBlur {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("feGaussianBlur")$(.with($part))* };
+}
+
+/// `<feOffset>` element (SVG).
+#[macro_export]
+macro_rules! feOffset {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("feOffset")$(.with($part))* };
+}
+
+/// `<feFlood>` element (SVG).
+#[macro_export]
+macro_rules! feFlood {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("feFlood")$(.with($part))* };
+}
+
+/// `<feComposite>` element (SVG).
+#[macro_export]
+macro_rules! feComposite {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("feComposite")$(.with($part))* };
+}
+
+/// `<feBlend>` element (SVG).
+#[macro_export]
+macro_rules! feBlend {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("feBlend")$(.with($part))* };
+}
+
+/// `<feColorMatrix>` element (SVG).
+#[macro_export]
+macro_rules! feColorMatrix {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("feColorMatrix")$(.with($part))* };
+}
+
+/// `<feMerge>` element (SVG).
+#[macro_export]
+macro_rules! feMerge {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("feMerge")$(.with($part))* };
+}
+
+/// `<feMergeNode>` element (SVG).
+#[macro_export]
+macro_rules! feMergeNode {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("feMergeNode")$(.with($part))* };
+}
+
+/// `<feDropShadow>` element (SVG).
+#[macro_export]
+macro_rules! feDropShadow {
+    ($($part:expr),* $(,)?) => { $crate::Element::new("feDropShadow")$(.with($part))* };
+}
+
 /// `<area>` void element (children are ignored).
 #[macro_export]
 macro_rules! area {
@@ -846,6 +948,23 @@ pub const TAGS: &[&str] = &[
     "linearGradient",
     "radialGradient",
     "stop",
+    "text",
+    "tspan",
+    "textPath",
+    "foreignObject",
+    "mask",
+    "pattern",
+    "marker",
+    "filter",
+    "feGaussianBlur",
+    "feOffset",
+    "feFlood",
+    "feComposite",
+    "feBlend",
+    "feColorMatrix",
+    "feMerge",
+    "feMergeNode",
+    "feDropShadow",
     "area",
     "base",
     "br",

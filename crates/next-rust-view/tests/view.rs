@@ -88,11 +88,11 @@ fn links_and_images() {
         r#"<img src="https://cdn.example.com/x.png" alt="remote" width="10" fetchpriority="high" decoding="async">"#
     );
     let html = render_static(Image!(src = "/hero.jpg", width = 800, height = 400, alt = "Hero"));
-    assert!(html.contains("srcset=\"/_nr/image?url=%2Fhero.jpg&amp;w=640&amp;q=75 640w, /_nr/image?url=%2Fhero.jpg&amp;w=750&amp;q=75 750w, /_nr/image?url=%2Fhero.jpg&amp;w=800&amp;q=75 800w\""), "{html}");
+    assert!(html.contains("srcset=\"/_next-rust/image?url=%2Fhero.jpg&amp;w=640&amp;q=75 640w, /_next-rust/image?url=%2Fhero.jpg&amp;w=750&amp;q=75 750w, /_next-rust/image?url=%2Fhero.jpg&amp;w=800&amp;q=75 800w\""), "{html}");
 }
 
-static SHEET: Stylesheet = Stylesheet { id: "abc", css: ".card_1{color:red}", per_class: None };
-static GLOBAL: Stylesheet = Stylesheet { id: "glob", css: "body{margin:0}", per_class: None };
+static SHEET: Stylesheet = Stylesheet { id: "abc", css: ".card_1{color:red}", per_class: None, scripts: &[] };
+static GLOBAL: Stylesheet = Stylesheet { id: "glob", css: "body{margin:0}", per_class: None, scripts: &[] };
 
 #[test]
 fn stylesheets_are_deduplicated() {
@@ -233,7 +233,8 @@ fn plain_internal_anchors_enable_client_navigation() {
     // A form posting to a server action needs the runtime too, or it would
     // submit with a full page load.
     assert!(
-        flags_for(form![data("nr-action", "/_nr/action/abc"), button!["Send"]].into_node()).contains("[links=true]")
+        flags_for(form![data("nr-action", "/_next-rust/action/abc"), button!["Send"]].into_node())
+            .contains("[links=true]")
     );
     assert!(flags_for(form![action("/elsewhere"), button!["Send"]].into_node()).contains("[links=false]"));
     let html = render_static(a![href("/logout"), reload(true), "Log out"]);
@@ -249,4 +250,53 @@ fn flags_detect_links_and_islands() {
     let html = futures_executor::block_on(stream_document(parts, false).collect::<Vec<_>>()).concat();
     assert!(html.contains(r#"<nr-island data-component="Counter" data-props="{}"><button>0</button></nr-island>"#));
     assert!(html.ends_with("truetrue</body></html>"));
+}
+
+#[test]
+fn document_html_attributes_are_safe_and_styled() {
+    static UTILS: Stylesheet = Stylesheet {
+        id: "tw",
+        css: "@layer utilities{.dark{color:red}.unused{color:blue}}",
+        per_class: Some(&[]),
+        scripts: &[],
+    };
+    let parts = DocumentParts {
+        html_attributes: vec![
+            ("data-theme".into(), "pass\"point".into()),
+            ("class".into(), "dark".into()),
+            ("onload".into(), "alert(1)".into()),
+            ("bad name".into(), "x".into()),
+            ("lang".into(), "de".into()),
+        ],
+        ..DocumentParts::new(fragment![&UTILS, p!["hi"]])
+    };
+    let html = futures_executor::block_on(stream_document(parts, false).collect::<Vec<_>>()).concat();
+    assert!(
+        html.starts_with(r#"<!DOCTYPE html><html lang="de" data-theme="pass&quot;point" class="dark"><head>"#),
+        "{html}"
+    );
+    assert!(!html.contains("onload") && !html.contains("bad name"), "{html}");
+    // The class is only on <html>, yet its rule is sent; unused rules are not.
+    assert!(html.contains(".dark{color:red}") && !html.contains(".unused"), "{html}");
+}
+
+#[test]
+fn svg_text_filters_and_foreign_objects() {
+    let html = render_static(svg![
+        view_box("0 0 10 10"),
+        defs![filter![
+            id("glow"),
+            feGaussianBlur![attr("stdDeviation", "2")],
+            feMerge![feMergeNode![], feMergeNode![]]
+        ]],
+        text![attr("x", "1"), tspan!["a < b"]],
+        foreignObject![attr("width", "10"), div!["html"]],
+    ]);
+    assert_eq!(
+        html,
+        r#"<svg viewBox="0 0 10 10"><defs><filter id="glow"><feGaussianBlur stdDeviation="2"></feGaussianBlur><feMerge><feMergeNode></feMergeNode><feMergeNode></feMergeNode></feMerge></filter></defs><text x="1"><tspan>a &lt; b</tspan></text><foreignObject width="10"><div>html</div></foreignObject></svg>"#
+    );
+    for name in ["text", "tspan", "textPath", "foreignObject", "mask", "pattern", "marker", "filter", "feDropShadow"] {
+        assert!(TAGS.contains(&name), "{name} is listed in TAGS");
+    }
 }

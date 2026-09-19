@@ -120,7 +120,7 @@ pub fn analyze_project(config: &Config) -> Project {
         if a.argc > 2 {
             project.diagnostics.push(
                 Diagnostic::error("NR0210", format!("Server action `{}` has too many arguments", a.name))
-                    .message("Server actions take zero arguments, one input argument, or (ActionContext, input).")
+                    .message("Server actions take zero arguments, one input argument, an ActionContext, or (ActionContext, input).")
                     .help("group the inputs into one struct deriving `Deserialize`"),
             );
         }
@@ -634,7 +634,7 @@ impl<'a> Gen<'a> {
 
 /// Generate the Rust source included by `next_rust::app!()`.
 /// Options for [`generate_code_with`].
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct CodegenOptions {
     /// Embed `page.html` files minified instead of including them verbatim.
     /// Enabled automatically for release builds.
@@ -650,6 +650,38 @@ pub struct CodegenOptions {
     /// (release builds with Tailwind). Part of the build id, so a browser
     /// never mixes pages from builds with different names.
     pub class_names: Option<u64>,
+    /// Embed the scripts in `client/` and `assets/` minified (`[build]
+    /// minify_js`): the minified copies are written under this directory
+    /// (`$OUT_DIR/next_rust_min`) and compiled in from there. `None` embeds
+    /// them as written.
+    pub minified_dir: Option<PathBuf>,
+    /// Minify the scripts copied under `minified_dir`.
+    pub minify_js: bool,
+    /// Short class names of the build: the scripts copied under
+    /// `minified_dir` are rewritten to use them (see `js_classes`).
+    pub renames: Option<ScriptRenames>,
+    /// Compress the embedded files with Brotli and gzip at build time, so
+    /// the server sends them precompressed.
+    pub precompress: bool,
+    /// Give the app the classes the build knows (`next_rust_known_classes.rs`),
+    /// so pages leave out generated-looking classes that style nothing.
+    pub drop_classes: bool,
+}
+
+/// What generating the code found out, for the build report.
+#[derive(Debug, Default, Clone)]
+pub struct CodegenReport {
+    pub scripts: Vec<crate::report::ScriptReport>,
+    pub files: Vec<crate::report::FileReport>,
+}
+
+/// Short class names to apply to scripts.
+#[derive(Debug, Clone, Default)]
+pub struct ScriptRenames {
+    /// Every class of the stylesheet, shortened or not.
+    pub known: std::collections::BTreeSet<String>,
+    /// Class → short name.
+    pub table: std::collections::BTreeMap<String, String>,
 }
 
 /// Files under `dir` as `(relative path with '/', absolute path)`, sorted.
@@ -683,7 +715,7 @@ pub fn embedded_dirs(config: &Config) -> [(&'static str, PathBuf); 3] {
 }
 
 /// Paths passed to `asset!("…")` anywhere in the app directory or `src/`.
-/// `/_nr/assets/` URLs only come from that macro, so other files in
+/// `/_next-rust/assets/` URLs only come from that macro, so other files in
 /// `assets/` can never be requested and are left out of release binaries.
 pub fn referenced_assets(config: &Config) -> std::collections::BTreeSet<String> {
     let mut found = std::collections::BTreeSet::new();
@@ -706,7 +738,103 @@ pub fn referenced_assets(config: &Config) -> std::collections::BTreeSet<String> 
     found
 }
 
-fn embedded_code(config: &Config) -> String {
+/// Directory under `$OUT_DIR` holding the minified copies of embedded scripts.
+pub const MINIFIED_DIR: &str = "next_rust_min";
+
+/// Whether an embedded file is a script the release build minifies.
+fn is_script(field: &str, rel: &str) -> bool {
+    matches!(field, "client" | "assets") && matches!(rel.rsplit('.').next(), Some("js" | "mjs"))
+}
+
+/// The processed copy of `client/…` or `assets/…` script `rel`, written
+/// under `minified_dir`: class names shortened, then minified when asked.
+/// The file as written when the minifier cannot handle it (with a build
+/// warning), so a build never breaks over it.
+fn minified_copy(
+    minified_dir: &Path,
+    field: &str,
+    rel: &str,
+    path: &Path,
+    bytes: &[u8],
+    minify: bool,
+    renames: Option<&ScriptRenames>,
+) -> Option<(PathBuf, Vec<u8>, usize)> {
+    let mut source = String::from_utf8(bytes.to_vec()).ok()?;
+    let mut renamed = 0;
+    if let Some(r) = renames {
+        match crate::js_classes::analyze(&source, &|c| r.known.contains(c)) {
+            Ok(found) => {
+                renamed = found.renamable.iter().filter(|(_, _, c)| r.table.contains_key(c)).count();
+                source = found.apply(&source, &|c| r.table.get(c).cloned());
+            }
+            Err(e) => println!(
+                "cargo:warning=Next Rust: {} keeps its class names as written; it could not be analyzed: {e}",
+                path.display()
+            ),
+        }
+    }
+    let minified = match (minify, field) {
+        (false, _) => Ok(source.clone()),
+        (true, "client") => crate::js_minify::minify(&source, true),
+        (true, _) => crate::js_minify::minify_any(&source),
+    };
+    match minified {
+        Ok(code) => {
+            let target = minified_dir.join(field).join(rel);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).ok()?;
+            }
+            if std::fs::read(&target).ok().as_deref() != Some(code.as_bytes()) {
+                std::fs::write(&target, &code).ok()?;
+            }
+            Some((target, code.into_bytes(), renamed))
+        }
+        Err(e) => {
+            println!(
+                "cargo:warning=Next Rust: {} was embedded as written; it could not be minified: {e}",
+                path.display()
+            );
+            None
+        }
+    }
+}
+
+/// `bytes` compressed with Brotli (quality 11) and gzip (level 9), written
+/// under `dir/precompressed/`, when the file is worth compressing: a
+/// compressible type, at least 1 KB, and at least 10% smaller compressed.
+fn precompressed(dir: &Path, field: &str, rel: &str, bytes: &[u8]) -> [Option<(PathBuf, usize)>; 2] {
+    use std::io::Write;
+    if bytes.len() < 1024 || !next_rust_assets::mime::is_compressible(next_rust_assets::mime::from_path(rel)) {
+        return [None, None];
+    }
+    let mut br = Vec::with_capacity(bytes.len() / 2);
+    {
+        let mut w = brotli::CompressorWriter::new(&mut br, 4096, 11, 22);
+        if w.write_all(bytes).is_err() {
+            return [None, None];
+        }
+    }
+    let mut gz = flate2::write::GzEncoder::new(Vec::with_capacity(bytes.len() / 2), flate2::Compression::best());
+    let gz = gz.write_all(bytes).and_then(|()| gz.finish()).unwrap_or_default();
+    let mut out = [None, None];
+    for (slot, ext, data) in [(0, "br", br), (1, "gz", gz)] {
+        if data.is_empty() || data.len() * 10 > bytes.len() * 9 {
+            continue;
+        }
+        let target = dir.join("precompressed").join(field).join(format!("{rel}.{ext}"));
+        if let Some(parent) = target.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if std::fs::read(&target).ok().as_deref() != Some(data.as_slice()) && std::fs::write(&target, &data).is_err() {
+            continue;
+        }
+        out[slot] = Some((target, data.len()));
+    }
+    out
+}
+
+fn embedded_code(config: &Config, options: &CodegenOptions, report: &mut CodegenReport) -> String {
+    let minified_dir = options.minified_dir.as_deref();
     let mut out = String::new();
     let mut built_at = 0u64;
     let used_assets = referenced_assets(config);
@@ -717,6 +845,38 @@ fn embedded_code(config: &Config) -> String {
                 continue;
             }
             let Ok(bytes) = std::fs::read(&path) else { continue };
+            let original = bytes.len();
+            let (path, bytes) = match minified_dir.filter(|_| is_script(field, &rel)) {
+                Some(min) => {
+                    match minified_copy(min, field, &rel, &path, &bytes, options.minify_js, options.renames.as_ref()) {
+                        Some((p, b, renamed)) => {
+                            report.scripts.push(crate::report::ScriptReport {
+                                path: format!("{field}/{rel}"),
+                                bytes: original,
+                                minified: b.len(),
+                                renamed,
+                            });
+                            (p, b)
+                        }
+                        None => (path, bytes),
+                    }
+                }
+                None => (path, bytes),
+            };
+            let [br, gz] = match minified_dir.filter(|_| options.precompress) {
+                Some(dir) => precompressed(dir, field, &rel, &bytes),
+                None => [None, None],
+            };
+            report.files.push(crate::report::FileReport {
+                path: format!("{field}/{rel}"),
+                bytes: bytes.len(),
+                brotli: br.as_ref().map(|(_, n)| *n),
+                gzip: gz.as_ref().map(|(_, n)| *n),
+            });
+            let include = |copy: &Option<(PathBuf, usize)>| match copy {
+                Some((p, _)) => format!("Some(include_bytes!({}))", lit(&p.to_string_lossy())),
+                None => "None".to_owned(),
+            };
             if let Some(secs) = std::fs::metadata(&path)
                 .and_then(|m| m.modified())
                 .ok()
@@ -726,10 +886,12 @@ fn embedded_code(config: &Config) -> String {
             }
             let _ = writeln!(
                 out,
-                "    __nr::EmbeddedFile {{ path: {}, bytes: include_bytes!({}), hash: {} }},",
+                "    __nr::EmbeddedFile {{ path: {}, bytes: include_bytes!({}), hash: {}, br: {}, gz: {} }},",
                 lit(&rel),
                 lit(&path.to_string_lossy()),
-                lit(&next_rust_assets::content_hash(&bytes))
+                lit(&next_rust_assets::content_hash(&bytes)),
+                include(&br),
+                include(&gz),
             );
         }
         out.push_str("];\n");
@@ -761,6 +923,12 @@ pub fn generate_code(project: &Project) -> String {
 
 /// Generate code with explicit options.
 pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String {
+    generate_code_reporting(project, options).0
+}
+
+/// [`generate_code_with`], also returning what the build report needs.
+pub fn generate_code_reporting(project: &Project, options: CodegenOptions) -> (String, CodegenReport) {
+    let mut report = CodegenReport::default();
     let mut g = Gen { project, modules: BTreeMap::new(), wrappers: BTreeSet::new(), out: String::new() };
     let root = &project.config.root;
     let app_root = project.config.app_dir();
@@ -932,7 +1100,7 @@ pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String 
     let mut out = header;
     out.push_str(&g.out);
     let embedded = if options.embed_files {
-        out.push_str(&embedded_code(&project.config));
+        out.push_str(&embedded_code(&project.config, &options, &mut report));
         "Some(&__NR_EMBEDDED)"
     } else {
         "None"
@@ -941,7 +1109,7 @@ pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String 
         // Pages get only the rules for the classes they render, plus those
         // code outside the view tree may add (written by the generator).
         out.push_str(
-            "/// Tailwind CSS generated from the classes used in the app.\nstatic __NR_TAILWIND: __nr::Stylesheet = __nr::Stylesheet {\n    id: include_str!(concat!(env!(\"OUT_DIR\"), \"/next_rust_tailwind.id\")),\n    css: include_str!(concat!(env!(\"OUT_DIR\"), \"/next_rust_tailwind.css\")),\n    per_class: Some(include!(concat!(env!(\"OUT_DIR\"), \"/next_rust_tailwind_keep.rs\"))),\n};\nstatic __NR_STYLESHEETS: &[&__nr::Stylesheet] = &[&__NR_TAILWIND];\n\n",
+            "/// Tailwind CSS generated from the classes used in the app.\nstatic __NR_TAILWIND: __nr::Stylesheet = __nr::Stylesheet {\n    id: include_str!(concat!(env!(\"OUT_DIR\"), \"/next_rust_tailwind.id\")),\n    css: include_str!(concat!(env!(\"OUT_DIR\"), \"/next_rust_tailwind.css\")),\n    per_class: Some(include!(concat!(env!(\"OUT_DIR\"), \"/next_rust_tailwind_keep.rs\"))),\n    scripts: include!(concat!(env!(\"OUT_DIR\"), \"/next_rust_tailwind_scripts.rs\")),\n};\nstatic __NR_STYLESHEETS: &[&__nr::Stylesheet] = &[&__NR_TAILWIND];\n\n",
         );
         "__NR_STYLESHEETS"
     } else {
@@ -955,13 +1123,21 @@ pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String 
     } else {
         "&[]"
     };
+    let known_classes = if options.drop_classes {
+        out.push_str(
+            "/// Classes the build found a rule, a script or a static file for; generated-looking classes outside it are left out of pages.\nstatic __NR_KNOWN_CLASSES: &[&str] = include!(concat!(env!(\"OUT_DIR\"), \"/next_rust_known_classes.rs\"));\n\n",
+        );
+        "__NR_KNOWN_CLASSES"
+    } else {
+        "&[]"
+    };
     let mut id = build_id(&project.config);
     if let Some(seed) = options.class_names {
         id.push_str(&format!("-{seed:016x}"));
     }
     let _ = write!(
         out,
-        "/// All routes discovered in the app directory.\npub fn routes() -> ::next_rust::Routes {{\n    __nr::Routes {{\n        pages: vec![\n{}\n        ],\n        apis: vec![\n{}\n        ],\n        actions: vec![\n{}\n        ],\n        root: {},\n        middleware: {},\n        global_error: {},\n        sitemap: {},\n        robots: {},\n        project_root: {},\n        embedded: {},\n        build_id: {},\n        toml: {},\n        stylesheets: {},\n        class_names: {},\n    }}\n}}\n",
+        "/// All routes discovered in the app directory.\npub fn routes() -> ::next_rust::Routes {{\n    __nr::Routes {{\n        pages: vec![\n{}\n        ],\n        apis: vec![\n{}\n        ],\n        actions: vec![\n{}\n        ],\n        root: {},\n        middleware: {},\n        global_error: {},\n        sitemap: {},\n        robots: {},\n        project_root: {},\n        embedded: {},\n        build_id: {},\n        toml: {},\n        stylesheets: {},\n        class_names: {},\n        known_classes: {},\n    }}\n}}\n",
         pages.join(",\n"),
         apis.join(",\n"),
         actions.join(",\n"),
@@ -978,8 +1154,9 @@ pub fn generate_code_with(project: &Project, options: CodegenOptions) -> String 
         if options.embed_files { "None" } else { "__nr::TOML" },
         stylesheets,
         class_names,
+        known_classes,
     );
-    out
+    (out, report)
 }
 
 /// A hash of the application's source: the app directory, `src/` and the

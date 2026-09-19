@@ -48,8 +48,8 @@ pub use app::{
     parse_pattern,
 };
 pub use context::{
-    Auth, AuthUser, CsrfToken, Ctx, Data, Extension, FormState, FromContext, Headers, Nonce, Path, Query, QueryMap,
-    RenderMode, RequestContext, RequestInfo, ResponseHeaders,
+    Auth, AuthUser, ClientIp, CsrfToken, Ctx, Data, Extension, FormState, FromContext, Headers, Nonce, Path, Query,
+    QueryMap, RenderMode, RequestContext, RequestInfo, ResponseHeaders,
 };
 pub use cookies::{Cookie, Cookies, SameSite};
 pub use embed::{Embedded, EmbeddedFile};
@@ -92,7 +92,19 @@ pub async fn revalidate_tag(tag: &str) {
 }
 
 /// Name of the CSRF double-submit cookie.
-pub const CSRF_COOKIE: &str = "nr_csrf";
+pub const CSRF_COOKIE: &str = "next_rust_csrf";
+
+/// The framework's version, as in `Cargo.toml`.
+pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// The build signature (`Next Rust 0.1.10`): what a page's
+/// `<meta name="generator">` and the framework's scripts say built them
+/// while `[build] signature = true`.
+pub fn signature() -> String {
+    format!("Next Rust {VERSION}")
+}
+
+pub use middleware::STRICT_CSP;
 
 /// Per-request CSP nonce stored in request extensions.
 #[derive(Debug, Clone)]
@@ -148,7 +160,7 @@ pub mod __private {
     pub use next_rust_router::Params;
     pub use next_rust_view::{Children, IntoViewResult, Metadata, Node, Slots, Stylesheet, View};
 
-    pub use crate::actions::{ActionContext, ActionRef, run_action, run_action_ctx, run_action0};
+    pub use crate::actions::{ActionContext, ActionRef, run_action, run_action_ctx, run_action_ctx0, run_action0};
     pub use crate::app::{
         ActionDef, ApiDef, ErrorInfo, HandlerFn, MiddlewareFn, PageBody, PageDef, Rendering, Routes, SegmentDef,
         SlotDef,

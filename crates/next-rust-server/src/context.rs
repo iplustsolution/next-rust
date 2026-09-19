@@ -206,6 +206,23 @@ impl FromContext for Headers {
     }
 }
 
+/// The client's IP address, read as [`crate::Request::client_ip`] reads it:
+/// the first `X-Forwarded-For` entry when `[server] trust_proxy` is on, the
+/// peer address otherwise. `None` when neither is known (tests, pre-rendering).
+///
+/// ```ignore
+/// pub async fn load(ClientIp(ip): ClientIp) -> Result<Quota> { quota_for(ip).await }
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClientIp(pub Option<std::net::IpAddr>);
+
+impl FromContext for ClientIp {
+    fn from_context(ctx: &Ctx) -> Result<Self> {
+        ctx.require_request("ClientIp")?;
+        Ok(ClientIp(crate::request::client_ip_from(&ctx.headers, ctx.remote_addr, crate::trust_proxy())))
+    }
+}
+
 /// Basic request information.
 #[derive(Debug, Clone)]
 pub struct RequestInfo {

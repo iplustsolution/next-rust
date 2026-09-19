@@ -193,6 +193,11 @@ pub fn input_css(config: &Config) -> String {
         css.push_str("@import \"tailwindcss/theme.css\" layer(theme);\n");
         css.push_str("@import \"tailwindcss/utilities.css\" layer(utilities) source(none);\n");
     }
+    // Imports must come before other rules; Tailwind still applies variants
+    // and theme values declared further down to the imported files.
+    for sheet in stylesheet_paths(config) {
+        let _ = writeln!(css, "@import {};", quote(&sheet));
+    }
     let mut sources = vec![config.app_dir(), config.root.join("src")];
     sources.extend(tw.sources.iter().map(|s| config.resolve(s)));
     for dir in sources.iter().filter(|d| d.exists()) {
@@ -240,6 +245,11 @@ pub fn input_css(config: &Config) -> String {
         css.push('\n');
     }
     css
+}
+
+/// The `[tailwind] stylesheets`, resolved against the config file, in order.
+pub fn stylesheet_paths(config: &Config) -> Vec<PathBuf> {
+    config.tailwind.stylesheets.iter().map(|s| config.resolve(s)).collect()
 }
 
 /// Directories Tailwind scans; a change in any of them regenerates the CSS.
@@ -396,6 +406,26 @@ mod tests {
         assert!(!css.contains("/src\""), "missing directories are not scanned");
         config.tailwind.preflight = false;
         assert!(input_css(&config).contains("tailwindcss/utilities.css\" layer(utilities) source(none)"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn stylesheets_are_imported_first_and_in_order() {
+        let mut config = Config::from_toml_str(
+            "[tailwind]\nenabled = true\nstylesheets = [\"styles/theme.css\", \"styles/animate.css\"]\n",
+        )
+        .unwrap();
+        let root = std::env::temp_dir().join(format!("nr-tw-sheets-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        config.root = root.clone();
+        let css = input_css(&config);
+        let at = |needle: &str| css.find(needle).unwrap_or_else(|| panic!("missing `{needle}` in:\n{css}"));
+        let tailwind = at("@import \"tailwindcss\"");
+        let theme = at("/styles/theme.css\";");
+        let animate = at("/styles/animate.css\";");
+        let source = at("@source ");
+        assert!(tailwind < theme && theme < animate && animate < source, "wrong order:\n{css}");
+        assert_eq!(stylesheet_paths(&config), [root.join("styles/theme.css"), root.join("styles/animate.css")]);
         std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -30,9 +30,11 @@
 //!   on an ancestor.
 //! * Pages receive only the CSS of the components they render.
 //!
-//! Interactive components (select, date picker, password toggle, `on_press`)
-//! load a small script, `/_nr/ui.js`, on the pages that use them. Without it
-//! they fall back to the native control, so forms keep working.
+//! Interactive components (select, date picker, password toggle, tabs with
+//! panels, modals, closable alerts, `on_press`) load a small script,
+//! `/_next-rust/ui.js`, on the pages that use them. Without it they fall
+//! back to the native control (a `<select>`, a `<dialog>`, `<details>`), so
+//! pages keep working.
 
 #![forbid(unsafe_code)]
 
@@ -45,26 +47,39 @@ mod avatar;
 mod button;
 mod card;
 mod date_picker;
+mod display;
 mod feedback;
 mod icons;
 mod input;
 mod layout;
+mod navigation;
+mod overlay;
 mod press;
 mod script;
 mod select;
 #[doc(hidden)]
 pub mod style;
+mod table;
 mod toggle;
 
 pub use avatar::{Avatar, AvatarGroup};
 pub use button::{Button, ButtonGroup};
 pub use card::{Card, CardBody, CardFooter, CardHeader, Shadow};
 pub use date_picker::DatePicker;
+pub use display::{
+    Alert, Badge, CircularProgress, EmptyState, Kbd, Placement, Progress, Side, Skeleton, Stat, Tooltip, Trend,
+};
 pub use feedback::{Chip, Divider, Spinner};
 pub use input::{Input, LabelPlacement, PasswordInput, Textarea};
 pub use layout::{Align, AppShell, Container, Grid, Justify, Navbar, NavbarItem, Sidebar, SidebarItem, Stack, Width};
+pub use navigation::{
+    Accordion, AccordionItem, AccordionVariant, BreadcrumbItem, Breadcrumbs, Step, StepStatus, Steps, Tab, Tabs,
+    TabsVariant,
+};
+pub use overlay::{Modal, ModalBody, ModalFooter, ModalPlacement};
 pub use press::Press;
 pub use select::{Select, SelectItem};
+pub use table::Table;
 pub use toggle::{Checkbox, Radio, RadioGroup, Switch};
 
 /// The component stylesheet. Components add it to the page themselves; only
@@ -74,6 +89,7 @@ pub static UI_CSS: Stylesheet = Stylesheet {
     // `style::UI_CSS_SOURCE`, minified by `build.rs`.
     css: include_str!(concat!(env!("OUT_DIR"), "/ui.min.css")),
     per_class: Some(&[]),
+    scripts: &[],
 };
 
 pub use script::{UI_JS, UI_JS_MIN, rename_classes as rename_script_classes};
@@ -87,10 +103,12 @@ pub const EXTRA_CLASSES: &[&str] = &[
     "nr-cols-1",
     "nr-datepicker-toggle",
     "nr-label-outside",
+    "nr-modal-center",
     "nr-password",
     "nr-radio-label",
     "nr-shell-with-sidebar",
     "nr-switch-label",
+    "nr-tab-title",
 ];
 
 /// Color of a component.
@@ -254,6 +272,10 @@ pub(crate) struct Extra {
 impl Extra {
     pub(crate) fn push(&mut self, part: impl Part) {
         part.apply(self.el.get_or_insert_with(|| Element::new("div")));
+    }
+
+    pub(crate) fn has_children(&self) -> bool {
+        self.el.as_ref().is_some_and(|el| !el.children.is_empty())
     }
 
     /// `(class attribute of the outer element, other attributes, children)`.
@@ -538,4 +560,151 @@ macro_rules! Switch {
 #[macro_export]
 macro_rules! Textarea {
     ($($body:tt)*) => { $crate::__ui_munch!([$crate::Textarea::new()] $($body)*) };
+}
+
+/// Build a [`Accordion`](struct@crate::Accordion): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Accordion {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Accordion::new()] $($body)*) };
+}
+
+/// Build a [`AccordionItem`](struct@crate::AccordionItem): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! AccordionItem {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::AccordionItem::new()] $($body)*) };
+}
+
+/// Build a [`Alert`](struct@crate::Alert): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Alert {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Alert::new()] $($body)*) };
+}
+
+/// Build a [`Badge`](struct@crate::Badge): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Badge {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Badge::new()] $($body)*) };
+}
+
+/// Build a [`BreadcrumbItem`](struct@crate::BreadcrumbItem): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! BreadcrumbItem {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::BreadcrumbItem::new()] $($body)*) };
+}
+
+/// Build a [`Breadcrumbs`](struct@crate::Breadcrumbs): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Breadcrumbs {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Breadcrumbs::new()] $($body)*) };
+}
+
+/// Build a [`CircularProgress`](struct@crate::CircularProgress): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! CircularProgress {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::CircularProgress::new()] $($body)*) };
+}
+
+/// Build a [`EmptyState`](struct@crate::EmptyState): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! EmptyState {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::EmptyState::new()] $($body)*) };
+}
+
+/// Build a [`Kbd`](struct@crate::Kbd): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Kbd {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Kbd::new()] $($body)*) };
+}
+
+/// Build a [`Modal`](struct@crate::Modal): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Modal {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Modal::new()] $($body)*) };
+}
+
+/// Build a [`ModalBody`](struct@crate::ModalBody): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! ModalBody {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::ModalBody::new()] $($body)*) };
+}
+
+/// Build a [`ModalFooter`](struct@crate::ModalFooter): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! ModalFooter {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::ModalFooter::new()] $($body)*) };
+}
+
+/// Build a [`Progress`](struct@crate::Progress): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Progress {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Progress::new()] $($body)*) };
+}
+
+/// Build a [`Skeleton`](struct@crate::Skeleton): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Skeleton {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Skeleton::new()] $($body)*) };
+}
+
+/// Build a [`Stat`](struct@crate::Stat): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Stat {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Stat::new()] $($body)*) };
+}
+
+/// Build a [`Step`](struct@crate::Step): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Step {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Step::new()] $($body)*) };
+}
+
+/// Build a [`Steps`](struct@crate::Steps): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Steps {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Steps::new()] $($body)*) };
+}
+
+/// Build a [`Tab`](struct@crate::Tab): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Tab {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Tab::new()] $($body)*) };
+}
+
+/// Build a [`Table`](struct@crate::Table): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Table {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Table::new()] $($body)*) };
+}
+
+/// Build a [`Tabs`](struct@crate::Tabs): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Tabs {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Tabs::new()] $($body)*) };
+}
+
+/// Build a [`Tooltip`](struct@crate::Tooltip): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Tooltip {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Tooltip::new()] $($body)*) };
 }

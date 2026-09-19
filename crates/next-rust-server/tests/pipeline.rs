@@ -18,13 +18,25 @@ fn root_layout(_ctx: Ctx, children: Children, _slots: Slots) -> R {
     Box::pin(async move { Ok(div![id("root"), header!["Site"], main![children]].into_node()) })
 }
 fn root_metadata(_ctx: Ctx) -> BoxFuture<Result<Metadata>> {
-    Box::pin(async { Ok(Metadata::new().title("Acme").title_template("%s | Acme").description("root desc")) })
+    Box::pin(async {
+        Ok(Metadata::new()
+            .title("Acme")
+            .title_template("%s | Acme")
+            .description("root desc")
+            .html_attribute("data-theme", "acme"))
+    })
 }
 fn root_not_found(_ctx: Ctx) -> R {
     Box::pin(async { Ok(h1!["Nothing here"].into_node()) })
 }
 fn home(_ctx: Ctx) -> R {
     Box::pin(async { Ok(fragment![h1!["Home"], Link!(href = "/about", "About")]) })
+}
+fn client_ip_page(ctx: Ctx) -> R {
+    Box::pin(async move {
+        let ClientIp(ip) = ClientIp::from_context(&ctx)?;
+        Ok(p![format!("ip={ip:?}")].into_node())
+    })
 }
 fn blog_layout(_ctx: Ctx, children: Children, _slots: Slots) -> R {
     Box::pin(async move { Ok(section![class("blog"), children].into_node()) })
@@ -150,6 +162,15 @@ fn create_user_handler(req: Request) -> BoxFuture<Response> {
 }
 const CREATE_USER_ID: &str = "tests::create_user";
 
+/// An action that needs the request but takes no input.
+async fn who_asked(ctx: ActionContext) -> Result<String> {
+    Ok(ctx.headers.get("x-asker").and_then(|v| v.to_str().ok()).unwrap_or("nobody").to_owned())
+}
+fn who_asked_handler(req: Request) -> BoxFuture<Response> {
+    Box::pin(__private::run_action_ctx0(req, who_asked))
+}
+const WHO_ASKED_ID: &str = "tests::who_asked";
+
 fn page(pattern: &'static str, body: PageBody, segments: Vec<SegmentDef>) -> PageDef {
     PageDef {
         pattern,
@@ -244,6 +265,7 @@ fn build_with(env: Environment, tweak: impl FnOnce(&mut Config)) -> TestApp {
             static_bad,
             page("/photo/[id]", PageBody::Rust(photo), vec![root_seg(), SegmentDef::default()]),
             modal,
+            page("/ip", PageBody::Rust(client_ip_page), vec![root_seg(), SegmentDef::default()]),
         ],
         apis: vec![ApiDef {
             pattern: "/api/users/[id]",
@@ -251,7 +273,10 @@ fn build_with(env: Environment, tweak: impl FnOnce(&mut Config)) -> TestApp {
             handlers: vec![(Method::GET, users_get), (Method::POST, users_post)],
             middleware: vec![],
         }],
-        actions: vec![ActionDef { id: CREATE_USER_ID, handler: create_user_handler }],
+        actions: vec![
+            ActionDef { id: CREATE_USER_ID, handler: create_user_handler },
+            ActionDef { id: WHO_ASKED_ID, handler: who_asked_handler },
+        ],
         root: root_seg(),
         middleware: Some(root_mw),
         ..Default::default()
@@ -303,17 +328,63 @@ async fn renders_page_with_layout_metadata_and_security_headers() {
     let (status, headers, body) = get(&t.app, "/").await;
     assert_eq!(status, 200);
     assert_eq!(headers["content-type"], "text/html; charset=utf-8");
-    assert!(body.starts_with("<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\">"), "{body}");
+    assert!(
+        body.starts_with(&format!(
+            "<!DOCTYPE html><html lang=\"en\" data-theme=\"acme\"><head><meta name=\"generator\" content=\"Next Rust {}\"><meta charset=\"utf-8\">",
+            next_rust_server::VERSION
+        )),
+        "{body}"
+    );
     assert!(body.contains("<title>Acme</title>"));
     assert!(body.contains("<div id=\"root\"><header>Site</header><main><h1>Home</h1><a href=\"/about\" data-nr-link=\"\">About</a></main></div>"));
     // A Link! pulls in the client runtime with the CSP nonce.
     let csp = headers["content-security-policy"].to_str().unwrap();
     let nonce = csp.trim_start_matches("script-src 'nonce-").trim_end_matches('\'');
-    assert!(body.contains(&"<script type=\"module\" src=\"/_nr/runtime.js?v=".to_string()));
+    assert!(body.contains(&"<script type=\"module\" src=\"/_next-rust/runtime.js?v=".to_string()));
     assert!(body.contains(&format!("nonce=\"{nonce}\"")));
     assert_eq!(headers["x-content-type-options"], "nosniff");
     assert_eq!(headers["x-global"], "1");
     assert_eq!(headers["x-root-mw"], "1");
+}
+
+#[tokio::test]
+async fn the_strict_csp_preset_expands_with_the_nonce() {
+    let t = build_with(Environment::Test, |c| c.security.csp = Some("strict".into()));
+    let (status, headers, body) = get(&t.app, "/").await;
+    assert_eq!(status, 200);
+    let csp = headers.get("content-security-policy").unwrap().to_str().unwrap();
+    assert!(csp.starts_with("default-src 'self'; script-src 'self' 'nonce-"), "{csp}");
+    assert!(csp.contains("'strict-dynamic'") && csp.contains("object-src 'none'") && !csp.contains("{nonce}"), "{csp}");
+    let nonce = csp.split("'nonce-").nth(1).unwrap().split('\'').next().unwrap();
+    assert!(body.contains(&format!("nonce=\"{nonce}\"")), "the framework's scripts carry the nonce");
+}
+
+#[tokio::test]
+async fn the_build_signature_can_be_turned_off() {
+    let signature = next_rust_server::signature();
+    assert_eq!(signature, format!("Next Rust {}", next_rust_server::VERSION));
+    let t = build(Environment::Test);
+    let (_, _, js) = get(&t.app, "/_next-rust/runtime.js").await;
+    assert!(js.starts_with(&format!("/*! {signature} */\n")), "the runtime is signed: {}", &js[..60]);
+    let (_, _, ui) = get(&t.app, "/_next-rust/ui.js").await;
+    assert!(ui.starts_with("/*! Next Rust "), "the component script is signed");
+
+    let quiet = build_with(Environment::Test, |c| c.build.signature = false);
+    let (_, _, body) = get(&quiet.app, "/").await;
+    assert!(!body.contains("name=\"generator\""), "{body}");
+    let (_, _, js) = get(&quiet.app, "/_next-rust/runtime.js").await;
+    assert!(!js.starts_with("/*!"), "no banner without a signature");
+}
+
+#[tokio::test]
+async fn client_ip_ignores_forwarded_for_unless_trusted() {
+    // `trust_proxy` is off in every app this file builds, so a forged
+    // X-Forwarded-For must not become the client's address.
+    let t = build(Environment::Test);
+    let forged = http::Request::get("/ip").header("x-forwarded-for", "203.0.113.7").body(Bytes::new()).unwrap();
+    let (status, _, body) = send(&t.app, forged).await;
+    assert_eq!(status, 200);
+    assert!(body.contains("<p>ip=None</p>"), "{body}");
 }
 
 #[tokio::test]
@@ -530,13 +601,13 @@ async fn server_actions() {
     // binding cookie, and with another browser's cookie.
     let (status, _, body) = send(&t.app, json(&url, r#"{"name":"Ada"}"#, None)).await;
     assert_eq!(status, 403, "no binding cookie");
-    assert!(body.contains("nr_stale"), "{body}");
+    assert!(body.contains("next_rust_stale"), "{body}");
     let other = TestClient::from_app(t.app.clone());
     other.action_url(CREATE_USER_ID);
     assert_eq!(other.send(json(&url, r#"{"name":"Ada"}"#, None)).await.status, 403, "another browser's cookie");
 
     // Static, guessable or tampered URLs never reach the action.
-    for bad in ["/_nr/action/unknown", "/_nr/action/661d1685c535653e", "/_nr/action/x~y"] {
+    for bad in ["/_next-rust/action/unknown", "/_next-rust/action/661d1685c535653e", "/_next-rust/action/x~y"] {
         assert_eq!(client.send(json(bad, "{}", None)).await.status, 403, "{bad}");
     }
     let mut tampered = url.clone().into_bytes();
@@ -567,18 +638,56 @@ async fn server_actions() {
     assert_eq!(res.header("location"), Some("/signup?step=1"));
     let res = client.send(form(&url, "name=&password=hunter2")).await;
     assert_eq!(res.status, 303);
-    let cookie = res.cookies().into_iter().find(|c| c.starts_with("nr_flash=")).unwrap();
+    let cookie = res.cookies().into_iter().find(|c| c.starts_with("next_rust_flash=")).unwrap();
     assert!(!cookie.contains("hunter2"), "passwords are never echoed back");
     let res = client.send(form(&url, "name=Ada&_redirect=//evil.com")).await;
     assert_eq!((res.status, res.header("location")), (303, Some("/signup?step=1")), "open redirects are ignored");
+    // `_redirect` is the success destination: a rejected post goes back to
+    // the form, where the flash is shown…
+    let res = client.send(form(&url, "name=&_redirect=/welcome")).await;
+    assert_eq!((res.status, res.header("location")), (303, Some("/signup?step=1")), "errors go back to the form");
+    // …and to `_redirect` only when the browser sent no referrer.
+    let no_referrer = http::Request::post(url.as_str())
+        .header("host", "example.com")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .body(Bytes::from("name=&_redirect=/welcome"))
+        .unwrap();
+    let res = client.send(no_referrer).await;
+    assert_eq!((res.status, res.header("location")), (303, Some("/welcome")));
 
     // A stale link in a plain form goes back to the page with a message.
     let (status, headers, _) = send(&t.app, form(&url, "name=Ada")).await;
     assert_eq!((status, headers["location"].to_str().unwrap()), (303, "/signup?step=1"));
-    assert!(headers["set-cookie"].to_str().unwrap().starts_with("nr_flash="));
+    assert!(headers["set-cookie"].to_str().unwrap().starts_with("next_rust_flash="));
 
     let req = http::Request::get(url.as_str()).body(Bytes::new()).unwrap();
     assert_eq!(client.send(req).await.status, 405);
+}
+
+#[tokio::test]
+async fn context_only_actions_get_the_request_and_ignore_the_body() {
+    let t = build(Environment::Test);
+    let client = TestClient::from_app(t.app.clone());
+    let url = client.action_url(WHO_ASKED_ID);
+    let req = http::Request::post(url.as_str())
+        .header("host", "example.com")
+        .header("content-type", "application/json")
+        .header("x-asker", "ada")
+        .body(Bytes::from("null"))
+        .unwrap();
+    let res = client.send(req).await;
+    assert_eq!((res.status, res.text.as_str()), (200, r#"{"data":"ada","ok":true}"#));
+    // A plain form post with fields still runs it.
+    let url = client.action_url(WHO_ASKED_ID);
+    let req = http::Request::post(url.as_str())
+        .header("host", "example.com")
+        .header("content-type", "application/x-www-form-urlencoded")
+        .header("accept", "application/json")
+        .header("x-nr-action", "1")
+        .body(Bytes::from("anything=1"))
+        .unwrap();
+    let res = client.send(req).await;
+    assert_eq!((res.status, res.text.as_str()), (200, r#"{"data":"nobody","ok":true}"#));
 }
 
 #[tokio::test]
@@ -589,7 +698,8 @@ async fn csrf_token_mode_requires_double_submit() {
     });
     let client = TestClient::from_app(t.app.clone());
     let page = client.get("/static-form").await;
-    let csrf = page.cookies().iter().find_map(|c| c.strip_prefix("nr_csrf=")).unwrap().split(';').next().unwrap();
+    let csrf =
+        page.cookies().iter().find_map(|c| c.strip_prefix("next_rust_csrf=")).unwrap().split(';').next().unwrap();
     let csrf = csrf.to_owned();
     let url = client.action_url(CREATE_USER_ID);
     let call = |token: Option<&str>| {
@@ -678,17 +788,17 @@ async fn intercepting_routes_on_soft_navigation() {
 #[tokio::test]
 async fn framework_endpoints() {
     let t = build(Environment::Test);
-    let (status, headers, body) = get(&t.app, "/_nr/runtime.js").await;
+    let (status, headers, body) = get(&t.app, "/_next-rust/runtime.js").await;
     assert_eq!(status, 200);
     assert!(headers["content-type"].to_str().unwrap().starts_with("text/javascript"));
     assert!(body.contains("window.nextRust"));
-    let (status, _, _) = get(&t.app, "/_nr/dev/events").await;
+    let (status, _, _) = get(&t.app, "/_next-rust/dev/events").await;
     assert_ne!(status, 200, "dev endpoints are disabled outside development");
-    let (status, headers, _) = get(&t.app, "/_nr/image?url=/images/a.svg&w=640").await;
+    let (status, headers, _) = get(&t.app, "/_next-rust/image?url=/images/a.svg&w=640").await;
     assert_eq!(status, 200);
     assert_eq!(headers["content-type"], "image/svg+xml");
-    assert_eq!(get(&t.app, "/_nr/image?url=https://evil.com/x.png&w=640").await.0, 400);
-    assert_eq!(get(&t.app, "/_nr/image?url=/../secret.txt&w=640").await.0, 404);
+    assert_eq!(get(&t.app, "/_next-rust/image?url=https://evil.com/x.png&w=640").await.0, 400);
+    assert_eq!(get(&t.app, "/_next-rust/image?url=/../secret.txt&w=640").await.0, 404);
 }
 
 #[tokio::test]

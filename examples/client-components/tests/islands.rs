@@ -12,5 +12,5 @@ async fn islands_render_on_the_server() {
         res.text
     );
     assert!(res.text.contains(r#"<output data-nr-text="count">3</output>"#));
-    assert!(res.text.contains(r#"<script type="module" src="/_nr/runtime.js?v="#));
+    assert!(res.text.contains(r#"<script type="module" src="/_next-rust/runtime.js?v="#));
 }

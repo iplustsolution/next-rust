@@ -237,6 +237,35 @@ pub fn mark_active_links(node: &mut crate::Node, path: &str) {
     }
 }
 
+/// On an action form: after a successful submit, stay on the page instead of
+/// refreshing it or following `_redirect` (which then only applies to
+/// browsers without JavaScript). Elements marked with [`action_result`] show
+/// what the action returned, and the form gets `data-nr-state="success"` for
+/// styling.
+///
+/// ```
+/// use next_rust_view::*;
+/// let html = render_static(form![stay_on_success(true), reset_on_success(true), p![action_result("")]]);
+/// assert_eq!(html, r#"<form data-nr-stay="" data-nr-reset=""><p data-nr-result=""></p></form>"#);
+/// ```
+pub fn stay_on_success(enabled: bool) -> Attr {
+    if enabled { Attr::new("data-nr-stay", "") } else { Attr::none() }
+}
+
+/// On a form with [`stay_on_success`]: clear its fields after a successful
+/// submit.
+pub fn reset_on_success(enabled: bool) -> Attr {
+    if enabled { Attr::new("data-nr-reset", "") } else { Attr::none() }
+}
+
+/// Inside a form with [`stay_on_success`]: show the action's return value
+/// here after a successful submit. `""` shows the whole value (a string or
+/// number); a key shows that field of a returned object. Filled as text,
+/// never as HTML.
+pub fn action_result(key: impl AttrText) -> Attr {
+    Attr::new("data-nr-result", key.into_attr_text())
+}
+
 /// Keep the scroll position after a client navigation (`Link!`).
 pub fn scroll(enabled: bool) -> Attr {
     if enabled { Attr::none() } else { Attr::new("data-nr-scroll", "false") }

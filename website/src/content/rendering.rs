@@ -335,7 +335,9 @@ permanent = true"#,
         .keywords(["tools", "rust"])
         .canonical("https://acme.dev/")
         .theme_color("#111827")
+        .theme_color_for("(prefers-color-scheme: light)", "#fafaf7")   // per color scheme
         .icon("/favicon.ico")
+        .icon_sized("/favicon-32x32.png", "32x32", "image/png")
         .manifest("/site.webmanifest")
         .open_graph(OpenGraph {
             site_name: Some("Acme".into()),
@@ -364,6 +366,34 @@ permanent = true"#,
             " and link URLs with a ",
             code!["javascript:"],
             " scheme are neutralized.",
+        ],
+        h3![id("html-attributes"), a![class("anchor"), href("#html-attributes"), "Attributes on ", code!["<html>"]]],
+        p![
+            "A theme that lives on the root element (",
+            code!["class=\"dark\""],
+            ", ",
+            code!["data-theme"],
+            ") should be in the HTML the server sends, so the page never flashes the wrong colors and works without JavaScript:",
+        ],
+        pre![code![
+            class("language-rust"),
+            r##"// app/layout.rs
+pub fn metadata() -> Metadata {
+    Metadata::new()
+        .html_attribute("data-theme", "ocean")
+        .html_attribute("class", "dark")
+}"##,
+        ],],
+        p![
+            "Children override a name their parents set. ",
+            code!["lang"],
+            " replaces ",
+            code!["[app] lang"],
+            " for that page. Values are escaped, invalid names and event handlers (",
+            code!["on*"],
+            ") are never rendered, and ",
+            code!["class"],
+            " gets the same short names as every other class in release builds, so its rules are sent with the page. The element is written with the document: client-side navigations keep the attributes the page has, including any a script changed since, such as a theme toggle.",
         ],
         h3![id("generated-seo-files"), a![class("anchor"), href("#generated-seo-files"), "Generated SEO files"],],
         pre![code![

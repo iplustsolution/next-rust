@@ -185,6 +185,9 @@ fn watch_fingerprint(info: &ProjectInfo) -> u64 {
         paths.push(src.clone());
     }
     paths.extend(c.dev.watch.iter().map(|p| c.resolve(p)));
+    if c.tailwind.enabled {
+        paths.extend(c.tailwind.stylesheets.iter().map(|p| c.resolve(p)));
+    }
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
     let mut mix = |bytes: &[u8]| {
         for b in bytes {

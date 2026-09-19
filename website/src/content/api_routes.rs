@@ -104,6 +104,7 @@ req.header("authorization");
 req.cookies().get("session");
 req.extension::<User>();               // inserted by middleware
 req.remote_addr();
+req.client_ip();                       // X-Forwarded-For only with [server] trust_proxy
 
 let body: NewUser = req.json().await?;       // JSON
 let form: Login = req.form().await?;         // urlencoded

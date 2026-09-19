@@ -44,6 +44,10 @@ impl WebSocket {
 }
 
 /// Upgrade the request and run `handler` on the connection.
+///
+/// A browser upgrade from another site is refused with 403 (WebSockets are
+/// not covered by the same-origin policy, and the connection would carry the
+/// visitor's cookies); see [`Request::same_origin`].
 pub fn upgrade<H, Fut>(mut req: Request, handler: H) -> Response
 where
     H: FnOnce(WebSocket) -> Fut + Send + 'static,
@@ -57,6 +61,9 @@ where
             .with_status(426)
             .with_header("upgrade", "websocket");
     };
+    if !req.same_origin() {
+        return Response::text("cross-site WebSocket refused").with_status(403);
+    }
     let Some(on_upgrade) = req.parts_mut().extensions.remove::<hyper::upgrade::OnUpgrade>() else {
         return Response::text("connection cannot be upgraded").with_status(400);
     };
@@ -73,4 +80,32 @@ where
         .with_header("upgrade", "websocket")
         .with_header("connection", "upgrade")
         .with_header("sec-websocket-accept", &derive_accept_key(key.as_bytes()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn upgrade_request(origin: &str) -> Request {
+        let req = http::Request::get("/ws")
+            .header("host", "app.example")
+            .header("origin", origin)
+            .header("upgrade", "websocket")
+            .header("connection", "Upgrade")
+            .header("sec-websocket-version", "13")
+            .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+            .body(bytes::Bytes::new())
+            .unwrap();
+        Request::from_http(req)
+    }
+
+    #[test]
+    fn cross_site_upgrades_are_refused() {
+        let res = upgrade(upgrade_request("https://evil.example"), |_socket| async {});
+        assert_eq!(res.status.as_u16(), 403);
+        // Same site: passes the origin check (the test request has no
+        // connection to upgrade, so it stops at the next step).
+        let res = upgrade(upgrade_request("https://app.example"), |_socket| async {});
+        assert_eq!(res.status.as_u16(), 400);
+    }
 }

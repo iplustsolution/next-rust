@@ -190,7 +190,7 @@ async fn authenticate(mut req: Request, next: Next) -> Response {
         ul![
             li![
                 "The cookie ",
-                code!["nr_session"],
+                code!["next_rust_session"],
                 " holds only a random 256-bit id. Data stays on the server, so nothing needs signing.",
             ],
             li![
@@ -231,7 +231,7 @@ async fn authenticate(mut req: Request, next: Next) -> Response {
                     " can add ",
                     code!["csrf()"],
                     " middleware, which requires a token matching the ",
-                    code!["nr_csrf"],
+                    code!["next_rust_csrf"],
                     " cookie in the ",
                     code!["x-csrf-token"],
                     " header or a ",

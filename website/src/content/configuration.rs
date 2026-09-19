@@ -68,6 +68,9 @@ output = ".next-rust"
 concurrency = 8              # reserved: static generation currently renders pages sequentially
 optimize = "size"            # size (opt-level "z") | speed (opt-level 3)
 panic = "unwind"             # unwind: a panic fails one request | abort: smaller, a panic stops the server
+signature = true             # <meta name="generator"> on every page and a banner on the framework's scripts
+minify_js = true             # release: minify and mangle the scripts in client/ and assets/
+drop_unused_classes = true   # release: leave out generated-looking classes (sm:x, bg-[…]) no rule or script knows
 
 [tailwind]
 enabled = false              # generate Tailwind CSS from the classes in app/ and src/
@@ -76,6 +79,7 @@ dark_mode = "media"          # media | class | attribute
 plugins = []                 # "@tailwindcss/typography", "@tailwindcss/forms"
 safelist = []                # classes to generate even if not found in the source
 sources = []                 # more directories to scan
+stylesheets = []             # CSS files compiled with Tailwind, in order (NR0008 if missing)
 css = ""                     # extra Tailwind CSS (keyframes, @layer, …)
 minify_classes = true        # release builds: short random class names (rounded-lg → k7)
 keep_classes = []            # classes that keep their names (used by code outside the views)
@@ -98,11 +102,11 @@ client_navigation = true     # Link! loads the client runtime
 [images]
 sizes = [640, 750, 828, 1080, 1200, 1920, 2048, 3840]   # reserved for the image optimizer; Image! uses these defaults
 quality = 75                 # reserved for the image optimizer
-max_age = 2592000            # Cache-Control max-age of /_nr/image responses
+max_age = 2592000            # Cache-Control max-age of /_next-rust/image responses
 
 [security]
 headers = true               # nosniff, SAMEORIGIN, referrer policy, COOP, permissions policy
-csp = "default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self' 'unsafe-inline'"
+csp = "strict"               # the preset below, or your own policy with {nonce}
 csrf = "origin"              # origin | token | off (server actions)
 hsts_max_age = 0             # e.g. 31536000 when served only over HTTPS
 allowed_origins = []         # extra origins allowed to call server actions
@@ -138,7 +142,27 @@ site_id = "abc""##,
             code!["{nonce}"],
             " in ",
             code!["security.csp"],
-            " is replaced with the per-request nonce that the framework puts on its own inline scripts.",
+            " is replaced with the per-request nonce that the framework puts on its own scripts. ",
+            code!["csp = \"strict\""],
+            " stands for a ready-made policy (",
+            code!["next_rust::STRICT_CSP"],
+            "): scripts only with that nonce (",
+            code!["'strict-dynamic'"],
+            " lets them load modules and islands), images, fonts, media and connections from this origin only, no plugins, no framing by other sites, forms only to this origin. Inline ",
+            code!["style"],
+            " attributes stay allowed, because components set widths and custom properties with them.",
+        ],
+        pre![code![class("language-text"), next_rust::STRICT_CSP.replace("; ", ";\n")]],
+        p![
+            "Requests that change state should come from your own pages. Server actions verify that already; in an API route or a WebSocket handler, call ",
+            code!["req.same_origin()"],
+            " and answer 403 when it is false. It reads ",
+            code!["Sec-Fetch-Site"],
+            ", then ",
+            code!["Origin"],
+            " against the request host, and allows ",
+            code!["security.allowed_origins"],
+            ".",
         ],
         h2![id("environment-variables"), a![class("anchor"), href("#environment-variables"), "Environment variables"],],
         p![code![".env"], " files are loaded at startup, from lowest to highest priority:"],

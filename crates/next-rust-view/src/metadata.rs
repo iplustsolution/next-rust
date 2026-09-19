@@ -37,6 +37,10 @@ pub struct Metadata {
     pub preloads: Vec<Preload>,
     /// Extra `<link>` tags: feeds, `preconnect`, `me`, …
     pub links: Vec<LinkTag>,
+    /// Attributes of the `<html>` element: (name, value).
+    pub html_attributes: Vec<(String, String)>,
+    /// `theme-color` per media query: (media, color).
+    pub theme_colors: Vec<(String, String)>,
 }
 
 /// A `<link>` tag beyond the ones [`Metadata`] models directly.
@@ -145,6 +149,28 @@ impl Metadata {
         self
     }
 
+    /// An icon with its size and type, for browsers that pick one of several:
+    /// `icon_sized("/favicon-32x32.png", "32x32", "image/png")`.
+    pub fn icon_sized(mut self, href: impl Into<String>, sizes: impl Into<String>, mime: impl Into<String>) -> Self {
+        self.icons.get_or_insert_with(Vec::new).push(Icon {
+            rel: "icon".into(),
+            href: href.into(),
+            sizes: Some(sizes.into()),
+            mime: Some(mime.into()),
+        });
+        self
+    }
+
+    /// A `theme-color` for one media query, typically once for each color
+    /// scheme: `theme_color_for("(prefers-color-scheme: dark)", "#0d1b2a")`.
+    /// A plain [`theme_color`](Self::theme_color) is still written first, for
+    /// browsers that ignore `media`. A child that sets any replaces the
+    /// parent's list.
+    pub fn theme_color_for(mut self, media: impl Into<String>, color: impl Into<String>) -> Self {
+        self.theme_colors.push((media.into(), color.into()));
+        self
+    }
+
     pub fn apple_touch_icon(mut self, href: impl Into<String>) -> Self {
         self.icons.get_or_insert_with(Vec::new).push(Icon {
             rel: "apple-touch-icon".into(),
@@ -199,6 +225,26 @@ impl Metadata {
         self
     }
 
+    /// An attribute of the `<html>` element, e.g. `html_attribute("data-theme", "ocean")`
+    /// or `html_attribute("class", "dark")`, so a theme applies before any
+    /// script runs. `lang` overrides `[app] lang` for the page.
+    ///
+    /// The element is written with the document: client-side navigations keep
+    /// the attributes the page already has (and what scripts changed since).
+    /// Names that are not valid attribute names and event handlers (`on*`) are
+    /// never rendered; values are escaped, and `class` gets the same short
+    /// names as every other class in release builds.
+    pub fn html_attribute(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        let name = name.into();
+        let value = value.into();
+        if let Some(slot) = self.html_attributes.iter_mut().find(|(n, _)| *n == name) {
+            slot.1 = value;
+        } else {
+            self.html_attributes.push((name, value));
+        }
+        self
+    }
+
     /// A feed readers can subscribe to. Browsers and feed readers look for
     /// `rel="alternate"` with a feed media type:
     /// `feed("RSS", "/feed.xml", "application/rss+xml")`.
@@ -246,6 +292,12 @@ impl Metadata {
                 self.other.push((k, v));
             }
         }
+        if !child.theme_colors.is_empty() {
+            self.theme_colors = child.theme_colors;
+        }
+        for (name, value) in child.html_attributes {
+            self = self.html_attribute(name, value);
+        }
         for l in child.links {
             if !self.links.contains(&l) {
                 self.links.push(l);
@@ -291,6 +343,13 @@ impl Metadata {
         }
         if let Some(c) = &self.theme_color {
             meta_name(&mut h, "theme-color", c);
+        }
+        for (media, color) in &self.theme_colors {
+            h.push_str(&format!(
+                "<meta name=\"theme-color\" media=\"{}\" content=\"{}\">",
+                escape_attr(media),
+                escape_attr(color)
+            ));
         }
         if let Some(c) = &self.color_scheme {
             meta_name(&mut h, "color-scheme", c);
@@ -443,6 +502,42 @@ mod tests {
         assert_eq!(merged.title.as_deref(), Some("Acme"), "template does not apply to the same segment");
         let merged = Metadata::default().merge(root).merge(Metadata::new().absolute_title("Standalone"));
         assert_eq!(merged.title.as_deref(), Some("Standalone"));
+    }
+
+    #[test]
+    fn sized_icons_and_theme_colors_per_scheme() {
+        let root = Metadata::new()
+            .theme_color("#0d1b2a")
+            .theme_color_for("(prefers-color-scheme: light)", "#fafaf7")
+            .theme_color_for("(prefers-color-scheme: dark)", "#0d1b2a")
+            .icon_sized("/favicon-32x32.png", "32x32", "image/png");
+        let h = Metadata::default().merge(root.clone()).render_head();
+        assert!(h.contains(r##"<meta name="theme-color" content="#0d1b2a">"##), "{h}");
+        assert!(h.contains(r##"<meta name="theme-color" media="(prefers-color-scheme: light)" content="#fafaf7">"##));
+        assert!(h.contains(r#"<link rel="icon" href="/favicon-32x32.png" sizes="32x32" type="image/png">"#));
+        // A child's list replaces the parent's.
+        let page = Metadata::new().theme_color_for("all", "\"x");
+        let merged = Metadata::default().merge(root).merge(page);
+        assert_eq!(merged.theme_colors, [("all".to_owned(), "\"x".to_owned())]);
+        assert!(merged.render_head().contains(r#"media="all" content="&quot;x""#));
+    }
+
+    #[test]
+    fn html_attributes_merge_child_wins() {
+        let root = Metadata::new().html_attribute("data-theme", "pass-point").html_attribute("class", "dark");
+        let page = Metadata::new().html_attribute("class", "light").html_attribute("lang", "de");
+        let merged = Metadata::default().merge(root).merge(page);
+        assert_eq!(
+            merged.html_attributes,
+            [
+                ("data-theme".into(), "pass-point".into()),
+                ("class".into(), "light".into()),
+                ("lang".into(), "de".into())
+            ]
+        );
+        // Setting a name twice keeps one entry.
+        let m = Metadata::new().html_attribute("dir", "ltr").html_attribute("dir", "rtl");
+        assert_eq!(m.html_attributes, [("dir".into(), "rtl".into())]);
     }
 
     #[test]

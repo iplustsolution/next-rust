@@ -114,6 +114,31 @@ pub fn serve_embedded(
     cache_control: &str,
 ) -> Response {
     let modified = UNIX_EPOCH + std::time::Duration::from_secs(built_at);
+    // A copy compressed at build time (Brotli first), unless a range is asked for.
+    let accept = req.header("accept-encoding");
+    let encoded = (req.header("range").is_none())
+        .then(|| {
+            if crate::server::accepts(accept, "br") { file.br.map(|b| ("br", b)) } else { None }
+                .or_else(|| if crate::server::accepts(accept, "gzip") { file.gz.map(|b| ("gzip", b)) } else { None })
+        })
+        .flatten();
+    if let Some((coding, bytes)) = encoded {
+        let etag = format!("\"{}-{coding}\"", file.hash);
+        let prepared =
+            prepare(req, file.path, bytes.len() as u64, &etag, (built_at > 0).then_some(modified), cache_control);
+        let mut res = match prepared {
+            Prepared::Done(res) => res,
+            Prepared::Send(mut res, _, count) => {
+                if count > 0 && req.method() != http::Method::HEAD {
+                    res.body = Body::Bytes(Bytes::from_static(bytes));
+                }
+                res.set_header("content-encoding", coding);
+                res
+            }
+        };
+        res.append_header("vary", "Accept-Encoding");
+        return res;
+    }
     let etag = format!("\"{}\"", file.hash);
     let len = file.bytes.len() as u64;
     match prepare(req, file.path, len, &etag, (built_at > 0).then_some(modified), cache_control) {
@@ -290,5 +315,44 @@ mod tests {
             assert!(resolve_safe(&public, bad).await.is_none(), "{bad} must not resolve");
         }
         std::fs::remove_dir_all(base).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod precompressed_tests {
+    use bytes::Bytes;
+
+    use crate::embed::EmbeddedFile;
+    use crate::request::Request;
+
+    static FILE: EmbeddedFile =
+        EmbeddedFile { path: "app.js", bytes: b"raw script", hash: "h1", br: Some(b"BR!"), gz: Some(b"GZ!") };
+
+    async fn get(headers: &[(&str, &str)]) -> (String, Option<String>, String) {
+        let mut req = http::Request::get("/app.js");
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        let req = Request::from_http(req.body(Bytes::new()).unwrap());
+        let res = super::serve_embedded(&req, &FILE, 1_700_000_000, "public");
+        let encoding = res.header("content-encoding").map(str::to_owned);
+        let etag = res.header("etag").unwrap_or_default().to_owned();
+        (res.into_text().await, encoding, etag)
+    }
+
+    #[tokio::test]
+    async fn the_copy_the_client_accepts_is_served() {
+        assert_eq!(
+            get(&[("accept-encoding", "gzip, deflate, br")]).await,
+            ("BR!".into(), Some("br".into()), "\"h1-br\"".into())
+        );
+        assert_eq!(
+            get(&[("accept-encoding", "gzip")]).await,
+            ("GZ!".into(), Some("gzip".into()), "\"h1-gzip\"".into())
+        );
+        assert_eq!(get(&[]).await, ("raw script".into(), None, "\"h1\"".into()));
+        // Ranges apply to the file as written.
+        let (body, encoding, _) = get(&[("accept-encoding", "br"), ("range", "bytes=0-2")]).await;
+        assert_eq!((body.as_str(), encoding), ("raw", None));
     }
 }

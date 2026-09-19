@@ -159,10 +159,13 @@ impl CacheStore for RedisStore {
                         td![code!["public, max-age=0, s-maxage=<n>, stale-while-revalidate"]],
                     ],
                     tr![
-                        td![code!["/_nr/assets/*"], " (fingerprinted, matching hash)"],
+                        td![code!["/_next-rust/assets/*"], " (fingerprinted, matching hash)"],
                         td![code!["public, max-age=31536000, immutable"]],
                     ],
-                    tr![td![code!["/_nr/runtime.js?v=<hash>"]], td![code!["public, max-age=31536000, immutable"]],],
+                    tr![
+                        td![code!["/_next-rust/runtime.js?v=<hash>"]],
+                        td![code!["public, max-age=31536000, immutable"]],
+                    ],
                     tr![
                         td![code!["public/"], " files"],
                         td![code!["public, max-age=<assets.public_max_age>"], " + ETag"],

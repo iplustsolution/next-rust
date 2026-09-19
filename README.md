@@ -109,13 +109,13 @@ pub fn Page(form: FormState) -> impl View {
 
 ### 1. Install Rust (skip this if you already have it)
 
-Next Rust needs **Rust 1.88 or newer**. To check what you have:
+Next Rust needs **Rust 1.89 or newer**. To check what you have:
 
 ```sh
 rustc --version
 ```
 
-If that prints "command not found", or a version older than 1.88, install
+If that prints "command not found", or a version older than 1.89, install
 Rust with [rustup](https://rustup.rs), the official installer.
 
 **macOS and Linux:**

@@ -196,6 +196,93 @@ pub fn Page(form: FormState) -> impl View {
                 ]
             ),
             section(
+                "Alerts, badges, progress",
+                Stack![
+                    gap = 4,
+                    Alert![title = "Heads up", "Your trial ends in 3 days."],
+                    Alert![color = Color::Success, variant = Variant::Faded, title = "Saved", closable = true, "Your changes are live."],
+                    Alert![
+                        color = Color::Danger,
+                        variant = Variant::Bordered,
+                        title = "Payment failed",
+                        end_content = Button![size = Size::Sm, color = Color::Danger, variant = Variant::Flat, "Retry"],
+                        "The card was declined."
+                    ],
+                    Stack![
+                        row = true,
+                        gap = 6,
+                        align = Align::Center,
+                        Badge![content = "3", Avatar![name = "Ada Lovelace"]],
+                        Badge![dot = true, color = Color::Success, placement = Placement::BottomRight, Avatar![name = "Grace Hopper"]],
+                        Badge![content = "99+", color = Color::Primary, variant = Variant::Flat, Button![variant = Variant::Bordered, icon_only = true, icons::Bell().size(18)]],
+                        Kbd!["⌘", "K"],
+                    ],
+                    Progress![label = "Uploading", value = 62.0, show_value = true],
+                    Progress![color = Color::Success, size = Size::Sm, value = 100.0, value_label = "Done"],
+                    Progress![label = "Working…", striped = true],
+                    Stack![
+                        row = true,
+                        gap = 6,
+                        CircularProgress![value = 75.0, show_value = true, label = "Mastery"],
+                        CircularProgress![color = Color::Warning, size = Size::Lg, value = 40.0, show_value = true],
+                        CircularProgress![size = Size::Sm, label = "Loading"],
+                    ],
+                    Grid![cols = 3, Stat![label = "Students", value = "1,204", delta = "12%", trend = Trend::Up, icon = icons::Users().size(20), color = Color::Primary],
+                        Stat![label = "Average score", value = "81%", delta = "3%", trend = Trend::Down, description = "vs. last term"],
+                        Stat![label = "Sessions", value = "48", delta = "0", trend = Trend::Flat]],
+                    Skeleton![lines = 3],
+                ]
+            ),
+            section(
+                "Tabs, breadcrumbs, steps",
+                Stack![
+                    gap = 5,
+                    Breadcrumbs![BreadcrumbItem![href = "/", start_content = icons::House().size(14), "Home"], BreadcrumbItem![href = "/", "Classes"], BreadcrumbItem!["Grade 9 Maths"]],
+                    Tabs![
+                        selected = "grades",
+                        Tab![key = "overview", title = "Overview", p!["The overview panel."]],
+                        Tab![key = "grades", title = "Grades", end_content = Chip![size = Size::Sm, "12"], p!["The grades panel."]],
+                        Tab![key = "settings", title = "Settings", disabled = true, p!["Settings."]],
+                    ],
+                    Tabs![variant = TabsVariant::Underlined, color = Color::Primary, Tab![title = "Photos", href = "/?tab=photos", selected = true], Tab![title = "Music", href = "/?tab=music"], Tab![title = "Videos", href = "/?tab=videos"]],
+                    Tabs![variant = TabsVariant::Bordered, size = Size::Sm, full_width = true, Tab![title = "Day", p!["Day"]], Tab![title = "Week", p!["Week"]], Tab![title = "Month", p!["Month"]]],
+                    Steps![current = 1, Step![title = "Account", description = "Name and email", href = "/"], Step![title = "Plan", description = "Pick a plan"], Step![title = "Payment"], Step![title = "Done"]],
+                ]
+            ),
+            section(
+                "Accordion, table, empty state",
+                Stack![
+                    gap = 5,
+                    Accordion![
+                        variant = AccordionVariant::Splitted,
+                        AccordionItem![title = "What is Next Rust?", subtitle = "The short version", expanded = true, p!["A web framework: routes are folders, pages are Rust, one binary ships."]],
+                        AccordionItem![title = "Do I need JavaScript?", p!["No. Components fall back to native controls."]],
+                        AccordionItem![title = "Can I use Tailwind?", p!["Yes, it is on by default."]],
+                    ],
+                    Table![
+                        columns = ["Student", "Score", "Status"],
+                        striped = true,
+                        hoverable = true,
+                        tr![td!["Ada Lovelace"], td!["98"], td![Chip![size = Size::Sm, color = Color::Success, variant = Variant::Flat, "Passed"]]],
+                        tr![td!["Grace Hopper"], td!["95"], td![Chip![size = Size::Sm, color = Color::Success, variant = Variant::Flat, "Passed"]]],
+                        tr![td!["Alan Turing"], td!["61"], td![Chip![size = Size::Sm, color = Color::Warning, variant = Variant::Flat, "Review"]]],
+                    ],
+                    Table![columns = ["Name", "Email"], empty = EmptyState![compact = true, title = "No students yet", description = "Invite someone to see them here.", Button![size = Size::Sm, "Invite"]]],
+                    Stack![
+                        row = true,
+                        gap = 3,
+                        Tooltip![content = "Opens a dialog", Button![on_press = Press::open_modal("demo-modal"), "Open modal"]],
+                        Tooltip![content = "To the right", side = Side::Right, color = Color::Primary, Button![variant = Variant::Bordered, "Hover me"]],
+                    ],
+                    Modal![
+                        id = "demo-modal",
+                        title = "Archive this class?",
+                        ModalBody![p!["Students keep their work; the class leaves your list."]],
+                        ModalFooter![Button![variant = Variant::Light, on_press = Press::close_modal(), "Cancel"], Button![color = Color::Danger, on_press = Press::close_modal(), "Archive"]],
+                    ],
+                ]
+            ),
+            section(
                 "A real form",
                 form![
                     action!(actions::sign_up),

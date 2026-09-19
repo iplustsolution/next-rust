@@ -10,6 +10,7 @@ use next_rust_view::{Attr, attrs::raw_attr};
 /// Button![on_press = Press::from(action!(like)).input(&id), "Like"]
 /// Button![on_press = Press::navigate("/settings"), "Settings"]
 /// Button![on_press = Press::emit("open-cart"), "Cart"]              // `nr:open-cart` event
+/// Button![on_press = Press::open_modal("confirm"), "Delete…"]       // opens `Modal![id = "confirm", ..]`
 /// ```
 ///
 /// After a successful action the page refreshes (see [`Press::no_refresh`]);
@@ -27,6 +28,8 @@ enum Kind {
     Navigate(String),
     Emit(String),
     Script(String),
+    OpenModal(String),
+    CloseModal,
 }
 
 impl Press {
@@ -45,6 +48,17 @@ impl Press {
     /// scripts: `addEventListener("nr:open-cart", …)`.
     pub fn emit(name: impl Into<String>) -> Self {
         Press { kind: Kind::Emit(name.into()), input: None, refresh: true }
+    }
+
+    /// Open the [`Modal`](struct@crate::Modal) with that `id` (as a modal dialog:
+    /// focus trapped, page behind inert).
+    pub fn open_modal(id: impl Into<String>) -> Self {
+        Press { kind: Kind::OpenModal(id.into()), input: None, refresh: true }
+    }
+
+    /// Close the modal the element is inside.
+    pub fn close_modal() -> Self {
+        Press { kind: Kind::CloseModal, input: None, refresh: true }
     }
 
     /// Run a script (an `onclick` attribute). Trusted code only: never pass
@@ -75,6 +89,10 @@ impl Press {
             Kind::Action(url) => ("action", url),
             Kind::Navigate(href) => ("navigate", href),
             Kind::Emit(name) => ("emit", name),
+            Kind::OpenModal(id) => ("modal", id),
+            Kind::CloseModal => {
+                return vec![Attr::new("data-nr-ui", "press"), Attr::new("data-nr-press", "close-modal")];
+            }
         };
         let mut attrs = vec![
             Attr::new("data-nr-ui", "press"),

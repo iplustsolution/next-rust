@@ -214,7 +214,17 @@ fn generated_code_shape() {
     // Release builds embed minified HTML instead of include_str!.
     let minified = next_rust_build::generate_code_with(
         &project,
-        next_rust_build::CodegenOptions { minify_html: true, embed_files: false, tailwind: false, class_names: None },
+        next_rust_build::CodegenOptions {
+            minify_html: true,
+            embed_files: false,
+            tailwind: false,
+            class_names: None,
+            minified_dir: None,
+            minify_js: false,
+            renames: None,
+            precompress: false,
+            drop_classes: false,
+        },
     );
     assert!(minified.contains("body: __nr::PageBody::Html(\"<p>legacy</p>\")"), "{minified}");
     assert!(code.contains("embedded: None") && !code.contains("__NR_EMBEDDED"), "{code}");
@@ -254,6 +264,11 @@ fn release_code_embeds_config_and_static_files() {
             embed_files: true,
             tailwind: true,
             class_names: Some(0xabc),
+            minified_dir: None,
+            minify_js: false,
+            renames: None,
+            precompress: false,
+            drop_classes: false,
         },
     );
     for needle in [
@@ -351,4 +366,95 @@ fn metadata_can_take_the_loaded_data() {
         body.find("let __data =").unwrap() < body.find("metadata(__nr::Data(__data))").unwrap(),
         "the load has to come before the call:\n{body}"
     );
+}
+
+#[test]
+fn embedded_scripts_are_minified_when_asked() {
+    let t = Tmp::new(&[
+        (
+            "app/page.rs",
+            "use next_rust::prelude::*;\npub fn Page() -> impl View { script![src(asset!(\"js/site.js\"))] }\n",
+        ),
+        (
+            "client/counter.js",
+            "// The counter island.\nexport function hydrate(island, props) {\n  const start = props.start;\n  island.textContent = start;\n}\n",
+        ),
+        (
+            "assets/js/site.js",
+            "// Site script.\nvar site = { ready: true };\nfunction announce(text) { console.log(text, site.ready); }\n",
+        ),
+        ("assets/js/unused.js", "var never = 1;\n"),
+    ]);
+    let project = analyze_project(&t.config(""));
+    assert!(!project.has_errors(), "{}", project.diagnostics);
+    let out = t.0.join("out");
+    let code = next_rust_build::generate_code_with(
+        &project,
+        next_rust_build::CodegenOptions {
+            embed_files: true,
+            minified_dir: Some(out.join(next_rust_build::codegen::MINIFIED_DIR)),
+            minify_js: true,
+            ..Default::default()
+        },
+    );
+    let min = out.join(next_rust_build::codegen::MINIFIED_DIR);
+    if cfg!(feature = "minify-js") {
+        let counter = std::fs::read_to_string(min.join("client/counter.js")).unwrap();
+        assert!(!counter.contains("counter island") && counter.contains("hydrate"), "{counter}");
+        let site = std::fs::read_to_string(min.join("assets/js/site.js")).unwrap();
+        assert!(!site.contains("Site script") && site.contains("announce"), "top-level names of a script stay: {site}");
+        assert!(
+            code.contains(&format!("include_bytes!({:?})", min.join("client/counter.js").to_string_lossy())),
+            "{code}"
+        );
+        assert!(!min.join("assets/js/unused.js").exists(), "only assets the app references are embedded");
+    }
+    // Without minification the files are embedded as written.
+    let plain = next_rust_build::generate_code_with(
+        &project,
+        next_rust_build::CodegenOptions { embed_files: true, minified_dir: None, ..Default::default() },
+    );
+    assert!(
+        plain.contains(&format!("include_bytes!({:?})", t.0.join("client/counter.js").to_string_lossy())),
+        "{plain}"
+    );
+}
+
+#[test]
+fn embedded_files_are_precompressed() {
+    let text = "The quick brown fox jumps over the lazy dog. ".repeat(80);
+    let t = Tmp::new(&[
+        ("app/page.rs", "use next_rust::prelude::*;\npub fn Page() -> impl View { p![\"hi\"] }\n"),
+        ("public/big.txt", &text),
+        ("public/photo.png", "\u{89}PNG not really"),
+        ("public/tiny.txt", "hello"),
+    ]);
+    let project = analyze_project(&t.config(""));
+    assert!(!project.has_errors(), "{}", project.diagnostics);
+    let out = t.0.join("out");
+    let (code, report) = next_rust_build::codegen::generate_code_reporting(
+        &project,
+        next_rust_build::CodegenOptions {
+            embed_files: true,
+            minified_dir: Some(out.join(next_rust_build::codegen::MINIFIED_DIR)),
+            precompress: true,
+            ..Default::default()
+        },
+    );
+    let br_file = out.join(next_rust_build::codegen::MINIFIED_DIR).join("precompressed/public/big.txt.br");
+    assert!(code.contains(&format!("br: Some(include_bytes!({:?}))", br_file.to_string_lossy())), "{code}");
+    let photo = code.lines().find(|l| l.contains("photo.png")).unwrap();
+    assert!(photo.ends_with("br: None, gz: None },"), "binary files are not compressed: {photo}");
+    let tiny = code.lines().find(|l| l.contains("tiny.txt")).unwrap();
+    assert!(tiny.ends_with("br: None, gz: None },"), "small files are not compressed: {tiny}");
+    // The Brotli copy restores the file.
+    let mut restored = Vec::new();
+    std::io::Read::read_to_end(
+        &mut brotli::Decompressor::new(std::fs::File::open(&br_file).unwrap(), 4096),
+        &mut restored,
+    )
+    .unwrap();
+    assert_eq!(restored, text.as_bytes());
+    let big = report.files.iter().find(|f| f.path == "public/big.txt").unwrap();
+    assert!(big.brotli.unwrap() < big.bytes / 5 && big.gzip.unwrap() < big.bytes / 5, "{big:?}");
 }

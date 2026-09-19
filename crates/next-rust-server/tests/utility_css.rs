@@ -18,6 +18,8 @@ static TW: Stylesheet = Stylesheet {
 @layer utilities{.p-4{padding:1rem}.px-2{padding-inline:.5rem}.mt-2{margin-top:.5rem}\
 @media (width>=40rem){.sm\\:p-10{padding:2.5rem}}.js-open{display:block}}",
     per_class: Some(&["js-open"]),
+    // `client/home.js` toggles `mt-2`: pages loading it get the rule.
+    scripts: &[("client/home.js", &["mt-2"])],
 };
 static SHEETS: &[&Stylesheet] = &[&TW];
 
@@ -29,6 +31,15 @@ fn page_b(_ctx: Ctx) -> R {
 }
 fn page_px(_ctx: Ctx) -> R {
     Box::pin(async { Ok(div![class("px-2"), "PX"].into_node()) })
+}
+fn page_island(_ctx: Ctx) -> R {
+    Box::pin(async {
+        Ok(div![
+            class("p-4"),
+            Element::new("nr-island").with(attr("data-module", "/_next-rust/client/home.js")).with("x"),
+        ]
+        .into_node())
+    })
 }
 fn page_static(_ctx: Ctx) -> R {
     Box::pin(async { Ok(div![class("sm:p-10 p-4"), "S"].into_node()) })
@@ -65,6 +76,7 @@ fn app(env: Environment) -> App {
             page("/a", page_a, Rendering::Dynamic),
             page("/b", page_b, Rendering::Dynamic),
             page("/px", page_px, Rendering::Dynamic),
+            page("/island", page_island, Rendering::Dynamic),
             page("/static", page_static, Rendering::Static),
             page("/stream", page_stream, Rendering::Dynamic),
         ],
@@ -114,6 +126,17 @@ async fn pages_get_only_the_rules_they_use() {
 
     // Everything known: nothing sent.
     assert!(styles(&get(&app, "/b", &[&a[0].0, &b[0].0]).await).is_empty());
+}
+
+#[tokio::test]
+async fn script_classes_go_only_to_pages_loading_the_script() {
+    let app = app(Environment::Test);
+    let a = styles(&get(&app, "/a", &[]).await);
+    assert!(!a[0].1.contains(".mt-2"), "no island here");
+    let island = styles(&get(&app, "/island", &[]).await);
+    assert!(island[0].1.contains(".mt-2{margin-top:.5rem}"), "{}", island[0].1);
+    assert_eq!(script_key("/_next-rust/assets/js/site.1a2b3c4d5e6f7a8b.js?v=1"), "assets/js/site.js");
+    assert_eq!(script_key("/menu.js"), "menu.js");
 }
 
 #[tokio::test]

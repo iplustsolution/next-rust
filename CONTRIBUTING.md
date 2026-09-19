@@ -19,7 +19,7 @@ cd next-rust
 cargo test --workspace
 ```
 
-You need Rust 1.88 or newer. Nothing else is required.
+You need Rust 1.89 or newer. Nothing else is required.
 
 To try your changes in a real app, the examples are the fastest route:
 

@@ -233,7 +233,7 @@ fn slice_partial(html: &str, key: &str, known_styles: &[&str]) -> Option<String>
     let head_start = html.find("<head>")? + "<head>".len();
     let head_end = head_start + html[head_start..].find("</head>")?;
     let env = html
-        .find("<script id=\"__nr_env\"")
+        .find("<script id=\"__next_rust_env\"")
         .and_then(|at| html[at..].find("</script>").map(|len| &html[at..at + len + "</script>".len()]))
         .unwrap_or("");
     let mut head = html[head_start..head_end].to_owned();
@@ -499,31 +499,33 @@ fn document_response_with(
     let tail_nonce = nonce.clone();
     let parts = DocumentParts {
         lang: inner.config.app.lang.clone(),
+        html_attributes: metadata.html_attributes.clone(),
         head: metadata.render_head(),
         head_extra,
         body,
         nonce: Some(nonce),
+        generator: inner.config.build.signature.then(crate::signature),
         tail: Box::new(move |flags: RenderFlags| {
             let mut t = String::new();
             if flags.islands
                 && let Some(json) = env_json
             {
                 t.push_str(&format!(
-                    "<script id=\"__nr_env\" type=\"application/json\">{}</script>",
+                    "<script id=\"__next_rust_env\" type=\"application/json\">{}</script>",
                     json.replace("</", "<\\/")
                 ));
             }
             // UI components call actions and navigate through the runtime.
             if flags.islands || flags.ui || (flags.links && client_nav) {
                 t.push_str(&format!(
-                    "<script type=\"module\" src=\"/_nr/runtime.js?v={}\" nonce=\"{}\"></script>",
+                    "<script type=\"module\" src=\"/_next-rust/runtime.js?v={}\" nonce=\"{}\"></script>",
                     crate::internal::runtime_version(dev),
                     escape_attr(&tail_nonce)
                 ));
             }
             if flags.ui {
                 t.push_str(&format!(
-                    "<script type=\"module\" src=\"/_nr/ui.js?v={}\" nonce=\"{}\"></script>",
+                    "<script type=\"module\" src=\"/_next-rust/ui.js?v={}\" nonce=\"{}\"></script>",
                     crate::internal::ui_version(dev),
                     escape_attr(&tail_nonce)
                 ));

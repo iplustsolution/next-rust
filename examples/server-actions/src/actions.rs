@@ -38,3 +38,15 @@ pub async fn sign_guestbook(input: EntryInput) -> Result<Entry> {
 pub async fn count_entries() -> Result<usize> {
     Ok(ENTRIES.lock().unwrap().len())
 }
+
+#[derive(serde::Deserialize)]
+pub struct Attachment {
+    content_base64: String,
+}
+
+/// An upload sent as base64 needs more than the default 2 MiB body limit;
+/// this action alone accepts up to 4 MiB.
+#[server_action(body_limit = 4 * 1024 * 1024)]
+pub async fn attach(input: Attachment) -> Result<usize> {
+    Ok(input.content_base64.len())
+}

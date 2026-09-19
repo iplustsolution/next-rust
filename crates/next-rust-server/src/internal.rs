@@ -1,4 +1,4 @@
-//! Framework endpoints under `/_nr/`.
+//! Framework endpoints under `/_next-rust/`.
 
 use std::path::Path;
 use std::sync::OnceLock;
@@ -31,6 +31,82 @@ pub(crate) fn runtime_version(dev: bool) -> &'static str {
     cell.get_or_init(|| next_rust_assets::content_hash(runtime_js(dev).as_bytes())[..10].to_owned())
 }
 
+/// The banner comment at the top of the framework's scripts while
+/// `[build] signature = true`: `/*! Next Rust 0.1.10 */`. Minifiers keep
+/// `/*!` comments, so it survives any further bundling.
+pub(crate) fn script_banner() -> &'static str {
+    static BANNER: OnceLock<String> = OnceLock::new();
+    BANNER.get_or_init(|| format!("/*! {} */\n", crate::signature()))
+}
+
+/// `script` with the banner in front, when the build is signed.
+fn signed_script(inner: &AppInner, script: &'static str) -> String {
+    if inner.config.build.signature { format!("{}{script}", script_banner()) } else { script.to_owned() }
+}
+
+/// A framework script as served: the text, compressed once per process with
+/// Brotli (quality 11) and gzip (level 9).
+struct Precompressed {
+    text: String,
+    br: Vec<u8>,
+    gz: Vec<u8>,
+}
+
+#[cfg(feature = "compression")]
+fn precompress(text: String) -> Precompressed {
+    use std::io::Write;
+    let mut br = Vec::with_capacity(text.len() / 3);
+    {
+        let mut w = brotli::CompressorWriter::new(&mut br, 4096, 11, 22);
+        let _ = w.write_all(text.as_bytes());
+    }
+    let mut gz = flate2::write::GzEncoder::new(Vec::with_capacity(text.len() / 3), flate2::Compression::best());
+    let gz = gz.write_all(text.as_bytes()).and_then(|()| gz.finish()).unwrap_or_default();
+    Precompressed { text, br, gz }
+}
+
+#[cfg(not(feature = "compression"))]
+fn precompress(text: String) -> Precompressed {
+    Precompressed { text, br: Vec::new(), gz: Vec::new() }
+}
+
+/// Serve a script in the encoding the client accepts; `cache` keeps the
+/// text and its compressed copies (one slot per variant).
+fn script_response(
+    req: &Request,
+    text: impl FnOnce() -> String,
+    cache: &'static OnceLock<Precompressed>,
+    cc: &str,
+) -> Response {
+    let accept = req.header("accept-encoding");
+    let encoded = cache.get_or_init(|| precompress(text()));
+    let pick = if crate::server::accepts(accept, "br") && !encoded.br.is_empty() {
+        Some(("br", encoded.br.as_slice()))
+    } else if crate::server::accepts(accept, "gzip") && !encoded.gz.is_empty() {
+        Some(("gzip", encoded.gz.as_slice()))
+    } else {
+        None
+    };
+    let mut res = match pick {
+        Some((coding, bytes)) => {
+            Response::new(http::StatusCode::OK, crate::response::Body::Bytes(bytes::Bytes::copy_from_slice(bytes)))
+                .with_header("content-encoding", coding)
+        }
+        None => Response::text(encoded.text.clone()),
+    };
+    res.set_header("vary", "Accept-Encoding");
+    res.with_content_type("text/javascript; charset=utf-8").with_cache_control(cc)
+}
+
+/// One slot per variant: development or not, signed or not.
+type ScriptSlots = [OnceLock<Precompressed>; 4];
+static UI_JS_ENCODED: ScriptSlots = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
+static RUNTIME_JS_ENCODED: ScriptSlots = [OnceLock::new(), OnceLock::new(), OnceLock::new(), OnceLock::new()];
+
+fn slot(inner: &AppInner) -> usize {
+    usize::from(inner.env.is_dev()) * 2 + usize::from(inner.config.build.signature)
+}
+
 /// `(readable, minified)` component script with short class names, when
 /// the build gave the component classes short names.
 static SHORT_UI_JS: OnceLock<(String, String)> = OnceLock::new();
@@ -61,6 +137,7 @@ pub(crate) fn install_short_component_names(names: next_rust_view::class_names::
         id,
         css: Box::leak(css.into_boxed_str()),
         per_class: Some(&[]),
+        scripts: &[],
     }));
     next_rust_view::style::set_overrides(vec![(&next_rust_ui::UI_CSS, sheet)]);
     let _ = SHORT_UI_JS.set((
@@ -69,7 +146,7 @@ pub(crate) fn install_short_component_names(names: next_rust_view::class_names::
     ));
 }
 
-/// Cache-busting version of `/_nr/ui.js`.
+/// Cache-busting version of `/_next-rust/ui.js`.
 pub(crate) fn ui_version(dev: bool) -> &'static str {
     static DEV: OnceLock<String> = OnceLock::new();
     static PROD: OnceLock<String> = OnceLock::new();
@@ -80,36 +157,30 @@ pub(crate) fn ui_version(dev: bool) -> &'static str {
 pub(crate) async fn handle(inner: &AppInner, req: &Request) -> Option<Response> {
     let path = req.path();
     match path {
-        "/_nr/ui.js" => {
+        "/_next-rust/ui.js" => {
             let cc = if req.query_string().starts_with("v=") && !inner.env.is_dev() {
                 "public, max-age=31536000, immutable"
             } else {
                 "no-cache"
             };
-            Some(
-                Response::text(ui_js(inner.env.is_dev()))
-                    .with_content_type("text/javascript; charset=utf-8")
-                    .with_cache_control(cc),
-            )
+            let dev = inner.env.is_dev();
+            Some(script_response(req, || signed_script(inner, ui_js(dev)), &UI_JS_ENCODED[slot(inner)], cc))
         }
-        "/_nr/runtime.js" => {
+        "/_next-rust/runtime.js" => {
             let cc = if req.query_string().starts_with("v=") && !inner.env.is_dev() {
                 "public, max-age=31536000, immutable"
             } else {
                 "no-cache"
             };
-            Some(
-                Response::text(runtime_js(inner.env.is_dev()))
-                    .with_content_type("text/javascript; charset=utf-8")
-                    .with_cache_control(cc),
-            )
+            let dev = inner.env.is_dev();
+            Some(script_response(req, || signed_script(inner, runtime_js(dev)), &RUNTIME_JS_ENCODED[slot(inner)], cc))
         }
-        "/_nr/dev/events" if inner.env.is_dev() => Some(dev_events(inner)),
-        "/_nr/dev/ping" if inner.env.is_dev() => Some(Response::text("ok").with_cache_control("no-store")),
-        "/_nr/image" => Some(image(inner, req).await),
-        _ if path.starts_with("/_nr/assets/") => Some(asset(inner, req).await),
-        _ if path.starts_with("/_nr/client/") => {
-            let rest = &path["/_nr/client".len()..];
+        "/_next-rust/dev/events" if inner.env.is_dev() => Some(dev_events(inner)),
+        "/_next-rust/dev/ping" if inner.env.is_dev() => Some(Response::text("ok").with_cache_control("no-store")),
+        "/_next-rust/image" => Some(image(inner, req).await),
+        _ if path.starts_with("/_next-rust/assets/") => Some(asset(inner, req).await),
+        _ if path.starts_with("/_next-rust/client/") => {
+            let rest = &path["/_next-rust/client".len()..];
             if let Some(embedded) = inner.embedded {
                 let file = crate::embed::find(embedded.client, rest)?;
                 return Some(crate::static_files::serve_embedded(req, file, embedded.built_at, "public, max-age=3600"));
@@ -122,11 +193,11 @@ pub(crate) async fn handle(inner: &AppInner, req: &Request) -> Option<Response> 
     }
 }
 
-/// `/_nr/assets/<dir>/<name>.<hash>.<ext>` → `assets/<dir>/<name>.<ext>`.
+/// `/_next-rust/assets/<dir>/<name>.<hash>.<ext>` → `assets/<dir>/<name>.<ext>`.
 /// URLs are produced at compile time by `asset!`; when the hash matches the
 /// current file the response is cached immutably.
 async fn asset(inner: &AppInner, req: &Request) -> Response {
-    let rest = &req.path()["/_nr/assets".len()..];
+    let rest = &req.path()["/_next-rust/assets".len()..];
     let (dir, file) = rest.rsplit_once('/').unwrap_or(("", rest));
     let mut parts: Vec<&str> = file.split('.').collect();
     let hash_pos = parts.iter().rposition(|p| p.len() == 16 && p.bytes().all(|b| b.is_ascii_hexdigit()));
@@ -165,7 +236,7 @@ async fn asset_hash(path: &Path, meta: &std::fs::Metadata) -> Option<String> {
     Some(hash)
 }
 
-/// `/_nr/image?url=/photo.jpg&w=640&q=75`
+/// `/_next-rust/image?url=/photo.jpg&w=640&q=75`
 ///
 /// Only local files from `public/` are served (never remote URLs, so the
 /// endpoint cannot be abused for SSRF). The current implementation serves
@@ -211,7 +282,7 @@ pub(crate) fn dev_script(nonce: &str) -> String {
     format!(
         "<script nonce=\"{}\">{}</script>",
         next_rust_view::escape_attr(nonce),
-        r#"(()=>{let lost=false,box;const show=(m)=>{if(!box){box=document.createElement("div");box.id="__nr_overlay";box.style.cssText="position:fixed;inset:0;z-index:2147483647;background:rgba(15,15,20,.92);color:#fca5a5;font:13px/1.5 ui-monospace,monospace;padding:32px;overflow:auto;white-space:pre-wrap";document.body.appendChild(box)}box.textContent="Next Rust — build failed\n\n"+m},hide=()=>{box&&box.remove();box=null};const connect=()=>{const es=new EventSource("/_nr/dev/events");es.onopen=()=>{if(lost)location.reload()};es.addEventListener("reload",()=>location.reload());es.addEventListener("error-overlay",(e)=>show(JSON.parse(e.data).message));es.addEventListener("clear",hide);es.onerror=()=>{lost=true;es.close();setTimeout(connect,300)}};connect()})();"#
+        r#"(()=>{let lost=false,box;const show=(m)=>{if(!box){box=document.createElement("div");box.id="__next_rust_overlay";box.style.cssText="position:fixed;inset:0;z-index:2147483647;background:rgba(15,15,20,.92);color:#fca5a5;font:13px/1.5 ui-monospace,monospace;padding:32px;overflow:auto;white-space:pre-wrap";document.body.appendChild(box)}box.textContent="Next Rust — build failed\n\n"+m},hide=()=>{box&&box.remove();box=null};const connect=()=>{const es=new EventSource("/_next-rust/dev/events");es.onopen=()=>{if(lost)location.reload()};es.addEventListener("reload",()=>location.reload());es.addEventListener("error-overlay",(e)=>show(JSON.parse(e.data).message));es.addEventListener("clear",hide);es.onerror=()=>{lost=true;es.close();setTimeout(connect,300)}};connect()})();"#
     )
 }
 

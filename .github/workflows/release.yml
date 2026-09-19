@@ -257,3 +257,10 @@ jobs:
             echo "cargo add next-rust"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      # `cargo publish` leaves a copy of every packaged crate in
+      # target/package. Keep them out of the build cache: they pile up from
+      # release to release and trip the cache action's cleanup.
+      - name: Drop packaging output
+        if: always()
+        run: rm -rf target/package

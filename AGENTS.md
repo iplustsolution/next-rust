@@ -12,7 +12,7 @@ That skill is portable: any AI tool can install it (see [`skills/next-rust/READM
 Quick orientation for work in this repository:
 
 ```sh
-cargo test --workspace                       # needs Rust 1.88+
+cargo test --workspace                       # needs Rust 1.89+
 cargo run -p example-basic                   # a real app on http://localhost:3000
 cargo run -p next-rust-cli -- routes         # inspect a project's route table
 ```

@@ -41,7 +41,8 @@ pub use escape::{escape_attr, escape_text, is_safe_url};
 pub use metadata::Metadata;
 pub use node::{Attr, AttrValue, Element, IntoViewResult, Node, Part, Suspense, View};
 pub use render::{
-    DocumentParts, RenderFlags, STREAMING_RUNTIME, render_static, render_to_string, resolve, stream_document,
+    DocumentParts, RenderFlags, STREAMING_RUNTIME, render_static, render_to_string, resolve, script_key,
+    stream_document,
 };
 pub use style::{CssClass, Stylesheet};
 pub use tags::{TAGS, VOID_TAGS};
@@ -83,7 +84,7 @@ macro_rules! __link_munch {
 /// ```
 /// use next_rust_view::*;
 /// let html = render_static(Image!(src = "/cat.jpg", width = 640, height = 480, alt = "A cat"));
-/// assert!(html.starts_with(r#"<img src="/_nr/image?url=%2Fcat.jpg&amp;w=640&amp;q=75""#));
+/// assert!(html.starts_with(r#"<img src="/_next-rust/image?url=%2Fcat.jpg&amp;w=640&amp;q=75""#));
 /// assert!(html.contains(r#"loading="lazy""#));
 /// ```
 #[macro_export]

@@ -4,8 +4,14 @@
 //! created, empty special files (for example `app/about/page.rs`) so a new
 //! route works immediately.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
+
+/// How long a new special file must stay empty before it is filled. Tools
+/// and editors create a file empty and write it a moment later; filling it
+/// in between would overwrite what they wrote.
+pub const GRACE: Duration = Duration::from_millis(800);
 
 /// Special file names and the template kind that fills them.
 const KINDS: &[(&str, &str)] = &[
@@ -112,34 +118,62 @@ pub fn starter_for(app_dir: &Path, file: &Path) -> Option<String> {
 #[derive(Default)]
 pub struct Scaffolder {
     seen: HashSet<PathBuf>,
+    /// New files seen empty, and when: filled once they stay empty for
+    /// [`GRACE`].
+    pending: HashMap<PathBuf, Instant>,
 }
 
 impl Scaffolder {
-    /// Fill special files that appeared since the last call and are empty.
-    /// Returns the files that were filled. Existing content is never touched.
+    /// Fill special files that appeared since an earlier call and have stayed
+    /// empty for [`GRACE`]. Call it repeatedly (the dev loop polls); returns
+    /// the files that were filled. Content is never touched: a file that has
+    /// anything in it by the time it would be filled is left alone for good.
     pub fn fill_new(&mut self, roots: &[PathBuf]) -> Vec<PathBuf> {
+        self.fill_new_at(roots, Instant::now())
+    }
+
+    fn fill_new_at(&mut self, roots: &[PathBuf], now: Instant) -> Vec<PathBuf> {
         let mut current = HashSet::new();
         for root in roots {
             collect_special(root, &mut current);
         }
-        let mut filled = Vec::new();
-        let mut new_files: Vec<&PathBuf> = current.difference(&self.seen).collect();
-        new_files.sort();
-        for file in new_files {
-            let empty = std::fs::read_to_string(file).is_ok_and(|text| text.trim().is_empty());
-            if !empty {
-                continue;
+        for file in current.difference(&self.seen) {
+            if is_empty(file) {
+                self.pending.entry(file.clone()).or_insert(now);
             }
+        }
+        let mut due: Vec<PathBuf> = Vec::new();
+        self.pending.retain(|file, since| {
+            if !current.contains(file) || !is_empty(file) {
+                return false;
+            }
+            if now.duration_since(*since) < GRACE {
+                return true;
+            }
+            due.push(file.clone());
+            false
+        });
+        due.sort();
+        let mut filled = Vec::new();
+        for file in due {
             let root = roots.iter().find(|r| file.starts_with(r)).cloned().unwrap_or_default();
-            if let Some(code) = starter_for(&root, file)
-                && std::fs::write(file, code).is_ok()
+            // Checked once more right before writing, to keep the window for
+            // a concurrent writer as small as the file system allows.
+            if let Some(code) = starter_for(&root, &file)
+                && is_empty(&file)
+                && std::fs::write(&file, code).is_ok()
             {
-                filled.push(file.clone());
+                filled.push(file);
             }
         }
         self.seen = current;
         filled
     }
+}
+
+/// Whether a file exists and holds only whitespace.
+fn is_empty(file: &Path) -> bool {
+    std::fs::read_to_string(file).is_ok_and(|text| text.trim().is_empty())
 }
 
 fn collect_special(dir: &Path, out: &mut HashSet<PathBuf>) {
@@ -200,7 +234,10 @@ mod tests {
 
         std::fs::write(app.join("about/page.rs"), "").unwrap();
         std::fs::write(app.join("about/route.rs"), "\n").unwrap();
-        let filled = s.fill_new(std::slice::from_ref(&app));
+        let start = Instant::now();
+        let roots = std::slice::from_ref(&app);
+        assert!(s.fill_new_at(roots, start).is_empty(), "new empty files wait out the grace period");
+        let filled = s.fill_new_at(roots, start + GRACE);
         assert_eq!(filled, vec![app.join("about/page.rs"), app.join("about/route.rs")]);
         assert!(std::fs::read_to_string(app.join("about/page.rs")).unwrap().contains("h1![\"About\"]"));
         assert_eq!(std::fs::read_to_string(app.join("page.rs")).unwrap(), "// my code\n");
@@ -208,7 +245,30 @@ mod tests {
 
         // A file the user empties later is left alone.
         std::fs::write(app.join("about/page.rs"), "").unwrap();
-        assert!(s.fill_new(std::slice::from_ref(&app)).is_empty());
+        assert!(s.fill_new_at(roots, start + GRACE * 2).is_empty());
+        assert!(s.fill_new_at(roots, start + GRACE * 4).is_empty());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn never_overwrites_a_file_being_written() {
+        let root = std::env::temp_dir().join(format!("nr-scaffold-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let app = root.join("app");
+        std::fs::create_dir_all(&app).unwrap();
+        let roots = std::slice::from_ref(&app);
+        let mut s = Scaffolder::default();
+        let start = Instant::now();
+        s.fill_new_at(roots, start);
+
+        // A tool creates the file (empty for an instant)…
+        std::fs::create_dir_all(app.join("pricing")).unwrap();
+        std::fs::write(app.join("pricing/page.rs"), "").unwrap();
+        assert!(s.fill_new_at(roots, start + GRACE / 4).is_empty());
+        // …and writes it before the grace period ends.
+        std::fs::write(app.join("pricing/page.rs"), "// written by a tool\n").unwrap();
+        assert!(s.fill_new_at(roots, start + GRACE * 2).is_empty());
+        assert_eq!(std::fs::read_to_string(app.join("pricing/page.rs")).unwrap(), "// written by a tool\n");
         std::fs::remove_dir_all(root).unwrap();
     }
 }

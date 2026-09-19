@@ -6,7 +6,7 @@ pub fn content() -> Node {
     fragment![
         h2![id("requirements"), a![class("anchor"), href("#requirements"), "Requirements"]],
         ul![
-            li!["Rust ", strong!["1.88"], " or newer (", code!["rustup update stable"], ")"],
+            li!["Rust ", strong!["1.89"], " or newer (", code!["rustup update stable"], ")"],
             li!["macOS, Linux or Windows"],
         ],
         p!["Next Rust does not need Node.js."],

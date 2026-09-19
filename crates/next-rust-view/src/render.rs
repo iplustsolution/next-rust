@@ -70,9 +70,8 @@ struct Writer {
     split_sheets: Vec<(&'static Stylesheet, Pieces)>,
     /// Classes rendered so far, as written to the HTML.
     classes: HashSet<String>,
-    /// Something rendered markup of its own on the client (a module island):
-    /// every rule is needed.
-    all_classes: bool,
+    /// Scripts the page loads so far (`client/home.js`, `assets/js/site.js`).
+    scripts: HashSet<String>,
     flags: RenderFlags,
     streaming: bool,
     next_id: u32,
@@ -89,7 +88,7 @@ impl Writer {
             split: false,
             split_sheets: Vec::new(),
             classes: HashSet::new(),
-            all_classes: false,
+            scripts: HashSet::new(),
             flags: RenderFlags::default(),
             streaming,
             next_id: 0,
@@ -191,15 +190,18 @@ impl Writer {
                         }
                         _ => Cow::Borrowed(t.as_ref()),
                     };
+                    if a.name == "class" && t.is_empty() {
+                        // Every class was dropped: no attribute at all.
+                        continue;
+                    }
                     let safe = if is_url_attr(&a.name) && !is_safe_url(&t) { "#" } else { t.as_ref() };
                     let name = attr_name(&a.name);
                     if self.split {
                         if let Some(class) = name.strip_prefix("data-nr-class-") {
                             self.classes.insert(class.to_owned());
                         }
-                        if tag == "nr-island" && a.name == "data-module" {
-                            // Renders its own markup on the client.
-                            self.all_classes = true;
+                        if (tag == "nr-island" && a.name == "data-module") || (tag == "script" && a.name == "src") {
+                            self.scripts.insert(script_key(&t));
                         }
                     }
                     self.out.push(' ');
@@ -246,16 +248,43 @@ impl Writer {
         let mut out = String::new();
         for (sheet, sent) in &mut self.split_sheets {
             let split = css_split::split(sheet);
-            let keep = sheet.per_class.unwrap_or_default();
-            let keep: Vec<&str> = keep.iter().map(|c| crate::class_names::short_class_name(c).unwrap_or(c)).collect();
+            let scripts = &self.scripts;
+            let scoped = sheet.scripts.iter().filter(|(k, _)| scripts.contains(*k)).flat_map(|(_, c)| c.iter());
+            let keep: Vec<&str> = sheet
+                .per_class
+                .unwrap_or_default()
+                .iter()
+                .chain(scoped)
+                .map(|c| crate::class_names::short_class_name(c).unwrap_or(c))
+                .collect();
             let classes = &self.classes;
             let used = |c: &str| classes.contains(c) || keep.contains(&c);
-            let pieces = split.delta(&used, self.all_classes, sent);
+            let pieces = split.delta(&used, sent);
             out.push_str(&split.style(sheet, &pieces));
             split.record(sent, &pieces);
         }
         out
     }
+}
+
+/// The key of a script URL in [`Stylesheet::scripts`]: the path under
+/// `/_next-rust/` or `public/`, without query string or fingerprint
+/// (`/_next-rust/assets/js/site.1a2b3c4d5e6f7a8b.js` → `assets/js/site.js`).
+pub fn script_key(url: &str) -> String {
+    let path = url.split(['?', '#']).next().unwrap_or(url);
+    let path = path.strip_prefix("/_next-rust/").or_else(|| path.strip_prefix('/')).unwrap_or(path);
+    let (dir, file) = path.rsplit_once('/').map_or(("", path), |(d, f)| (d, f));
+    let parts: Vec<&str> = file.split('.').collect();
+    let mut name: Vec<&str> = Vec::with_capacity(parts.len());
+    for (i, part) in parts.iter().enumerate() {
+        let fingerprint =
+            i > 0 && i + 1 < parts.len() && part.len() == 16 && part.bytes().all(|b| b.is_ascii_hexdigit());
+        if !fingerprint {
+            name.push(part);
+        }
+    }
+    let file = name.join(".");
+    if dir.is_empty() { file } else { format!("{dir}/{file}") }
 }
 
 /// Class names in `class="…"` attributes of raw HTML.
@@ -321,6 +350,9 @@ pub async fn render_to_string(view: impl View) -> String {
 /// Everything needed to render a full HTML document.
 pub struct DocumentParts {
     pub lang: String,
+    /// Other attributes of `<html>` (see `Metadata::html_attribute`). A
+    /// `lang` entry replaces [`DocumentParts::lang`].
+    pub html_attributes: Vec<(String, String)>,
     /// Pre-rendered `<head>` contents (metadata).
     pub head: String,
     /// Extra head markup (e.g. dev scripts). Trusted.
@@ -333,18 +365,23 @@ pub struct DocumentParts {
     pub tail: Box<dyn FnOnce(RenderFlags) -> String + Send>,
     /// Ids of stylesheets the browser already has; they are not written again.
     pub known_styles: Vec<String>,
+    /// Written as `<meta name="generator">`, the first element of `<head>`:
+    /// what built the page (`Next Rust 0.1.10`). `None` leaves it out.
+    pub generator: Option<String>,
 }
 
 impl DocumentParts {
     pub fn new(body: impl View) -> Self {
         DocumentParts {
             lang: "en".into(),
+            html_attributes: Vec::new(),
             head: String::new(),
             head_extra: String::new(),
             body: body.into_node(),
             nonce: None,
             tail: Box::new(|_| String::new()),
             known_styles: Vec::new(),
+            generator: None,
         }
     }
 }
@@ -355,9 +392,36 @@ fn nonce_attr(nonce: &Option<String>) -> String {
 
 fn open_document(parts: &DocumentParts, w: &mut Writer, body: &str) -> String {
     let mut s = String::with_capacity(body.len() + parts.head.len() + 256);
+    let lang = parts.html_attributes.iter().find(|(name, _)| name == "lang").map_or(&parts.lang, |(_, v)| v);
     s.push_str("<!DOCTYPE html><html lang=\"");
-    s.push_str(&escape_attr(&parts.lang));
-    s.push_str("\"><head>");
+    s.push_str(&escape_attr(lang));
+    s.push('"');
+    for (name, value) in &parts.html_attributes {
+        let name = name.as_str();
+        if name == "lang" || !is_valid_attr_name(name) || (name.len() > 2 && name[..2].eq_ignore_ascii_case("on")) {
+            continue;
+        }
+        let value = if name == "class" {
+            // Before `split_styles` below: the classes' rules are sent too.
+            let mapped = map_class_list(value);
+            w.classes.extend(mapped.split_ascii_whitespace().map(str::to_owned));
+            mapped
+        } else {
+            Cow::Borrowed(value.as_str())
+        };
+        let value = if is_url_attr(name) && !is_safe_url(&value) { "#" } else { value.as_ref() };
+        s.push(' ');
+        s.push_str(&attr_name(name));
+        s.push_str("=\"");
+        s.push_str(&escape_attr(value));
+        s.push('"');
+    }
+    s.push_str("><head>");
+    if let Some(generator) = &parts.generator {
+        s.push_str("<meta name=\"generator\" content=\"");
+        s.push_str(&escape_attr(generator));
+        s.push_str("\">");
+    }
     s.push_str(&parts.head);
     // Utility sheets first, so page and module styles can override them.
     s.push_str(&w.split_styles());

@@ -1,7 +1,7 @@
 # Working on the framework itself
 
 Read this before changing anything under `crates/`. Verified against Next Rust 0.1.7 (Rust 2024 edition,
-MSRV 1.88).
+MSRV 1.89).
 
 ## Contents
 
@@ -147,14 +147,14 @@ run twice concurrently in the same directory.
 ## Checks before you push
 
 CI runs these in order on Linux, macOS and Windows (Windows is `continue-on-error`, so green does not prove
-Windows works), plus an MSRV job with Rust 1.88:
+Windows works), plus an MSRV job with Rust 1.89:
 
 ```sh
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
 cargo test --workspace --all-features --no-fail-fast
-cargo +1.88 check --workspace --all-features    # the separate MSRV job
+cargo +1.89 check --workspace --all-features    # the separate MSRV job
 ```
 
 `rustfmt.toml` is `max_width = 120`, `use_small_heuristics = "Max"` — run `cargo fmt --all` rather than

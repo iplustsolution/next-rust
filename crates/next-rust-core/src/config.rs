@@ -143,6 +143,12 @@ pub struct TailwindConfig {
     pub safelist: Vec<String>,
     /// Extra directories to scan for classes, besides the app directory and `src/`.
     pub sources: Vec<PathBuf>,
+    /// CSS files compiled with the app's classes, in order, after the options
+    /// above and before `css`. Each file is a full Tailwind input: `@theme`,
+    /// `@layer`, `@utility`, `@apply`, `@custom-variant` and `@keyframes` all
+    /// work. Paths are relative to the config file. Only the listed files are
+    /// watched for changes, so list a file instead of `@import`ing it.
+    pub stylesheets: Vec<PathBuf>,
     /// Raw CSS appended after everything else (`@keyframes`, `@layer`, …), for
     /// what the options above can't express.
     pub css: String,
@@ -168,6 +174,7 @@ impl Default for TailwindConfig {
             plugins: Vec::new(),
             safelist: Vec::new(),
             sources: Vec::new(),
+            stylesheets: Vec::new(),
             css: String::new(),
             minify_classes: true,
             keep_classes: Vec::new(),
@@ -315,6 +322,17 @@ pub struct BuildConfig {
     pub optimize: Optimize,
     /// What happens when code panics in a release binary.
     pub panic: PanicStrategy,
+    /// Mark what the framework built: a `<meta name="generator">` on every
+    /// document and a banner comment on the framework's scripts.
+    pub signature: bool,
+    /// Release builds minify and mangle the JavaScript in `client/` and
+    /// `assets/` (`NEXT_RUST_MINIFY_JS=0|1` overrides).
+    pub minify_js: bool,
+    /// Release builds leave out classes that look generated (`sm:flexx`,
+    /// `bg-[…]`, `w-1/3`) when no stylesheet, script or static file of the
+    /// project knows them: they would style nothing
+    /// (`NEXT_RUST_DROP_CLASSES=0|1` overrides).
+    pub drop_unused_classes: bool,
 }
 
 impl Default for BuildConfig {
@@ -324,6 +342,9 @@ impl Default for BuildConfig {
             concurrency: 8,
             optimize: Optimize::Size,
             panic: PanicStrategy::Unwind,
+            signature: true,
+            minify_js: true,
+            drop_unused_classes: true,
         }
     }
 }
@@ -442,7 +463,7 @@ pub enum CsrfMode {
     /// Verify `Origin`/`Sec-Fetch-Site` against the request host (default).
     #[default]
     Origin,
-    /// Additionally require a double-submit token (`nr_csrf` cookie echoed in
+    /// Additionally require a double-submit token (`next_rust_csrf` cookie echoed in
     /// `x-csrf-token` or a `_csrf` field).
     Token,
     /// Skip the origin check (not recommended). Signed action URLs are
@@ -725,6 +746,7 @@ impl Config {
                 );
             }
         }
+        out.extend(self.tailwind_diagnostics());
         if let Some(level) = &self.logging.level
             && !matches!(level.as_str(), "error" | "warn" | "info" | "debug" | "trace")
         {
@@ -732,6 +754,31 @@ impl Config {
                 Diagnostic::warning("NR0007", "Unknown log level")
                     .message(format!("`logging.level = {level:?}`; falling back to `info`")),
             );
+        }
+        out
+    }
+
+    /// Problems with the Tailwind setup that stop the CSS from compiling
+    /// (`NR0008`: a listed stylesheet is not a file). Part of [`Config::validate`];
+    /// the build also checks them, since the engine's own error is unclear.
+    pub fn tailwind_diagnostics(&self) -> Vec<Diagnostic> {
+        let mut out = Vec::new();
+        if self.tailwind.enabled {
+            for sheet in &self.tailwind.stylesheets {
+                let path = self.resolve(sheet);
+                if !path.is_file() {
+                    out.push(
+                        Diagnostic::error("NR0008", "Tailwind stylesheet not found")
+                            .location(&path)
+                            .message(format!(
+                                "`tailwind.stylesheets` lists {:?}, which resolves to {}, and that is not a file.",
+                                sheet,
+                                path.display()
+                            ))
+                            .help("create the file or remove it from `[tailwind] stylesheets` in next-rust.toml"),
+                    );
+                }
+            }
         }
         out
     }
@@ -851,6 +898,25 @@ mod tests {
         assert_eq!(diags[0].code, "NR0001");
         std::fs::write(base.join(JSON_FILE), "{}").unwrap();
         assert!(matches!(Config::discover(&nested), Err(ConfigError::Ambiguous { .. })));
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn missing_tailwind_stylesheet_is_reported() {
+        let base = std::env::temp_dir().join(format!("nr-stylesheets-{}", std::process::id()));
+        std::fs::create_dir_all(base.join("app")).unwrap();
+        std::fs::create_dir_all(base.join("styles")).unwrap();
+        std::fs::write(base.join("styles/theme.css"), ":root{}").unwrap();
+        let mut c = Config::from_toml_str(
+            "[tailwind]\nenabled = true\nstylesheets = [\"styles/theme.css\", \"styles/missing.css\"]\n",
+        )
+        .unwrap();
+        c.root = base.clone();
+        let codes: Vec<_> = c.validate().into_iter().map(|d| d.code).collect();
+        assert_eq!(codes, ["NR0008"], "only the missing file is reported");
+        // Stylesheets are only read when Tailwind is on.
+        c.tailwind.enabled = false;
+        assert!(c.validate().is_empty());
         std::fs::remove_dir_all(&base).unwrap();
     }
 }

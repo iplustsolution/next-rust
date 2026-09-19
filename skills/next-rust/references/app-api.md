@@ -38,7 +38,7 @@ next_rust::routes!();     // just includes the generated `routes()` — use in s
 `use next_rust::prelude::*;` brings in the macros (`action`, `asset`, `client`, `css_module`, `global_css`,
 `server`, `server_action`), `Params`, the server types (`Data`, `Request`, `Response`, `Json`, `Html`,
 `Error`, `Result`, `Query`, `Path`, `Headers`, `Cookies`, `Cookie`, `SameSite`, `Session`, `Auth`, `AuthUser`,
-`Extension`, `FormState`, `CsrfToken`, `Nonce`, `Ctx`, `Rendering`, `RequestInfo`, `ResponseHeaders`, `Next`,
+`Extension`, `FormState`, `CsrfToken`, `Nonce`, `Ctx`, `Rendering`, `RequestInfo`, `ClientIp`, `ResponseHeaders`, `Next`,
 `IntoResponse`, `OrNotFound`, `Sitemap`, `Robots`, `SseEvent`, `ActionContext`, `ErrorInfo`, `not_found`,
 `redirect`, `permanent_redirect`), the metadata types and everything in `next_rust_view` (all element macros,
 attribute helpers, `View`, `Node`, `Element`, `Children`, `Slots`, `Metadata`, `each`, `when`, `suspense`,
@@ -112,8 +112,8 @@ pub enum Node { Empty, Text(..), Raw(..), Element(..), Fragment(..), Suspense(..
 `[V; N]`, `Box<V>`, `()`, tuples up to 8, and `&'static Stylesheet`. So `Option<Node>` renders nothing when
 `None`, and a `Vec` renders in order — no need for a wrapper.
 
-Element macros exist for 121 tags (`next_rust::TAGS` lists them), named exactly after the tag, including SVG
-(`svg`, `path`, `circle`, `linearGradient`, …). Void tags ignore children. The only renamed macro is `use_!`
+Element macros exist for 139 tags (`next_rust::TAGS` lists them), named exactly after the tag, including SVG
+(`svg`, `path`, `circle`, `linearGradient`, `text`, `foreignObject`, `filter`, `feGaussianBlur`, …). Void tags ignore children. The only renamed macro is `use_!`
 (`use` is a keyword) — every other tag is itself: `time!`, `form!`, `label!`, `select!`, `style!`. `Element::custom("my-tag")` builds a tag
 name at runtime.
 
@@ -160,7 +160,7 @@ Image!(src = "/lake.jpg", width = 1200, height = 800, alt = "A lake")
 ```
 
 `Image!` emits `srcset`/`sizes`, `loading="lazy"` (unless `priority = true`) and routes local images through
-`/_nr/image`. Image resizing is not implemented yet: the original file is served.
+`/_next-rust/image`. Image resizing is not implemented yet: the original file is served.
 
 ## Data loading and extractors
 
@@ -184,6 +184,7 @@ pub async fn generate_params() -> Vec<Params>      // no arguments; Result<Vec<P
 | `Headers` | `.get(name)` | no |
 | `Cookies` | read/write cookies | no |
 | `RequestInfo` | method, uri, remote address | no |
+| `ClientIp` | the client's IP (`X-Forwarded-For` only with `[server] trust_proxy`), `Option<IpAddr>` | no |
 | `Extension<T>` | value inserted by middleware | no |
 | `Auth<T>` | `.user()`, `.is_authenticated()`, `.require("/login")?` | no |
 | `ResponseHeaders` | `.set(name, value)` on the response | no |
@@ -218,7 +219,8 @@ mapping: not found → 404, validation → 422, redirect → 307/308, internal �
 // Request
 req.method() req.uri() req.path() req.query_string() req.query::<T>()? req.query_param("q")
 req.headers() req.header("x-api-key") req.params() req.param("id")
-req.cookies() req.remote_addr() req.is_secure() req.is_websocket_upgrade()
+req.cookies() req.remote_addr() req.client_ip() req.is_secure() req.is_websocket_upgrade()
+req.same_origin()   // false when the browser says another site sent it; call it in state-changing API routes
 req.extension::<T>() req.insert_extension(value) req.set_path("/rewritten")?  // middleware rewrite
 req.bytes().await? req.text().await? req.json::<T>().await? req.form::<T>().await?
 req.set_body_limit(10 * 1024 * 1024)          // default [server] body_limit = 2 MiB, over-limit → 413
@@ -258,29 +260,44 @@ then `Extension<Session>` with `get`, `insert`, `remove`, `regenerate`, `destroy
 ```rust
 #[server_action] pub async fn refresh() -> Result<Stats>                       // 0 arguments
 #[server_action] pub async fn create(input: NewUser) -> Result<User>           // 1 deserializable argument
-#[server_action] pub async fn logout(ctx: ActionContext, input: ()) -> Result<()>   // context + input
+#[server_action] pub async fn logout(ctx: ActionContext) -> Result<()>                // context, no input
+#[server_action] pub async fn rename(ctx: ActionContext, input: Rename) -> Result<()> // context + input
+#[server_action(body_limit = 30 * 1024 * 1024)]                                  // this action only: larger body
+pub async fn upload(ctx: ActionContext, input: Base64File) -> Result<()>
 ```
 
-At most two arguments (`NR0210`), no `self`, sync allowed. Discovered in `app/` and `src/`. Served at
-`POST /_nr/action/<token>`; reference one from a view with `action!(path::to::fn)`, which sets `action`,
+`body_limit` (a constant, in bytes) replaces `[server] body_limit` for that one action, for uploads sent as
+base64 (≈4/3 of the file size). It takes effect only after the origin and token checks pass, so it can't be
+used to push large bodies at the server from outside a page that rendered the action. Keep the global limit
+small and raise it per upload action instead.
+
+At most two arguments (`NR0210`), no `self`, sync allowed. `ActionContext` has `cookies`, `headers`,
+`extensions` and `client_ip()` (the `X-Forwarded-For` client only with `[server] trust_proxy`, else the peer). Discovered in `app/` and `src/`. Served at
+`POST /_next-rust/action/<token>`; reference one from a view with `action!(path::to::fn)`, which sets `action`,
 `method="post"` and `data-nr-action` on the `<form>`.
 
 Action URLs are never fixed. `action!(f)` / `ActionRef::url()` render a placeholder, and every HTML response
 replaces it with a token signed (HMAC-SHA256) under `NEXT_RUST_SECRET` (32+ bytes; set it in production, or
 links break on restart and across instances), expiring after `[security] action_token_ttl`, and bound to the
-visitor's `HttpOnly`, `SameSite=Strict` binding cookie (`__Host-nr_bind`, `nr_bind` in development). Copied,
+visitor's `HttpOnly`, `SameSite=Strict` binding cookie (`__Host-next_rust_bind`, `next_rust_bind` in development). Copied,
 expired, tampered or guessed URLs get 403 before the action runs. So: never build action URLs by hand, never
 return `.url()` from a JSON API, and still check authentication/authorization inside the action (tokens prove
 "this browser loaded a page", not "who the user is"). Pages with action URLs are sent `private, no-store`.
 Only `application/json` and `application/x-www-form-urlencoded` bodies are accepted.
 
 Without JavaScript: success redirects (303) to the `_redirect` field or the referrer; a validation error
-redirects back with a 60-second flash cookie that the `FormState` extractor consumes once. Fields starting
+redirects back to the referring page (to `_redirect` only when there is no referrer) with a 60-second flash
+cookie that the `FormState` extractor consumes once. Fields starting
 with `_` or containing `password`/`token` are never echoed back.
 
 With JavaScript: `{"ok":true,"data":…}` / `{"ok":false,"errors":{…}}` (422) / `{"ok":false,"redirect":"/…"}`.
-Elements with `data-nr-error="field"` are filled in automatically; the form gets `aria-busy` while submitting
-and dispatches `nr:success` / `nr:error`.
+Elements with `data-nr-error="field"` are filled in automatically; the form gets `aria-busy` while submitting,
+`data-nr-state="success"|"error"` afterwards, and dispatches `nr:success` / `nr:error`.
+
+To show the result in place instead of refreshing (a newsletter box, a "saved" note): `stay_on_success(true)` on
+the form, `action_result("")` (whole return value) or `action_result("key")` (one field) on elements that
+display it as text, `reset_on_success(true)` to clear the fields. `_redirect` then only applies without
+JavaScript, so point it at a confirmation page.
 
 ## UI components
 
@@ -307,7 +324,28 @@ Card![CardHeader![..], CardBody![..], CardFooter![..]]   Chip![color = Color::Su
 Spinner![]   Divider![]   Container![width = Width::Lg, ..]   Stack![row = true, gap = 4, align = Align::Center, ..]
 Grid![cols = 3, ..]   AppShell![navbar = Navbar![brand = .., menu_toggle = true, NavbarItem![href = "/", "Home"]],
                                 sidebar = Sidebar![SidebarItem![href = "/", "Home"]], children]
+Alert![color = Color::Success, variant = Variant::Faded, title = "Saved", closable = true, "Live."]  // role=status/alert
+Badge![content = "3", Avatar![..]]   Badge![dot = true, placement = Placement::BottomRight, ..]   Kbd!["⌘", "K"]
+Progress![label = "Upload", value = 62.0, show_value = true]   Progress![striped = true]   // no value: indeterminate
+CircularProgress![value = 75.0, show_value = true, label = "Mastery"]   Skeleton![lines = 3]   Skeleton![class("h-40")]
+Stat![label = "Students", value = "1,204", delta = "12%", trend = Trend::Up, icon = icons::Users(), color = Color::Primary]
+Tabs![selected = "b", Tab![key = "a", title = "A", p!["panel"]], Tab![key = "b", title = "B", p!["panel"]]]   // script switches
+Tabs![variant = TabsVariant::Underlined, Tab![title = "A", href = "/?t=a", selected = true], Tab![title = "B", href = "/?t=b"]]
+Breadcrumbs![BreadcrumbItem![href = "/", "Home"], BreadcrumbItem!["Here"]]      // last = aria-current
+Steps![current = 1, vertical = false, Step![title = "Account", href = "/a"], Step![title = "Plan"], Step![title = "Done"]]
+Accordion![variant = AccordionVariant::Splitted, multiple = false, AccordionItem![title = "Q", expanded = true, p!["A"]]]  // <details>
+Modal![id = "confirm", title = "Delete?", size = Width::Md, dismissable = true, scroll_inside = false,
+       ModalBody![..], ModalFooter![Button![on_press = Press::close_modal(), "Cancel"], ..]]   // <dialog>
+Button![on_press = Press::open_modal("confirm"), "Delete…"]                      // showModal(); Escape/backdrop close
+Table![columns = ["Name", "Score"], striped = true, hoverable = true, sticky_header = true, empty = EmptyState![..],
+       each(rows, |r| tr![td![..], td![..]])]
+Tooltip![content = "Copy", side = Side::Bottom, Button![..]]   EmptyState![title = "Nothing yet", description = "…", Button![..]]
 ```
+
+Modal, tabs with panels and closable alerts need the component script (`data-nr-ui`); without it the modal's
+close button (a `method="dialog"` form) and `Escape` still work, the selected tab panel shows, and accordions
+(`<details>`) open natively. Events: `nr:change` (tabs, `detail.key`), `nr:open`/`nr:close` (modal),
+`nr:dismiss` (alert).
 
 Icons: every Lucide icon as `next_rust::icons::PascalName()` (`icons::ArrowRight()`, former names like
 `icons::Home()` too), returning an `Icon` with `.size(24 | "1.25em")`, `.color(..)`, `.stroke_width(2.0)`,
@@ -324,18 +362,18 @@ Styling: default classes (`nr-*`) live in the CSS `components` layer, so any cla
 CSS) wins without `!important`. Theme with CSS variables on `:root` (`--nr-primary`, `--nr-radius-md`,
 `--nr-font`, ...); dark mode follows the system or `class="dark"`/`data-theme="dark"`. Fields with a `name`
 render `data-nr-error=name`, so server-action validation errors appear under them. Interactive components load
-`/_nr/ui.js` only on pages that use them and fall back to native controls without it. Select and date-picker
+`/_next-rust/ui.js` only on pages that use them and fall back to native controls without it. Select and date-picker
 popovers render in the browser's top layer (never clipped by `overflow: hidden`).
 
 ## Client interactivity
 
 ```rust
 #[client] pub fn Counter(count: i32) -> impl View { … }
-#[client(module = "/_nr/client/chart.js")] pub fn Chart(points: Vec<f32>) -> impl View { … }
+#[client(module = "/_next-rust/client/chart.js")] pub fn Chart(points: Vec<f32>) -> impl View { … }
 ```
 
 Not async, not generic, no methods, plain identifier arguments implementing `Serialize`. Props are visible in
-the HTML. Files in `client/` are served from `/_nr/client/`; a module exports `hydrate(element, props)`.
+the HTML. Files in `client/` are served from `/_next-rust/client/`; a module exports `hydrate(element, props)`.
 
 Declarative bindings: `data-nr-text`, `data-nr-show` (`"!path"` negates), `data-nr-bind`,
 `data-nr-class-<name>`, `data-nr-on-<event>` via `on("click", "…")`, `data-nr-key`, `data-nr-error`.
@@ -345,11 +383,13 @@ Operations: `increment:path[,n]`, `decrement:path[,n]`, `toggle:path`, `set:path
 ```js
 window.nextRust.navigate(href) / .replace(href) / .back() / .forward() / .refresh() / .prefetch(href)
 await window.nextRust.action(url, input)     // throws with .errors and .status
+await window.nextRust.request(url, { method, body, headers, signal, timeout, as })  // same-origin JSON (as: "blob"|"text"|"response"); throws .status/.data
+for await (const { event, data, id } of window.nextRust.stream(url, { method: "POST", body })) …  // SSE
 window.nextRust.env                          // NEXT_RUST_PUBLIC_* variables
 window.addEventListener("nr:navigate", e => e.detail.url)
 ```
 
-The runtime (`/_nr/runtime.js`) is added only to pages with an internal link or an island. It prefetches after
+The runtime (`/_next-rust/runtime.js`) is added only to pages with an internal link or an island. It prefetches after
 400 ms of mouse hover, caches pages for 30 s, and swaps only the part of the page below shared layouts.
 
 ## Metadata, sitemap, robots
@@ -365,12 +405,15 @@ pub fn metadata() -> Metadata {
         .canonical("https://acme.dev/pricing")
         .robots("index, follow").viewport("width=device-width, initial-scale=1")
         .theme_color("#f26b2a").color_scheme("light dark").manifest("/manifest.json")
+        .theme_color_for("(prefers-color-scheme: dark)", "#0d1b2a")   // one per media query
         .icon("/favicon.svg").apple_touch_icon("/apple-touch-icon.png")
+        .icon_sized("/favicon-32x32.png", "32x32", "image/png")
         .open_graph(OpenGraph { title: Some("Pricing".into()), images: vec![OgImage { url: "/og.png".into(), ..Default::default() }], ..Default::default() })
         .twitter(Twitter { card: Some("summary_large_image".into()), ..Default::default() })
         .alternate("de", "https://acme.dev/de/pricing")
         .meta("x-custom", "1").stylesheet("/styles.css")
         .preload_font("/fonts/inter.woff2").preload_image("/hero.avif")
+        .html_attribute("data-theme", "ocean")   // on <html>; also "class", and "lang" overrides [app] lang
 }
 ```
 
@@ -379,6 +422,10 @@ Layouts and pages merge outside-in; the child wins. `metadata` may be async, tak
 `not_found()` from it renders the 404 page — but note it renders the **app-root**
 `not-found.rs`, not a per-segment one, because metadata is resolved before the page tree. If you want a
 segment's own 404 page, raise `not_found()` from `load` or `Page` and keep `metadata` infallible.
+
+`html_attribute(name, value)` puts server-rendered attributes on `<html>` (per name, child wins; `lang` overrides
+`[app] lang`). Invalid names and `on*` are dropped, values escaped, `class` shortened/styled like any class.
+Client navigations swap only the body, so they keep `<html>` as it is, including changes a script made.
 
 ```rust
 // app/sitemap.rs → /sitemap.xml
@@ -456,12 +503,24 @@ then the page/API/action. Built-ins: `request_id()`, `cors(Cors::default().allow
 ```rust
 global_css!("globals.css")       // &'static Stylesheet; put it in the root layout
 css_module!("card.module.css")   // styles.card, styles.card_title (compile error if missing)
-asset!("fonts/inter.woff2")      // "/_nr/assets/fonts/inter.<hash>.woff2", must live under assets/
+asset!("fonts/inter.woff2")      // "/_next-rust/assets/fonts/inter.<hash>.woff2", must live under assets/
 ```
 
 Paths resolve relative to the source file, then the app directory, then the crate root. Each stylesheet is
 emitted once per document as `<style data-nr-css="<hash>">` in `<head>`; client navigations only send new
-ones. Release builds prune unused rules and (with Tailwind) rename classes.
+ones. Every sheet is sent **per page**: a document gets only the rules whose selector classes it renders
+(rules without a class owner always go), plus the classes of the scripts the page loads (`client/` modules
+of its islands, `assets/`/`public/` scripts it includes, and their relative imports) and `[tailwind]
+keep_classes` / `[assets] css_safelist` everywhere. Release builds also prune unused rules project-wide,
+rename classes (Tailwind and `nr-*` ones; 1–2 characters, 3 beyond ~1,000 classes) and rewrite the class
+lists in `client/`/`assets/` scripts to match (`js_classes.rs`: whole-class-list strings, `classList.*`,
+`className =`, `class:`, `class="…"`, `.x` selectors; a lone keyword-like word such as `"block"` pins the
+name), then minify and mangle those scripts (`[build] minify_js`; `asset!` hashes the served bytes). Release
+builds also leave out generated-looking classes (`sm:x`, `bg-[…]`, `w-1/3`, `!p-0`) that no stylesheet, script or
+static file names (`[build] drop_unused_classes`; `next-rust build` lists them), compress embedded files with
+Brotli and gzip at build time and serve them precompressed, and compress pages with Brotli when accepted.
+Every document starts with `<meta name="generator" content="Next Rust x.y.z">` and the framework scripts carry
+a `/*! Next Rust x.y.z */` banner unless `[build] signature = false` (`next_rust::VERSION`, `next_rust::signature()`).
 
 ```rust
 static INTER: LazyLock<LocalFont> = LazyLock::new(||
@@ -514,7 +573,7 @@ SSE: `Response::sse(stream_of_sse_events)`; build events with `SseEvent::data("x
 `SseEvent::json(&value).event("update").id("7")`.
 
 WebSockets (feature `websocket`): `next_rust::ws::upgrade(req, |socket| async move { … })` or
-`App::ws(pattern, handler)`.
+`App::ws(pattern, handler)`. Upgrades from another site are refused with 403 (`req.same_origin()`).
 
 ## Name traps
 

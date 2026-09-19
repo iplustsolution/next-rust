@@ -40,8 +40,8 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let minor: u32 = v.split('.').nth(1).and_then(|m| m.parse().ok()).unwrap_or(0);
         check(
             minor >= 88,
-            "Rust version supports Next Rust (≥ 1.88)",
-            &format!("Rust {v} is too old; Next Rust requires 1.88 or newer"),
+            "Rust version supports Next Rust (≥ 1.89)",
+            &format!("Rust {v} is too old; Next Rust requires 1.89 or newer"),
         );
     }
 

@@ -6,6 +6,151 @@ contain breaking changes.
 
 ## Unreleased
 
+- **Brotli everywhere.** Pages and API responses are compressed with Brotli
+  when the browser accepts it (gzip otherwise). Files in `public/`, `assets/`
+  and `client/` are compressed at build time with Brotli (quality 11) and
+  gzip (level 9) and served precompressed; the framework scripts are
+  compressed once per process. `NEXT_RUST_PRECOMPRESS=0` turns the build
+  step off.
+- **Classes that style nothing are left out.** A class that looks generated
+  (`sm:flexx`, `bg-[…]`, `w-1/3`, `!p-0`) but that no stylesheet, script or
+  static file of the project knows is not sent (`[build]
+  drop_unused_classes`, on for release). Plain words are always kept.
+- **`next-rust build` reports what it did:** how many classes got 1–2 or 3
+  characters and which keep their names, the scripts minified and rewritten,
+  the files compressed and by how much, and the classes that match no rule.
+- **Shorter class names, per-page CSS without leaks.** Release builds now
+  give classes names of one or two characters (three beyond about a thousand
+  classes; the most used get the shortest): the name alphabet grew, and only
+  strings in the source reserve names, not Rust identifiers. Scripts in
+  `client/` and `assets/` are rewritten to use the short names wherever a
+  string can only be a class list, so those classes are shortened too instead
+  of kept; a lone word that may be a CSS value (`"block"`) still keeps its
+  name. Classes a script adds are sent only with pages that load that script
+  (islands' modules, included `assets/`/`public/` scripts, their imports)
+  instead of with every page. A page with a module island no longer receives
+  the whole utility layer. The UI components' classes are shortened only when
+  the app uses the components.
+- **Fourteen more UI components.** `Alert`, `Badge`, `Progress`,
+  `CircularProgress`, `Skeleton`, `Stat`, `Kbd`, `EmptyState`, `Tooltip`,
+  `Tabs`/`Tab`, `Breadcrumbs`/`BreadcrumbItem`, `Steps`/`Step`,
+  `Accordion`/`AccordionItem`, `Modal`/`ModalBody`/`ModalFooter` and `Table`
+  join `next_rust::ui`, built like the others (a builder, a same-named
+  macro, every property optional, `nr-*` classes in the `components` layer,
+  per-page CSS). Accordions are `<details>`, modals are `<dialog>`, so both
+  work without a script; tab panels, `Press::open_modal`/`Press::close_modal`
+  and closable alerts are driven by the component script, which grew to
+  about 5 KB gzipped.
+- **Requests from islands go through the runtime.** `nextRust.request(url,
+  { method, body, headers, signal, timeout })` sends same-origin JSON
+  requests with the page's cookies and CSRF token (`as: "blob"`, `"text"` or
+  `"response"` for other bodies) and throws an error with `.status` and
+  `.data` on failure; `nextRust.stream(url, options)` reads a
+  server-sent event response as an async iterator of `{ event, data, id }`.
+  Both refuse other origins, so credentials never leave the site.
+- **Same-origin checks for your own routes.** `req.same_origin()` tells an
+  API route or WebSocket handler whether the browser sent the request from
+  another site (`Sec-Fetch-Site`, then `Origin` against the host, honouring
+  `[security] allowed_origins`); `ws::upgrade` now refuses cross-site
+  upgrades with 403. The `Config` is available to routes as a request
+  extension (`req.extension::<Arc<Config>>()`).
+- **`[security] csp = "strict"`.** A ready-made Content Security Policy
+  (`next_rust::STRICT_CSP`): scripts only with the per-request nonce plus
+  `'strict-dynamic'`, everything else from this origin, no plugins, no
+  framing by other sites.
+- **MSRV is Rust 1.89** (the JavaScript minifier's dependencies need it).
+
+- **Breaking: the framework's URLs and cookies are named after it.** What
+  was served under `/_nr/` (`runtime.js`, `ui.js`, `client/`, `assets/`,
+  `image`, `action/`, `dev/`) lives under `/_next-rust/`, and the cookies are
+  `next_rust_csrf`, `next_rust_flash`, `next_rust_session` and
+  `next_rust_bind` (`__Host-next_rust_bind` over HTTPS). A
+  `#[client(module = "/_nr/client/x.js")]` or a script that fetches
+  `/_nr/…` needs the new prefix; `data-nr-*` attributes, `x-nr-*` headers and
+  `nr:` events are unchanged.
+- **Build signature.** Every document starts its `<head>` with
+  `<meta name="generator" content="Next Rust 0.1.x">`, and the framework's
+  scripts carry a `/*! Next Rust 0.1.x */` banner. `[build] signature = false`
+  turns both off; `next_rust::VERSION` and `next_rust::signature()` give the
+  values.
+- **Scripts are minified.** Release builds compress the JavaScript in
+  `client/` and `assets/` and mangle its local names (module top-level names
+  included) with the oxc minifier before embedding it, so the browser gets
+  only what runs and the source stays on the build machine. `[build]
+  minify_js = false` or `NEXT_RUST_MINIFY_JS=0` turns it off; a file the
+  minifier cannot handle is embedded as written with a build warning.
+  `asset!` URLs hash the minified file, so they stay immutable. The
+  `minify-js` feature of `next-rust-build` (on by default) carries the
+  minifier. It pins `bumpalo` to 3.19; an application whose lockfile already
+  holds a newer one needs `cargo update -p bumpalo --precise 3.19.0` once.
+- **Every class rule is sent per page.** The per-page CSS split that sent
+  Tailwind utilities only where used now applies to every rule whose
+  selectors start with a class, wherever it is in the stylesheet: hand-written
+  CSS imported through `[tailwind] stylesheets`, `@layer components`, and
+  `global_css!` sheets (now per page too). A page that renders one of ten
+  classes receives one rule. Rules without a class owner (`:root`, elements,
+  attribute selectors, `@font-face`) are always sent, once; `[tailwind]
+  keep_classes` and `[assets] css_safelist` keep rules for classes that
+  scripts add.
+- **Per-action body limit**: `#[server_action(body_limit = <bytes>)]` lets one
+  action accept a larger request body than `[server] body_limit`, for uploads
+  sent as base64, so the server-wide limit can stay small. The value must be a
+  constant; it applies after the action's origin and token checks, and every
+  other action and route keeps the server's limit. Any other argument is a
+  compile error naming the one that is supported.
+- **Context-only server actions**: `#[server_action] async fn f(ctx: ActionContext)`
+  now receives the request context. A lone `ActionContext` used to be read
+  as the action's input and failed to compile; `(ActionContext, ())` was the
+  workaround. Like an action without arguments, a submitted form's fields are
+  only echoed back into the flash.
+- **`ClientIp` extractor**: the client's address in a page, layout, `load` or
+  `metadata`, read by the same rule as `Request::client_ip()` (the first
+  `X-Forwarded-For` entry only with `[server] trust_proxy`), for code that calls
+  a backend on the visitor's behalf and must pass their address on. Like every
+  request extractor, it makes a page dynamic.
+- **SVG elements**: `text!`, `tspan!`, `textPath!`, `foreignObject!`, `mask!`,
+  `pattern!`, `marker!`, `filter!` and the filter primitives `feGaussianBlur!`,
+  `feOffset!`, `feFlood!`, `feComposite!`, `feBlend!`, `feColorMatrix!`,
+  `feMerge!`, `feMergeNode!`, `feDropShadow!`, in SVG's own casing.
+  `next_rust::TAGS` now lists 139 elements.
+- **Fixed:** a plain (no-JavaScript) form post rejected with a validation or
+  other error was sent to its `_redirect` target, the page meant for
+  success, instead of back to the form where the flash is shown. Errors now
+  go back to the referring page, and to `_redirect` only when the browser
+  sent no referrer. Successful posts are unchanged.
+- **Fixed:** `next-rust dev` could overwrite a new special file (`page.rs`, …)
+  with starter code while an editor or tool was still writing it: files are
+  created empty and written a moment later, and a poll in between saw an empty
+  file. New files are now filled only after staying empty for 0.8 s, and
+  emptiness is checked again right before writing.
+- **`Metadata::theme_color_for(media, color)`** writes a `theme-color` per media
+  query (one for light, one for dark), and **`Metadata::icon_sized(href,
+  sizes, mime)`** an icon with its size and type.
+- **`Request::client_ip()` and `ActionContext::client_ip()`**: the client's
+  address, from the first `X-Forwarded-For` entry when `[server] trust_proxy` is
+  on and the peer address otherwise, so server actions can rate-limit per
+  client. The rate-limit middleware now uses the same rule; a forwarded value
+  that is not an IP address falls back to the peer instead of becoming a
+  client of its own.
+- **Form results in place**: `stay_on_success(true)` on an action form keeps
+  the page after a successful submit instead of refreshing or following
+  `_redirect` (which then only applies without JavaScript); `action_result(..)`
+  marks elements that show what the action returned, as text, and
+  `reset_on_success(true)` clears the fields. Forms now carry
+  `data-nr-state="success"|"error"` after every enhanced submit, so success and
+  error panels need only CSS.
+- **`Metadata::html_attribute(name, value)`**: attributes on the `<html>`
+  element (`data-theme`, `class="dark"`, a per-page `lang`), rendered by the
+  server so a theme applies before any script runs and without JavaScript.
+  Children override their parents per name; values are escaped, invalid names
+  and `on*` handlers are dropped, and `class` is shortened and styled like any
+  other class. Client-side navigations keep the attributes already on the page.
+- **`[tailwind] stylesheets`**: CSS files compiled together with the app's
+  classes, in order, right after Tailwind itself. Each is a full Tailwind input
+  (`@theme`, `@layer`, `@utility`, `@apply` with any variant, `@keyframes`), so a
+  design system can live in real CSS files instead of a TOML string. The files
+  are watched by `next-rust dev` and rebuild on change; a missing one stops the
+  build with the new diagnostic `NR0008` (also reported by `next-rust doctor`).
 - **Icons** (`next_rust::icons`, the new `next-rust-icons` crate): all 1,848
   [Lucide](https://lucide.dev) icons plus their 264 former names, as
   `icons::ArrowRight()` and friends. Size, color, stroke width (also absolute),
@@ -25,7 +170,7 @@ contain breaking changes.
   show server-action validation errors under the right input automatically.
   `on_press` calls a server action (`on_press = action!(save)`), navigates or
   emits an event. The browser behavior is a 4.6 KB (gzipped) script,
-  `/_nr/ui.js`, loaded only on pages that need it; without it every component
+  `/_next-rust/ui.js`, loaded only on pages that need it; without it every component
   falls back to the native control.
 - The per-page CSS splitter also handles `@layer components` and selector lists.
 - Release builds give the UI components' classes short names too (`nr-card` →
@@ -55,12 +200,12 @@ contain breaking changes.
   `unused_qualifications`, `unused_lifetimes`, `unused_import_braces`,
   `unused_macro_rules` and `unused_extern_crates`. Change `"warn"` to `"deny"`
   to fail the build instead.
-- **Security: server actions no longer have fixed URLs.** `/_nr/action/<hash>`
+- **Security: server actions no longer have fixed URLs.** `/_next-rust/action/<hash>`
   was an unkeyed hash of the file path and function name, so anyone could
   compute it and call the action directly. Every page view now gets its own
   URL: a token signed with HMAC-SHA256 under `NEXT_RUST_SECRET`, expiring
   after `[security] action_token_ttl` (12 hours), and bound to the visitor's
-  `__Host-nr_bind` cookie (`HttpOnly`, `SameSite=Strict`). A URL copied into
+  `__Host-next_rust_bind` cookie (`HttpOnly`, `SameSite=Strict`). A URL copied into
   another browser, curl or a cross-site form is rejected before the action
   runs. Set `NEXT_RUST_SECRET` (32+ bytes) in production; a shorter one is a
   startup error.

@@ -1,6 +1,6 @@
 //! Incoming HTTP request.
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 
 use bytes::Bytes;
 use http::request::Parts;
@@ -134,6 +134,14 @@ impl Request {
         self.remote_addr
     }
 
+    /// The client's IP address. With `[server] trust_proxy`, the first
+    /// `X-Forwarded-For` entry (the address your proxy saw); otherwise, or
+    /// when that entry is not an address, the peer's. Never trust the header
+    /// without a proxy that overwrites it: clients can send anything.
+    pub fn client_ip(&self) -> Option<IpAddr> {
+        client_ip_from(self.headers(), self.remote_addr, crate::trust_proxy())
+    }
+
     pub fn extensions(&self) -> &http::Extensions {
         &self.parts.extensions
     }
@@ -170,6 +178,31 @@ impl Request {
 
     pub fn is_websocket_upgrade(&self) -> bool {
         self.header("upgrade").is_some_and(|u| u.eq_ignore_ascii_case("websocket"))
+    }
+
+    /// `true` unless the browser says the request came from another site.
+    ///
+    /// Checks `Sec-Fetch-Site`, then `Origin` against the request host
+    /// (`X-Forwarded-Host` behind a trusted proxy), allowing `[security]
+    /// allowed_origins`. Requests without either header (curl, server to
+    /// server) pass: they carry no ambient cookies across sites. Server
+    /// actions run this check already; call it yourself in API routes and
+    /// WebSocket handlers that change state or return private data:
+    ///
+    /// ```ignore
+    /// pub async fn POST(mut req: Request) -> Result<Json<Receipt>> {
+    ///     if !req.same_origin() {
+    ///         return Err(Error::http(403, "cross-site request refused"));
+    ///     }
+    ///     // …
+    /// }
+    /// ```
+    pub fn same_origin(&self) -> bool {
+        let allowed = self
+            .extension::<std::sync::Arc<next_rust_core::Config>>()
+            .map(|c| c.security.allowed_origins.as_slice())
+            .unwrap_or(&[]);
+        crate::actions::same_origin(self, allowed)
     }
 
     /// Whether the connection (or the trusted proxy) used HTTPS.
@@ -255,4 +288,78 @@ impl Request {
 
 fn read_error(e: &(dyn std::error::Error + Send + Sync)) -> Error {
     Error::http(400, format!("failed to read request body: {e}"))
+}
+
+/// See [`Request::client_ip`]; `trust` is `[server] trust_proxy`.
+pub(crate) fn client_ip_from(headers: &HeaderMap, peer: Option<SocketAddr>, trust: bool) -> Option<IpAddr> {
+    if trust
+        && let Some(first) =
+            headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next())
+        && let Some(ip) = parse_ip(first.trim())
+    {
+        return Some(ip);
+    }
+    peer.map(|a| a.ip())
+}
+
+/// `1.2.3.4`, `2001:db8::1`, and the forms some proxies add a port to:
+/// `1.2.3.4:5678`, `[2001:db8::1]:5678`, `[2001:db8::1]`.
+fn parse_ip(s: &str) -> Option<IpAddr> {
+    s.parse::<IpAddr>()
+        .ok()
+        .or_else(|| s.parse::<SocketAddr>().ok().map(|a| a.ip()))
+        .or_else(|| s.strip_prefix('[')?.strip_suffix(']')?.parse().ok())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn with_headers(headers: &[(&str, &str)]) -> Request {
+        let mut b = http::Request::post("/api/x");
+        for (k, v) in headers {
+            b = b.header(*k, *v);
+        }
+        Request::from_http(b.body(Bytes::new()).unwrap())
+    }
+
+    #[test]
+    fn same_origin_reads_fetch_metadata_then_origin() {
+        assert!(with_headers(&[("host", "app.example"), ("sec-fetch-site", "same-origin")]).same_origin());
+        assert!(with_headers(&[("host", "app.example"), ("sec-fetch-site", "none")]).same_origin());
+        assert!(!with_headers(&[("host", "app.example"), ("sec-fetch-site", "cross-site")]).same_origin());
+        assert!(with_headers(&[("host", "app.example"), ("origin", "https://app.example")]).same_origin());
+        assert!(!with_headers(&[("host", "app.example"), ("origin", "https://evil.example")]).same_origin());
+        // No browser headers at all: a server-to-server or curl request.
+        assert!(with_headers(&[("host", "app.example")]).same_origin());
+        // Configured extra origins pass.
+        let mut req = with_headers(&[("host", "app.example"), ("origin", "https://admin.example")]);
+        assert!(!req.same_origin());
+        let mut config = next_rust_core::Config::default();
+        config.security.allowed_origins = vec!["https://admin.example".into()];
+        req.insert_extension(std::sync::Arc::new(config));
+        assert!(req.same_origin());
+    }
+
+    #[test]
+    fn client_ip_honours_trust_proxy() {
+        use std::net::{Ipv4Addr, Ipv6Addr};
+        let peer: SocketAddr = "10.0.0.1:443".parse().unwrap();
+        let mut h = HeaderMap::new();
+        h.insert("x-forwarded-for", "203.0.113.7, 10.0.0.1".parse().unwrap());
+        assert_eq!(client_ip_from(&h, Some(peer), false), Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))), "untrusted");
+        assert_eq!(client_ip_from(&h, Some(peer), true), Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))));
+        for (value, want) in [
+            ("198.51.100.2:5678", IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2))),
+            ("[2001:db8::1]:5678", IpAddr::V6("2001:db8::1".parse::<Ipv6Addr>().unwrap())),
+            ("[2001:db8::1]", IpAddr::V6("2001:db8::1".parse::<Ipv6Addr>().unwrap())),
+        ] {
+            h.insert("x-forwarded-for", value.parse().unwrap());
+            assert_eq!(client_ip_from(&h, Some(peer), true), Some(want), "{value}");
+        }
+        // Garbage falls back to the peer rather than becoming its own client.
+        h.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
+        assert_eq!(client_ip_from(&h, Some(peer), true), Some(peer.ip()));
+        assert_eq!(client_ip_from(&HeaderMap::new(), None, true), None);
+    }
 }

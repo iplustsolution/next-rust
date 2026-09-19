@@ -15,6 +15,10 @@ use crate::codegen::embeddable_files;
 /// File in `$OUT_DIR` with one used name per line.
 pub const FILE: &str = "next_rust_css_usage.txt";
 
+/// File in `$OUT_DIR` with the classes that keep their rules on every page
+/// (`[tailwind] keep_classes` and `[assets] css_safelist`), one per line.
+pub const KEEP_FILE: &str = "next_rust_css_keep.txt";
+
 /// Extensions never read: stylesheets and common binary formats.
 pub(crate) const SKIP: &[&str] = &[
     "css", "png", "jpg", "jpeg", "gif", "webp", "avif", "ico", "woff", "woff2", "ttf", "otf", "eot", "mp4", "webm",

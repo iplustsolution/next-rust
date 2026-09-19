@@ -173,10 +173,10 @@ impl App {
             self.handle(request).await
         };
 
-        if config.logging.requests(self.environment()) && !path.starts_with("/_nr/dev/") {
+        if config.logging.requests(self.environment()) && !path.starts_with("/_next-rust/dev/") {
             let id = res.header("x-request-id").map(str::to_owned);
             // Action URLs carry per-visitor tokens: keep them out of logs.
-            let logged = if path.starts_with("/_nr/action/") { "/_nr/action/…" } else { path.as_str() };
+            let logged = if path.starts_with("/_next-rust/action/") { "/_next-rust/action/…" } else { path.as_str() };
             crate::log::request(
                 method.as_str(),
                 logged,
@@ -225,26 +225,79 @@ async fn shutdown_signal() {
 }
 
 #[cfg(feature = "compression")]
-fn accepts_gzip(header: Option<&str>) -> bool {
+/// Whether `Accept-Encoding` allows `coding`.
+pub(crate) fn accepts(header: Option<&str>, coding: &str) -> bool {
     header.is_some_and(|h| {
         h.split(',').any(|part| {
             let mut it = part.trim().split(';');
-            let coding = it.next().unwrap_or("").trim();
+            let name = it.next().unwrap_or("").trim();
             let q = it.find_map(|p| p.trim().strip_prefix("q=")).and_then(|q| q.parse::<f32>().ok()).unwrap_or(1.0);
-            (coding.eq_ignore_ascii_case("gzip") || coding == "*") && q > 0.0
+            (name.eq_ignore_ascii_case(coding) || name == "*") && q > 0.0
         })
     })
 }
 
+/// A streaming encoder: Brotli when the client accepts it, gzip otherwise.
+#[cfg(feature = "compression")]
+enum Encoder {
+    Br(Box<brotli::CompressorWriter<Vec<u8>>>),
+    Gz(flate2::write::GzEncoder<Vec<u8>>),
+}
+
+#[cfg(feature = "compression")]
+impl Encoder {
+    /// Fast settings: pages are compressed per request.
+    fn new(br: bool) -> Self {
+        if br {
+            Encoder::Br(Box::new(brotli::CompressorWriter::new(Vec::with_capacity(8192), 4096, 4, 20)))
+        } else {
+            Encoder::Gz(flate2::write::GzEncoder::new(Vec::with_capacity(8192), flate2::Compression::fast()))
+        }
+    }
+
+    fn coding(&self) -> &'static str {
+        match self {
+            Encoder::Br(_) => "br",
+            Encoder::Gz(_) => "gzip",
+        }
+    }
+
+    fn write(&mut self, data: &[u8]) -> std::io::Result<()> {
+        use std::io::Write;
+        match self {
+            Encoder::Br(w) => w.write_all(data),
+            Encoder::Gz(w) => w.write_all(data),
+        }
+    }
+
+    /// Everything encoded so far, flushed so the browser can use it.
+    fn take(&mut self) -> std::io::Result<Vec<u8>> {
+        use std::io::Write;
+        match self {
+            Encoder::Br(w) => {
+                w.flush()?;
+                Ok(std::mem::take(w.get_mut()))
+            }
+            Encoder::Gz(w) => {
+                w.flush()?;
+                Ok(std::mem::take(w.get_mut()))
+            }
+        }
+    }
+
+    fn finish(self) -> std::io::Result<Vec<u8>> {
+        match self {
+            Encoder::Br(w) => Ok(w.into_inner()),
+            Encoder::Gz(w) => w.finish(),
+        }
+    }
+}
+
 #[cfg(feature = "compression")]
 pub(crate) fn compress(mut res: Response, accept_encoding: Option<&str>) -> Response {
-    use std::io::Write;
-
-    use flate2::Compression;
-    use flate2::write::GzEncoder;
-
     let ct = res.header("content-type").unwrap_or("");
-    let eligible = accepts_gzip(accept_encoding)
+    let br = accepts(accept_encoding, "br");
+    let eligible = (br || accepts(accept_encoding, "gzip"))
         && !res.headers.contains_key("content-encoding")
         && res.status != http::StatusCode::PARTIAL_CONTENT
         && res.status != http::StatusCode::NOT_MODIFIED
@@ -253,37 +306,31 @@ pub(crate) fn compress(mut res: Response, accept_encoding: Option<&str>) -> Resp
     if !eligible {
         return res;
     }
+    let coding = Encoder::new(br).coding();
     match std::mem::replace(&mut res.body, Body::Empty) {
         Body::Bytes(b) if b.len() >= 1024 => {
-            let mut enc = GzEncoder::new(Vec::with_capacity(b.len() / 3), Compression::fast());
-            if enc.write_all(&b).is_err() {
-                res.body = Body::Bytes(b);
-                return res;
-            }
-            match enc.finish() {
+            let mut enc = Encoder::new(br);
+            match enc.write(&b).and_then(|()| enc.finish()) {
                 Ok(out) => {
                     res.body = Body::Bytes(Bytes::from(out));
                     res.headers.remove("content-length");
-                    res.set_header("content-encoding", "gzip");
+                    res.set_header("content-encoding", coding);
                     res.append_header("vary", "Accept-Encoding");
                 }
                 Err(_) => res.body = Body::Bytes(b),
             }
         }
         Body::Stream(stream) => {
-            // Each chunk is compressed and sync-flushed so streamed HTML still
+            // Each chunk is compressed and flushed so streamed HTML still
             // reaches the browser progressively.
-            let state = (stream, Some(GzEncoder::new(Vec::new(), Compression::fast())));
+            let state = (stream, Some(Encoder::new(br)));
             let compressed = futures_util::stream::unfold(state, |(mut stream, enc)| async move {
                 let mut enc = enc?;
                 match stream.next().await {
-                    Some(Ok(chunk)) => {
-                        if enc.write_all(&chunk).is_err() || enc.flush().is_err() {
-                            return Some((Err::<Bytes, BoxError>("gzip failure".into()), (stream, None)));
-                        }
-                        let out = std::mem::take(enc.get_mut());
-                        Some((Ok(Bytes::from(out)), (stream, Some(enc))))
-                    }
+                    Some(Ok(chunk)) => match enc.write(&chunk).and_then(|()| enc.take()) {
+                        Ok(out) => Some((Ok(Bytes::from(out)), (stream, Some(enc)))),
+                        Err(e) => Some((Err::<Bytes, BoxError>(e.into()), (stream, None))),
+                    },
                     Some(Err(e)) => Some((Err(e), (stream, None))),
                     None => match enc.finish() {
                         Ok(tail) => Some((Ok(Bytes::from(tail)), (stream, None))),
@@ -293,7 +340,7 @@ pub(crate) fn compress(mut res: Response, accept_encoding: Option<&str>) -> Resp
             });
             res.body = Body::Stream(Box::pin(compressed));
             res.headers.remove("content-length");
-            res.set_header("content-encoding", "gzip");
+            res.set_header("content-encoding", coding);
             res.append_header("vary", "Accept-Encoding");
         }
         other => res.body = other,
@@ -304,4 +351,60 @@ pub(crate) fn compress(mut res: Response, accept_encoding: Option<&str>) -> Resp
 #[cfg(not(feature = "compression"))]
 pub(crate) fn compress(res: Response, _accept_encoding: Option<&str>) -> Response {
     res
+}
+
+#[cfg(all(test, feature = "compression"))]
+mod compression_tests {
+    use std::io::Read;
+
+    use bytes::Bytes;
+    use futures_util::StreamExt;
+
+    use super::compress;
+    use crate::response::{Body, Response};
+
+    fn page() -> String {
+        "<p>Hello, compressed world.</p>".repeat(100)
+    }
+
+    fn inflate(coding: &str, data: &[u8]) -> String {
+        let mut out = String::new();
+        match coding {
+            "br" => brotli::Decompressor::new(data, 4096).read_to_string(&mut out).unwrap(),
+            _ => flate2::read::GzDecoder::new(data).read_to_string(&mut out).unwrap(),
+        };
+        out
+    }
+
+    #[tokio::test]
+    async fn brotli_is_preferred_and_gzip_still_works() {
+        for (accept, coding) in [("gzip, deflate, br", "br"), ("gzip", "gzip"), ("br;q=0, gzip", "gzip")] {
+            let res = compress(Response::html(page()), Some(accept));
+            assert_eq!(res.header("content-encoding"), Some(coding), "{accept}");
+            assert_eq!(res.header("vary"), Some("Accept-Encoding"));
+            let body = res.into_bytes().await.unwrap();
+            assert_eq!(inflate(coding, &body), page());
+        }
+        let plain = compress(Response::html(page()), Some("identity"));
+        assert_eq!(plain.header("content-encoding"), None);
+        assert_eq!(compress(Response::html("tiny"), Some("br")).header("content-encoding"), None, "small bodies stay");
+    }
+
+    #[tokio::test]
+    async fn streamed_bodies_are_flushed_per_chunk() {
+        let chunks = vec![Ok::<_, crate::request::BoxError>(Bytes::from(page())), Ok(Bytes::from("<!-- end -->"))];
+        let stream: crate::response::ByteStream = Box::pin(futures_util::stream::iter(chunks));
+        let res = compress(
+            Response::new(http::StatusCode::OK, Body::Stream(stream)).with_content_type("text/html"),
+            Some("br"),
+        );
+        assert_eq!(res.header("content-encoding"), Some("br"));
+        let Body::Stream(mut s) = res.body else { panic!("stream") };
+        let mut parts = Vec::new();
+        while let Some(chunk) = s.next().await {
+            parts.push(chunk.unwrap());
+        }
+        assert!(parts.len() >= 2, "one compressed chunk per source chunk: {}", parts.len());
+        assert_eq!(inflate("br", &parts.concat()), page() + "<!-- end -->");
+    }
 }

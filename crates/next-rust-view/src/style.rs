@@ -36,10 +36,16 @@ pub struct Stylesheet {
     pub id: &'static str,
     /// Minified CSS text.
     pub css: &'static str,
-    /// `Some` for utility stylesheets (Tailwind): each page gets only the
-    /// rules for the classes it renders, plus those for the listed classes
-    /// (used by code outside the view tree). `None`: sent whole.
+    /// `Some` for stylesheets sent per page (the Tailwind build with the
+    /// CSS imported into it, `global_css!` sheets, UI components): each page
+    /// gets only the rules for the classes it renders, plus those for the
+    /// listed classes (added by scripts, outside the view tree). `None`:
+    /// sent whole.
     pub per_class: Option<&'static [&'static str]>,
+    /// Classes that scripts add, by script (`"client/home.js"`,
+    /// `"assets/js/site.js"`, a `public/` path): sent with a page only when
+    /// it loads that script.
+    pub scripts: &'static [(&'static str, &'static [&'static str])],
 }
 
 impl View for &'static Stylesheet {

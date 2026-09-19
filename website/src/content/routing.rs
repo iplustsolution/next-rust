@@ -165,6 +165,17 @@ app/blog/[slug]/page.rs     → /blog/:slug",
                     tr![td![code!["Headers"]], td!["request headers"], td!["yes"]],
                     tr![td![code!["RequestInfo"]], td!["method, URI, client address"], td!["yes"]],
                     tr![
+                        td![code!["ClientIp"]],
+                        td![
+                            "the client's IP: the first ",
+                            code!["X-Forwarded-For"],
+                            " entry with ",
+                            code!["[server] trust_proxy"],
+                            ", the peer otherwise"
+                        ],
+                        td!["yes"],
+                    ],
+                    tr![
                         td![code!["Extension<T>"], ", ", code!["Option<Extension<T>>"]],
                         td!["request extensions"],
                         td!["yes"],

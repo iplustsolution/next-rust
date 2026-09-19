@@ -28,7 +28,7 @@ Flags accept both `--port 3000` and `--port=3000`. Unknown flags are ignored sil
 | `routes` | `--json`, `--tree`, `--layouts` | Prints the route table (or the JSON manifest, the scanned tree, or the layout chain and why a route is dynamic). The fastest way to see how the framework understood your `app/` directory. |
 | `analyze` | — | Reads the reports written by `build`: static/dynamic/API counts, the largest pre-rendered pages, binary size. Requires a previous `next-rust build`. |
 | `generate <kind> <route>` | — | Scaffolds a special file. Kinds: `page`, `layout`, `template`, `loading`, `error`, `not-found`, `api` (alias `route`), `middleware`, and the undocumented `metadata`, `default`. Alias: `g`. Refuses to overwrite. |
-| `doctor` | — | Checks the toolchain (needs Rust 1.88+), the config, `build.rs`, `src/main.rs`, whether `.env` is git-ignored, whether the port is free, and route diagnostics. Exits 1 when it finds problems. |
+| `doctor` | — | Checks the toolchain (needs Rust 1.89+), the config, `build.rs`, `src/main.rs`, whether `.env` is git-ignored, whether the port is free, and route diagnostics. Exits 1 when it finds problems. |
 | `docker` | `--force` | Writes a `Dockerfile` and `.dockerignore`. |
 | `editor` | `--force` | Writes the `.vscode/` snippets and settings. |
 | `clean` | — | Deletes the output directory. |
@@ -90,6 +90,9 @@ output = ".next-rust"
 concurrency = 8              # reserved
 optimize = "size"            # size | speed
 panic = "unwind"             # unwind | abort (abort is smaller; a panic kills the server)
+signature = true             # <meta name="generator"> on every page, banner on the framework scripts
+minify_js = true             # release: minify + mangle client/ and assets/ scripts (oxc)
+drop_unused_classes = true   # release: leave out generated-looking classes (sm:x, bg-[…], w-1/3) nothing knows
 
 [assets]
 optimize = true              # reserved
@@ -110,7 +113,8 @@ max_age = 2592000
 
 [security]
 headers = true               # nosniff, frame options, referrer policy, COOP, permissions policy
-# csp = "default-src 'self'" # {nonce} is substituted per response
+# csp = "strict"             # preset: nonce-only scripts + 'strict-dynamic', everything else 'self' (next_rust::STRICT_CSP)
+# csp = "default-src 'self'" # or your own; {nonce} is substituted per response
 csrf = "origin"              # origin | token | off (off skips only the origin check)
 hsts_max_age = 0             # 0 = no header
 allowed_origins = []
@@ -148,6 +152,7 @@ dark_mode = "media"          # media | class | attribute
 plugins = []                 # "@tailwindcss/typography", "@tailwindcss/forms"
 safelist = []                # classes to generate even if not found in the source
 sources = []                 # extra directories to scan for classes
+stylesheets = []             # CSS files compiled with Tailwind (@theme, @layer, @apply…), in order; NR0008 if missing
 css = ""                     # raw Tailwind CSS appended last (@keyframes, @layer base, …)
 minify_classes = true        # release: short random class names
 keep_classes = []            # classes that keep their names
@@ -157,7 +162,7 @@ keep_classes = []            # classes that keep their names
 [tailwind.variants]          # hocus = "&:hover, &:focus"
 ```
 
-Config validation emits diagnostics `NR0001`–`NR0007` (missing app directory, bad API prefix, bad base path,
+Config validation emits diagnostics `NR0001`–`NR0008` (missing app directory, bad API prefix, bad base path,
 redirect source without a leading `/`, unknown log level, …).
 
 ## Config discovery
@@ -170,6 +175,9 @@ redirect source without a leading `/`, unknown log level, …).
 Relative paths resolve against the directory holding the config file. `PORT` and a non-empty `HOST` override
 `[server]`. A release binary carries its config inside it; `NEXT_RUST_CONFIG` still overrides.
 
+`next-rust-build`'s `minify-js` feature pins `bumpalo = 3.19`; if `cargo build` reports a `bumpalo` version
+conflict in an application, run `cargo update -p bumpalo --precise 3.19.0` once.
+
 ## Environment variables
 
 | Variable | Effect |
@@ -181,6 +189,9 @@ Relative paths resolve against the directory holding the config file. `PORT` and
 | `NEXT_RUST_MINIFY` | `1`/`0`. Minify generated HTML. Default: on for release. |
 | `NEXT_RUST_PRUNE_CSS` | `1`/`0`. Drop unused CSS rules. Default: `[assets] prune_css` on release. |
 | `NEXT_RUST_MINIFY_CLASSES` | `1`/`0`. Short Tailwind class names. Default: `[tailwind] minify_classes` on release. |
+| `NEXT_RUST_MINIFY_JS` | `1`/`0`. Minify and mangle `client/` and `assets/` scripts. Default: `[build] minify_js` on release. |
+| `NEXT_RUST_DROP_CLASSES` | `1`/`0`. Leave out generated-looking classes no stylesheet, script or static file knows. Default: `[build] drop_unused_classes` on release. |
+| `NEXT_RUST_PRECOMPRESS` | `1`/`0`. Compress embedded files with Brotli and gzip at build time. Default: on when files are embedded. |
 | `NEXT_RUST_CLASS_SEED` | Fixes the short-class-name seed: reproducible builds, or several servers behind one load balancer. |
 | `NEXT_RUST_TAILWIND_BIN` | Use this Tailwind executable instead of downloading one (offline, locked-down CI). |
 | `NEXT_RUST_CACHE_DIR` | Moves the engine cache (default `~/.cache/next-rust`, `%LOCALAPPDATA%\next-rust`). |

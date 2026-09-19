@@ -33,7 +33,7 @@ pub async fn signup(input: Signup) -> Result<User> {
             " functions in the app directory and in ",
             code!["src/"],
             ", and serves them at ",
-            code!["POST /_nr/action/<token>"],
+            code!["POST /_next-rust/action/<token>"],
             ". There is no fixed URL: every page view gets its own signed, expiring token, bound to the visitor's browser (see ",
             a![href("#security"), "Security"],
             "). Actions in ",
@@ -47,7 +47,8 @@ pub async fn signup(input: Signup) -> Result<User> {
             class("language-rust"),
             r"#[server_action] pub async fn refresh() -> Result<Stats>
 #[server_action] pub async fn save(input: Draft) -> Result<Draft>
-#[server_action] pub async fn logout(ctx: ActionContext, _input: ()) -> Result<()>",
+#[server_action] pub async fn logout(ctx: ActionContext) -> Result<()>
+#[server_action] pub async fn rename(ctx: ActionContext, input: Rename) -> Result<()>",
         ],],
         ul![
             li![
@@ -66,7 +67,19 @@ pub async fn signup(input: Signup) -> Result<User> {
                 code!["headers"],
                 " and ",
                 code!["extensions"],
-                " (for example the authenticated user).",
+                " (for example the authenticated user), and ",
+                code!["client_ip()"],
+                " for per-client limits (it reads ",
+                code!["X-Forwarded-For"],
+                " only with ",
+                code!["[server] trust_proxy"],
+                ").",
+            ],
+            li![
+                code!["#[server_action(body_limit = 30 * 1024 * 1024)]"],
+                " lets one action accept a larger body than ",
+                code!["[server] body_limit"],
+                " (2 MiB by default), for an upload sent as base64. The value must be a constant. It applies only after the request has passed the action's origin and token checks, so only a page that rendered the action can send the larger body; every other action and route keeps the server's limit.",
             ],
             li![
                 "On ",
@@ -122,7 +135,9 @@ pub fn Page(form: FormState) -> impl View {
                         td![code!["Err(Error::validation(..))"], " or another error"],
                         td![
                             code!["303"],
-                            " back. Errors, the message, and non-sensitive submitted values are stored in a 60-second flash cookie",
+                            " back to the form's page (the same-origin referrer; ",
+                            code!["_redirect"],
+                            " only when there is none). Errors, the message, and non-sensitive submitted values are stored in a 60-second flash cookie",
                         ],
                     ],
                 ],
@@ -167,6 +182,47 @@ pub fn Page(form: FormState) -> impl View {
             code!["FormState"],
             " makes a page dynamic. Pages that only render a form without reading its state can stay static.",
         ],
+        h3![id("result-in-place"), a![class("anchor"), href("#result-in-place"), "Showing the result in place"]],
+        p![
+            "A newsletter box in a footer should say \"You're on the list\" where it is, not reload the page. ",
+            code!["stay_on_success(true)"],
+            " keeps the page as it is after a successful submit; elements marked with ",
+            code!["action_result(..)"],
+            " show what the action returned (as text), and ",
+            code!["reset_on_success(true)"],
+            " clears the fields:",
+        ],
+        pre![code![
+            class("language-rust"),
+            r##"form![
+    action!(subscribe),
+    stay_on_success(true),
+    reset_on_success(true),
+    class("group"),
+    input![r#type("email"), name("email"), required(true)],
+    small![data("nr-error", "email")],
+    button![r#type("submit"), "Subscribe"],
+    p![class("hidden group-data-[nr-state=success]:block"), action_result("")],
+    input![r#type("hidden"), name("_redirect"), value("/newsletter/thanks")],   // without JavaScript
+]
+
+#[server_action]
+pub async fn subscribe(input: Subscribe) -> Result<String> {
+    newsletter::add(&input.email).await?;
+    Ok("You're on the list. Check your inbox to confirm.".into())
+}"##,
+        ],],
+        p![
+            "After every enhanced submit the form carries ",
+            code!["data-nr-state=\"success\""],
+            " or ",
+            code!["\"error\""],
+            ", so a success panel can be shown with CSS alone. ",
+            code!["action_result(\"message\")"],
+            " shows one field of a returned object. Without JavaScript the browser still posts the form and goes to ",
+            code!["_redirect"],
+            ", so point it at a confirmation page.",
+        ],
         h2![id("json-calls"), a![class("anchor"), href("#json-calls"), "JSON calls"]],
         pre![code![
             class("language-js"),
@@ -191,7 +247,7 @@ pub fn Page(form: FormState) -> impl View {
         ],
         h2![id("security"), a![class("anchor"), href("#security"), "Security"]],
         p!["Action URLs are dynamic. For every page view the server mints a token for each action on the page:",],
-        pre![code![r"/_nr/action/<base64url(version | action key | expiry | nonce | HMAC-SHA256 tag)>"]],
+        pre![code![r"/_next-rust/action/<base64url(version | action key | expiry | nonce | HMAC-SHA256 tag)>"]],
         ul![
             li![
                 strong!["Action key"],
@@ -207,7 +263,7 @@ pub fn Page(form: FormState) -> impl View {
             li![
                 strong!["Binding"],
                 ": the tag also covers a random value in the ",
-                code!["__Host-nr_bind"],
+                code!["__Host-next_rust_bind"],
                 " cookie (",
                 code!["HttpOnly"],
                 ", ",
@@ -215,7 +271,7 @@ pub fn Page(form: FormState) -> impl View {
                 ", ",
                 code!["SameSite=Strict"],
                 "; ",
-                code!["nr_bind"],
+                code!["next_rust_bind"],
                 " in development). A URL copied out of one browser is rejected from any other client, and cross-site requests never carry the cookie.",
             ],
         ],
@@ -265,7 +321,7 @@ pub fn Page(form: FormState) -> impl View {
             li![
                 code!["[security] csrf = \"token\""],
                 " also requires the ",
-                code!["nr_csrf"],
+                code!["next_rust_csrf"],
                 " cookie echoed in ",
                 code!["x-csrf-token"],
                 " (the client runtime does this) or a ",

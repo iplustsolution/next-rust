@@ -28,12 +28,16 @@ pub mod analyze;
 pub mod class_names;
 pub mod codegen;
 pub mod css_usage;
+pub mod js_classes;
+pub mod js_minify;
+pub mod report;
 pub mod tailwind;
 
 use std::path::{Path, PathBuf};
 
 pub use codegen::{AnalyzedRoute, CodegenOptions, Project, analyze_project, generate_code, generate_code_with};
 use next_rust_core::{Config, Diagnostic};
+pub use report::BuildReport;
 
 /// Build-time plugin hooks.
 pub trait BuildPlugin {
@@ -139,6 +143,9 @@ impl Generator {
         emit_rerun(&config, &manifest_dir);
 
         let mut project = analyze_project(&config);
+        for d in config.tailwind_diagnostics() {
+            project.diagnostics.push(d);
+        }
         for p in &self.plugins {
             p.on_project(&mut project);
         }
@@ -195,19 +202,83 @@ impl Generator {
         };
         println!("cargo:rerun-if-env-changed=NEXT_RUST_MINIFY_CLASSES");
         println!("cargo:rerun-if-env-changed=NEXT_RUST_CLASS_SEED");
-        let class_names = if tailwind {
-            generate_tailwind(&config, &out_dir, minify_classes)?
-        } else if minify_classes {
+        // The UI components' classes are shortened too, when the app uses them.
+        let components =
+            if class_names::uses_components(&config) { class_names::component_classes() } else { Vec::new() };
+        // Release builds leave out generated-looking classes nothing knows;
+        // `NEXT_RUST_DROP_CLASSES=0|1` overrides.
+        let drop_classes = match std::env::var("NEXT_RUST_DROP_CLASSES").ok().as_deref() {
+            Some("0") => false,
+            Some(_) => true,
+            None => config.build.drop_unused_classes && std::env::var("PROFILE").is_ok_and(|p| p == "release"),
+        };
+        println!("cargo:rerun-if-env-changed=NEXT_RUST_DROP_CLASSES");
+        let mut report = report::BuildReport::default();
+        let naming = if tailwind {
+            generate_tailwind(&config, &out_dir, minify_classes, &components, &mut report)?
+        } else if minify_classes && !components.is_empty() {
             // No Tailwind: only the component classes.
-            let seed = class_names::seed();
-            let shortened = class_names::shorten("", &config, seed, &class_names::component_classes());
-            write_if_changed(&out_dir.join(class_names::FILE), class_names::table_source(&shortened.names).as_bytes())
-                .map_err(|e| e.to_string())?;
-            Some(seed)
+            Some(name_classes("", &config, &out_dir, &components, &mut report)?)
         } else {
             None
         };
-        let mut code = generate_code_with(&project, CodegenOptions { minify_html, embed_files, tailwind, class_names });
+        if drop_classes {
+            let known = class_names::known_classes("", &config, &components, tailwind.then_some(out_dir.as_path()));
+            report.unknown_classes = class_names::unknown_in_source(&config, &known);
+            write_if_changed(&out_dir.join("next_rust_known_classes.rs"), class_names::list_source(&known).as_bytes())
+                .map_err(|e| e.to_string())?;
+        }
+        let class_names = naming.as_ref().map(|n| n.seed);
+        let renames = naming.map(|n| n.renames);
+        // Release builds embed the scripts in `client/` and `assets/`
+        // minified; `NEXT_RUST_MINIFY_JS=0|1` overrides. The minified copies
+        // live under `$OUT_DIR/next_rust_min` (`asset!` hashes those), and are
+        // removed when minification is off so a stale copy is never used.
+        let minify_js = match std::env::var("NEXT_RUST_MINIFY_JS").ok().as_deref() {
+            Some("0") => false,
+            Some(_) => true,
+            None => config.build.minify_js && std::env::var("PROFILE").is_ok_and(|p| p == "release"),
+        };
+        println!("cargo:rerun-if-env-changed=NEXT_RUST_MINIFY_JS");
+        // Scripts are also rewritten with the short class names, so a copy is
+        // needed whenever classes were shortened.
+        // Embedded files are also compressed ahead of time;
+        // `NEXT_RUST_PRECOMPRESS=0|1` overrides.
+        let precompress = embed_files && !matches!(std::env::var("NEXT_RUST_PRECOMPRESS").ok().as_deref(), Some("0"));
+        println!("cargo:rerun-if-env-changed=NEXT_RUST_PRECOMPRESS");
+        let minified_dir = out_dir.join(codegen::MINIFIED_DIR);
+        let minified_dir = if embed_files && (minify_js || renames.is_some() || precompress) {
+            Some(minified_dir)
+        } else {
+            let _ = std::fs::remove_dir_all(&minified_dir);
+            None
+        };
+        // Classes that scripts add outside the view tree keep their rules on
+        // every page: the CSS macros read them from this file.
+        let keep: Vec<&String> = config.tailwind.keep_classes.iter().chain(&config.assets.css_safelist).collect();
+        let keep = keep.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("\n");
+        write_if_changed(&out_dir.join(css_usage::KEEP_FILE), keep.as_bytes()).map_err(|e| e.to_string())?;
+        let (mut code, generated) = codegen::generate_code_reporting(
+            &project,
+            CodegenOptions {
+                minify_html,
+                embed_files,
+                tailwind,
+                class_names,
+                minified_dir,
+                minify_js,
+                renames,
+                precompress,
+                drop_classes,
+            },
+        );
+        report.scripts = generated.scripts;
+        report.files = generated.files;
+        write_if_changed(
+            &out_dir.join(report::FILE),
+            serde_json::to_string_pretty(&report).unwrap_or_default().as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
         for p in &self.plugins {
             if let Some(extra) = p.extra_code(&project) {
                 code.push_str(&format!("\n// plugin: {}\n{extra}\n", p.name()));
@@ -220,12 +291,63 @@ impl Generator {
     }
 }
 
+/// The short class names of a build.
+struct ClassNaming {
+    seed: u64,
+    renames: codegen::ScriptRenames,
+}
+
+/// Give the classes of `css` and `extra` short names and write the table to
+/// `$OUT_DIR`.
+fn name_classes(
+    css: &str,
+    config: &Config,
+    out_dir: &Path,
+    extra: &[String],
+    report: &mut report::BuildReport,
+) -> Result<ClassNaming, String> {
+    let seed = class_names::seed();
+    let shortened = class_names::shorten(css, config, seed, extra);
+    let mut classes = report::ClassReport { total: shortened.names.len(), ..Default::default() };
+    for (_, short) in &shortened.names {
+        match short.len() {
+            1 => classes.one_char += 1,
+            2 => classes.two_chars += 1,
+            3 => classes.three_chars += 1,
+            _ => classes.longer += 1,
+        }
+    }
+    let renamed: std::collections::BTreeSet<&str> = shortened.names.iter().map(|(c, _)| c.as_str()).collect();
+    classes.kept = next_rust_assets::css::class_selectors(css)
+        .leading
+        .into_iter()
+        .filter(|c| !renamed.contains(c.as_str()))
+        .collect();
+    report.classes = Some(classes);
+    write_if_changed(&out_dir.join(class_names::FILE), class_names::table_source(&shortened.names).as_bytes())
+        .map_err(|e| e.to_string())?;
+    let mut known: std::collections::BTreeSet<String> = next_rust_assets::css::class_selectors(css).all;
+    known.extend(extra.iter().cloned());
+    Ok(ClassNaming { seed, renames: codegen::ScriptRenames { known, table: shortened.names.into_iter().collect() } })
+}
+
 /// Compile Tailwind CSS for the app into `$OUT_DIR` (the stylesheet and its id).
-/// Returns the class name seed when classes were shortened.
-fn generate_tailwind(config: &Config, out_dir: &Path, minify_classes: bool) -> Result<Option<u64>, String> {
+/// Returns the short class names when classes were shortened.
+fn generate_tailwind(
+    config: &Config,
+    out_dir: &Path,
+    minify_classes: bool,
+    components: &[String],
+    report: &mut report::BuildReport,
+) -> Result<Option<ClassNaming>, String> {
     println!("cargo:rerun-if-env-changed=NEXT_RUST_TAILWIND_BIN");
     for dir in tailwind::scanned_dirs(config) {
         println!("cargo:rerun-if-changed={}", dir.display());
+    }
+    // A missing file would rerun the build script on every build; config
+    // validation already reports it (NR0008).
+    for sheet in tailwind::stylesheet_paths(config).into_iter().filter(|p| p.is_file()) {
+        println!("cargo:rerun-if-changed={}", sheet.display());
     }
     // `next-rust dev` / `build` download the engine with a progress bar
     // first; a plain `cargo build` downloads it here, silently.
@@ -237,19 +359,24 @@ fn generate_tailwind(config: &Config, out_dir: &Path, minify_classes: bool) -> R
     let keep = class_names::outside_classes(&css, config);
     write_if_changed(&out_dir.join("next_rust_tailwind_keep.rs"), class_names::list_source(&keep).as_bytes())
         .map_err(|e| e.to_string())?;
-    let mut seed = None;
+    let scripts = class_names::script_classes(&css, config);
+    write_if_changed(&out_dir.join("next_rust_tailwind_scripts.rs"), class_names::map_source(&scripts).as_bytes())
+        .map_err(|e| e.to_string())?;
+    // The classes the stylesheet defines, for `known_classes`.
+    let all_classes = next_rust_assets::css::class_selectors(&css).all.into_iter().collect::<Vec<_>>().join("\n");
+    write_if_changed(&out_dir.join("next_rust_tailwind_classes.txt"), all_classes.as_bytes())
+        .map_err(|e| e.to_string())?;
+    let mut naming = None;
     if minify_classes {
-        let build_seed = class_names::seed();
-        let shortened = class_names::shorten(&css, config, build_seed, &class_names::component_classes());
-        css = shortened.css;
+        let named = name_classes(&css, config, out_dir, components, report)?;
+        css = next_rust_assets::css::rename_classes(&css, &|class| named.renames.table.get(class).cloned());
         write_if_changed(&out_dir.join("next_rust_tailwind.css"), css.as_bytes()).map_err(|e| e.to_string())?;
-        write_if_changed(&out_dir.join(class_names::FILE), class_names::table_source(&shortened.names).as_bytes())
-            .map_err(|e| e.to_string())?;
-        seed = Some(build_seed);
+        naming = Some(named);
     }
+    report.tailwind_css = Some(css.len());
     let id = format!("tw-{}", &next_rust_assets::content_hash(css.as_bytes())[..10]);
     write_if_changed(&out_dir.join("next_rust_tailwind.id"), id.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(seed)
+    Ok(naming)
 }
 
 /// Run the default generator from `build.rs`.

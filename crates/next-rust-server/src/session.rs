@@ -21,7 +21,7 @@ use crate::Cookie;
 use crate::middleware::{BoxFuture, Middleware, Next};
 use crate::request::Request;
 
-pub const SESSION_COOKIE: &str = "nr_session";
+pub const SESSION_COOKIE: &str = "next_rust_session";
 
 /// Session storage backend.
 pub trait SessionStore: Send + Sync + 'static {

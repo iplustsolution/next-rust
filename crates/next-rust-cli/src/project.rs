@@ -72,7 +72,7 @@ pub fn cargo_build_with(
     quiet: bool,
     envs: &[(&str, &str)],
 ) -> Result<PathBuf, String> {
-    let (exe, warnings) = cargo_build_live(info, release, envs, false, &mut |_| {})?;
+    let (exe, warnings, _) = cargo_build_live(info, release, envs, false, &mut |_| {})?;
     if !warnings.is_empty() && !quiet {
         eprint!("{warnings}");
     }
@@ -91,14 +91,16 @@ pub enum CargoEvent<'a> {
 }
 
 /// Run `cargo build` and report progress as it happens. Returns the
-/// executable and any rendered warnings, or the rendered errors.
+/// executable, any rendered warnings and the project's build-script output
+/// directory (where `next-rust-build` leaves its report), or the rendered
+/// errors.
 pub fn cargo_build_live(
     info: &ProjectInfo,
     release: bool,
     envs: &[(&str, &str)],
     progress: bool,
     on_event: &mut dyn FnMut(CargoEvent),
-) -> Result<(PathBuf, String), String> {
+) -> Result<(PathBuf, String, Option<PathBuf>), String> {
     use std::io::{BufRead, Read};
     use std::sync::mpsc;
     use std::time::Duration;
@@ -122,9 +124,12 @@ pub fn cargo_build_live(
     let stdout = child.stdout.take().ok_or("cargo stdout unavailable")?;
     let mut stderr = child.stderr.take().ok_or("cargo stderr unavailable")?;
 
-    // JSON messages: the executable and rendered diagnostics.
+    // JSON messages: the executable, rendered diagnostics and the build
+    // script's output directory.
+    let bin_name = info.bin_name.clone();
     let messages = std::thread::spawn(move || {
         let mut executable = None;
+        let mut out_dir = None;
         let (mut errors, mut warnings) = (String::new(), String::new());
         for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
             let Ok(msg) = serde_json::from_str::<serde_json::Value>(&line) else { continue };
@@ -132,6 +137,14 @@ pub fn cargo_build_live(
                 Some("compiler-artifact") => {
                     if let Some(exe) = msg["executable"].as_str() {
                         executable = Some(PathBuf::from(exe));
+                    }
+                }
+                Some("build-script-executed") => {
+                    // `…/build/<package>-<hash>/out`
+                    if let Some(dir) = msg["out_dir"].as_str()
+                        && dir.contains(&format!("/build/{bin_name}-"))
+                    {
+                        out_dir = Some(PathBuf::from(dir));
                     }
                 }
                 Some("compiler-message") => {
@@ -145,7 +158,7 @@ pub fn cargo_build_live(
                 _ => {}
             }
         }
-        (executable, errors, warnings)
+        (executable, errors, warnings, out_dir)
     });
 
     // Human output on stderr, split on both `\n` and the `\r` of progress redraws.
@@ -199,10 +212,12 @@ pub fn cargo_build_live(
     }
     let _ = reader.join();
     let status = child.wait().map_err(|e| e.to_string())?;
-    let (executable, errors, warnings) = messages.join().map_err(|_| "cargo output reader failed")?;
+    let (executable, errors, warnings, out_dir) = messages.join().map_err(|_| "cargo output reader failed")?;
 
     if status.success() {
-        return executable.map(|exe| (exe, warnings)).ok_or_else(|| "cargo did not report an executable".into());
+        return executable
+            .map(|exe| (exe, warnings, out_dir))
+            .ok_or_else(|| "cargo did not report an executable".into());
     }
     // Build script failures (route diagnostics) are reported on stderr.
     let script: String = log.lines().skip_while(|l| !l.contains("--- stderr")).skip(1).collect::<Vec<_>>().join("\n");

@@ -70,11 +70,12 @@ These are the mistakes that cost real time, all of them mechanical:
 8. **Text is escaped for you.** `div!["<b>"]` renders escaped text. Only `raw_html` injects markup, and it
    must never receive user input. `on*` attributes passed to `attr()` are dropped on purpose; use `raw_attr`
    if you truly need one.
-9. **Release builds rename Tailwind and UI component (`nr-*`) classes** to short random names and prune unused CSS. Anything that names
-   a class outside the view tree (a JS string in Rust, third-party HTML) needs `[tailwind] keep_classes` or
+9. **Release builds rename Tailwind and UI component (`nr-*`) classes** to short random names and prune unused CSS.
+   Scripts in `client/`/`assets/` are rewritten to match where a string is clearly a class list; a class built
+   any other way (a JS string in Rust, a regex, third-party HTML) needs `[tailwind] keep_classes` or
    `[assets] css_safelist`. Don't "fix" a production-only styling bug by turning Tailwind off.
-   Pages also receive only the utility rules for classes they render: a class that only a script adds
-   (outside `public/`/`client/`) must be in `keep_classes`.
+   Pages receive only the rules for classes they render plus those of the scripts they load: a class that
+   only a script adds in a way the build can't see must be in `keep_classes`.
 10. **Reach for `next_rust::ui` before hand-building controls.** Buttons, fields, select, date picker, toggles,
     avatars, cards and layout exist (`use next_rust::ui::*;`, see `references/app-api.md#ui-components`).
     Restyle them with `class(..)`; don't copy their markup.
@@ -143,7 +144,7 @@ pub fn Page(Data(post): Data<Post>) -> impl View {
 with per-field messages. `?` works with any `std::error::Error`.
 
 Extractors go in the signature of `load`, `Page`, `metadata` or a middleware: `Params`, `Path<T>`, `Query<T>`,
-`Headers`, `Cookies`, `Ctx`, `Extension<T>`, `Auth<T>`, `CsrfToken`, `FormState`, `RequestInfo`, `Nonce`.
+`Headers`, `Cookies`, `Ctx`, `Extension<T>`, `Auth<T>`, `CsrfToken`, `FormState`, `RequestInfo`, `ClientIp`, `Nonce`.
 **Only `Params`, `Path` and `Nonce` are static-safe** — any other extractor makes the page dynamic under
 `[rendering] default = "auto"`, which is usually what you want, but check with `next-rust routes --layouts`
 when you expected a page to be pre-rendered.
@@ -232,7 +233,7 @@ pub fn Counter(count: i32) -> impl View {
 ```
 
 Island arguments are serialized into the HTML as props, so they are public — never pass secrets. For real
-client code, `#[client(module = "/_nr/client/x.js")]` loads an ES module exporting `hydrate(element, props)`.
+client code, `#[client(module = "/_next-rust/client/x.js")]` loads an ES module exporting `hydrate(element, props)`.
 
 ### Styling
 
@@ -315,7 +316,7 @@ cargo fmt --all
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --all-features
-cargo +1.88 check --workspace --all-features    # CI's MSRV job, easy to forget
+cargo +1.89 check --workspace --all-features    # CI's MSRV job, easy to forget
 ```
 
 Several things in this repo are booby-trapped for the unwary: the browser runtime exists twice (readable and

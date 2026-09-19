@@ -6,7 +6,7 @@ Next Rust reports problems at build time with a code, a location and a `help:` l
 Codes are grouped: `NR00xx` configuration, `NR01xx` routing and the app directory, `NR02xx` special files,
 exports and signatures.
 
-## Configuration (NR0001–NR0007)
+## Configuration (NR0001–NR0008)
 
 | Code | Problem | Usual fix |
 | --- | --- | --- |
@@ -17,6 +17,7 @@ exports and signatures.
 | `NR0005` | Invalid `[app] base_path` | No leading slash, no trailing slash |
 | `NR0006` | A `[[redirects]] source` doesn't start with `/` | `source = "/old"` |
 | `NR0007` | Unknown `[logging] level` (warning, falls back to `info`) | One of `error`, `warn`, `info`, `debug`, `trace` |
+| `NR0008` | A file in `[tailwind] stylesheets` doesn't exist (checked when Tailwind is on; stops the build) | Fix the path — it is relative to `next-rust.toml` — or remove the entry |
 
 A config key that doesn't exist at all is a plain parse error naming the key, because every section is
 `deny_unknown_fields`.

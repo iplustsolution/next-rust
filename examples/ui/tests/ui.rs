@@ -5,13 +5,26 @@ async fn showcase_renders_with_the_component_script() {
     let client = TestClient::new(example_ui::routes());
     let page = client.get("/").await;
     assert_eq!(page.status, 200);
-    for needle in ["nr-btn", "nr-select-list", "nr-calendar", "nr-switch", "nr-avatar-group", "nr-shell"] {
+    for needle in [
+        "nr-btn",
+        "nr-select-list",
+        "nr-calendar",
+        "nr-switch",
+        "nr-avatar-group",
+        "nr-shell",
+        "nr-alert",
+        "nr-tabs",
+        "nr-modal",
+        "nr-table",
+        "nr-accordion-item",
+        "nr-steps",
+    ] {
         assert!(page.text.contains(needle), "{needle} missing");
     }
-    assert!(page.text.contains("/_nr/ui.js?v="), "interactive components load the script");
-    assert!(page.text.contains("/_nr/runtime.js?v="), "and the runtime they call actions through");
+    assert!(page.text.contains("/_next-rust/ui.js?v="), "interactive components load the script");
+    assert!(page.text.contains("/_next-rust/runtime.js?v="), "and the runtime they call actions through");
 
-    let script = client.get("/_nr/ui.js").await;
+    let script = client.get("/_next-rust/ui.js").await;
     assert_eq!(script.status, 200);
     assert_eq!(script.header("content-type"), Some("text/javascript; charset=utf-8"));
     assert!(script.text.contains("nr-ui-js") && script.text.contains("data-nr-press"));
@@ -31,6 +44,7 @@ async fn pages_get_only_the_css_of_their_components() {
     assert!(full.contains(".nr-calendar") && full.contains(".nr-select-list"));
     assert!(plain.contains(".nr-chip-flat"), "the chip on the page");
     assert!(!plain.contains(".nr-calendar") && !plain.contains(".nr-select-list") && !plain.contains(".nr-switch"));
+    assert!(!plain.contains(".nr-modal") && !plain.contains(".nr-tabs"), "no dialog or tabs on the plain page");
     assert!(plain.len() * 2 < full.len(), "plain {} vs full {}", plain.len(), full.len());
 }
 

@@ -15,11 +15,11 @@ async fn form_and_json_submissions() {
     let client = TestClient::new(example_server_actions::routes());
     let page = client.get("/").await;
     let url = form_action(&page.text);
-    assert!(url.starts_with("/_nr/action/"), "{}", page.text);
+    assert!(url.starts_with("/_next-rust/action/"), "{}", page.text);
     assert!(page.text.contains(&format!("action=\"{url}\" method=\"post\"")), "{}", page.text);
     assert!(page.header("cache-control").unwrap().contains("no-store"), "personal pages are never cached");
-    assert!(!page.text.contains("/_nr/action/nr~"), "every marker is replaced, island props included");
-    assert!(page.cookies().iter().any(|c| c.starts_with("nr_bind=") && c.contains("HttpOnly")));
+    assert!(!page.text.contains("/_next-rust/action/nr~"), "every marker is replaced, island props included");
+    assert!(page.cookies().iter().any(|c| c.starts_with("next_rust_bind=") && c.contains("HttpOnly")));
     assert_ne!(url, form_action(&client.get("/").await.text), "each page view gets its own URL");
 
     // Progressive enhancement: invalid form → redirect back with errors.
@@ -63,4 +63,20 @@ async fn copied_action_urls_do_not_work_elsewhere() {
     assert_eq!(res.status, 303, "sent back to the page");
     assert!(attacker.get("/").await.text.contains("This page is out of date"));
     assert!(!victim.get("/").await.text.contains("Mallory"), "the action did not run");
+}
+
+#[tokio::test]
+async fn an_action_can_accept_a_larger_body() {
+    let client = TestClient::new(example_server_actions::routes());
+    let body = serde_json::json!({ "content_base64": "A".repeat(3 * 1024 * 1024) });
+
+    let res = client.post_json(&client.action_url("src/actions.rs::attach"), &body).await;
+    assert_eq!(res.json::<serde_json::Value>()["data"], 3 * 1024 * 1024, "{}", res.text);
+
+    let res = client.post_json(&client.action_url("src/actions.rs::sign_guestbook"), &body).await;
+    assert_eq!(res.status, 413, "other actions keep the server's limit");
+
+    let over = serde_json::json!({ "content_base64": "A".repeat(5 * 1024 * 1024) });
+    let res = client.post_json(&client.action_url("src/actions.rs::attach"), &over).await;
+    assert_eq!(res.status, 413, "and the action's own limit holds");
 }

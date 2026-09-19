@@ -78,7 +78,7 @@ impl Parse for ClientArgs {
 ///
 /// Without `module`, the island uses the built-in declarative runtime
 /// (`data-nr-text`, `data-nr-on-click="increment:count"`, ...). With
-/// `#[client(module = "/_nr/client/islands/chart.js")]` the runtime imports
+/// `#[client(module = "/_next-rust/client/islands/chart.js")]` the runtime imports
 /// that ES module (for example `wasm-bindgen` output) and calls its
 /// `hydrate(element, props)` export.
 ///
@@ -188,22 +188,43 @@ pub fn server(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///
 /// The input must implement `Deserialize` (JSON or form data), the output
 /// `Serialize`. The build discovers actions in the app directory and in
-/// `src/` and registers them at `POST /_nr/action/<hash>`. Reference an
+/// `src/` and registers them at `POST /_next-rust/action/<hash>`. Reference an
 /// action with `action!(create_user)`, e.g. `form![action!(create_user), ..]`.
+///
+/// `body_limit = <bytes>` sets the largest request body this one action
+/// accepts, in place of `[server] body_limit` (for example an upload sent as
+/// base64: `#[server_action(body_limit = 30 * 1024 * 1024)]`). It applies
+/// only after the request has passed the action's origin and token checks,
+/// so only a page that rendered the action can send the larger body.
 ///
 /// Expansion: the original function, a `__NR_ACTION_ID_<name>` constant
 /// (stable id derived from the file path) and a `__nr_action_<name>` HTTP
 /// handler adapter.
 #[proc_macro_attribute]
 pub fn server_action(attr: TokenStream, item: TokenStream) -> TokenStream {
+    let mut body_limit: Option<syn::Expr> = None;
     if !attr.is_empty() {
-        return error(Span::call_site(), "#[server_action] takes no arguments");
+        let parser = syn::meta::parser(|meta| {
+            if meta.path.is_ident("body_limit") {
+                if body_limit.is_some() {
+                    return Err(meta.error("`body_limit` is given twice"));
+                }
+                body_limit = Some(meta.value()?.parse()?);
+                Ok(())
+            } else {
+                Err(meta.error("unknown #[server_action] argument; the only one is `body_limit = <bytes>`"))
+            }
+        });
+        parse_macro_input!(attr with parser);
     }
     let func = parse_macro_input!(item as ItemFn);
     let name = &func.sig.ident;
     let argc = func.sig.inputs.len();
     if argc > 2 {
-        return error(name.span(), "server actions take no arguments, one input, or (ActionContext, input)");
+        return error(
+            name.span(),
+            "server actions take no arguments, one input, an ActionContext, or (ActionContext, input)",
+        );
     }
     if matches!(func.sig.inputs.first(), Some(FnArg::Receiver(_))) {
         return error(name.span(), "server actions cannot be methods");
@@ -214,7 +235,16 @@ pub fn server_action(attr: TokenStream, item: TokenStream) -> TokenStream {
         Some(file) => quote!(concat!(#file, "::", stringify!(#name))),
         None => quote!(concat!(module_path!(), "::", stringify!(#name))),
     };
+    // A lone `ActionContext` is the request context, not the input.
+    let context_only = argc == 1
+        && matches!(func.sig.inputs.first(), Some(FnArg::Typed(arg))
+            if matches!(&*arg.ty, syn::Type::Path(p)
+                if p.path.segments.last().is_some_and(|s| s.ident == "ActionContext")));
     let call = match (argc, func.sig.asyncness.is_some()) {
+        (1, true) if context_only => quote!(::next_rust::__private::run_action_ctx0(req, #name)),
+        (1, false) if context_only => {
+            quote!(::next_rust::__private::run_action_ctx0(req, |c| async move { #name(c) }))
+        }
         (0, true) => quote!(::next_rust::__private::run_action0(req, #name)),
         (1, true) => quote!(::next_rust::__private::run_action(req, #name)),
         (2, true) => quote!(::next_rust::__private::run_action_ctx(req, #name)),
@@ -222,6 +252,13 @@ pub fn server_action(attr: TokenStream, item: TokenStream) -> TokenStream {
         (1, false) => quote!(::next_rust::__private::run_action(req, |i| async move { #name(i) })),
         _ => quote!(::next_rust::__private::run_action_ctx(req, |c, i| async move { #name(c, i) })),
     };
+    let limit = body_limit.map(|bytes| {
+        quote! {
+            const __NR_BODY_LIMIT: usize = #bytes;
+            let mut req = req;
+            req.set_body_limit(__NR_BODY_LIMIT);
+        }
+    });
     quote! {
         #[cfg(not(target_arch = "wasm32"))]
         #func
@@ -233,6 +270,7 @@ pub fn server_action(attr: TokenStream, item: TokenStream) -> TokenStream {
         #[doc(hidden)]
         #[cfg(not(target_arch = "wasm32"))]
         pub fn #handler(req: ::next_rust::Request) -> ::next_rust::BoxFuture<::next_rust::Response> {
+            #limit
             ::std::boxed::Box::pin(#call)
         }
     }
@@ -417,7 +455,7 @@ pub fn css_module(input: TokenStream) -> TokenStream {
     quote! {{
         const _: &[u8] = include_bytes!(#abs);
         #track
-        static __NR_SHEET: ::next_rust::Stylesheet = ::next_rust::Stylesheet { id: #id, css: #css, per_class: None };
+        static __NR_SHEET: ::next_rust::Stylesheet = ::next_rust::Stylesheet { id: #id, css: #css, per_class: None, scripts: &[] };
         #[allow(non_camel_case_types, dead_code)]
         #[derive(Clone, Copy)]
         struct __NrCssModule { #(#fields,)* }
@@ -445,10 +483,15 @@ pub fn global_css(input: TokenStream) -> TokenStream {
     let track = usage.as_ref().map(CssUsage::track);
     let id = next_rust_assets::content_hash(css.as_bytes())[..12].to_owned();
     let abs = path.to_string_lossy().into_owned();
+    // Sent per page: each document gets the rules for the classes it renders
+    // (plus `[tailwind] keep_classes` / `[assets] css_safelist`, which scripts
+    // add outside the view tree).
+    let keep = CssUsage::keep_classes();
     quote! {{
         const _: &[u8] = include_bytes!(#abs);
         #track
-        static __NR_SHEET: ::next_rust::Stylesheet = ::next_rust::Stylesheet { id: #id, css: #css, per_class: None };
+        static __NR_KEEP: &[&str] = &[#(#keep),*];
+        static __NR_SHEET: ::next_rust::Stylesheet = ::next_rust::Stylesheet { id: #id, css: #css, per_class: Some(__NR_KEEP), scripts: &[] };
         &__NR_SHEET
     }}
     .into()
@@ -469,6 +512,16 @@ impl CssUsage {
         Some(CssUsage { names: text.lines().map(str::to_owned).collect(), file: file.to_string_lossy().into_owned() })
     }
 
+    /// `[tailwind] keep_classes` and `[assets] css_safelist`, written by the
+    /// build script; empty without one.
+    fn keep_classes() -> Vec<String> {
+        std::env::var_os("OUT_DIR")
+            .map(|out| PathBuf::from(out).join("next_rust_css_keep.txt"))
+            .and_then(|file| std::fs::read_to_string(file).ok())
+            .map(|text| text.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_owned).collect())
+            .unwrap_or_default()
+    }
+
     /// Recompile when the list changes.
     fn track(&self) -> proc_macro2::TokenStream {
         let file = &self.file;
@@ -480,7 +533,7 @@ impl CssUsage {
 
 /// Fingerprinted URL of a file in the project's `assets/` directory,
 /// computed at compile time: `asset!("fonts/inter.woff2")` →
-/// `"/_nr/assets/fonts/inter.1a2b3c4d5e6f7a8b.woff2"`. Served with
+/// `"/_next-rust/assets/fonts/inter.1a2b3c4d5e6f7a8b.woff2"`. Served with
 /// immutable caching; the URL changes whenever the file content changes.
 #[proc_macro]
 pub fn asset(input: TokenStream) -> TokenStream {
@@ -499,7 +552,13 @@ pub fn asset(input: TokenStream) -> TokenStream {
         Some((d, f)) => (format!("{d}/"), f.to_owned()),
         None => (String::new(), rel.to_owned()),
     };
-    let url = format!("/_nr/assets/{dir}{}", next_rust_assets::fingerprint_name(&file, &bytes));
+    // Release builds embed scripts minified (`next-rust-build` writes the
+    // copies under `$OUT_DIR/next_rust_min`); the URL names what is served.
+    let served = std::env::var_os("OUT_DIR")
+        .map(|out| PathBuf::from(out).join("next_rust_min").join("assets").join(rel))
+        .and_then(|min| std::fs::read(min).ok())
+        .unwrap_or(bytes);
+    let url = format!("/_next-rust/assets/{dir}{}", next_rust_assets::fingerprint_name(&file, &served));
     let abs = path.to_string_lossy().into_owned();
     quote! {{
         const _: &[u8] = include_bytes!(#abs);

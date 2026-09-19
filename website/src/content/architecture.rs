@@ -157,10 +157,10 @@ cargo/rustc  ── type checks every page against its extractors ──▶ serv
   └─ App::handle_hyper: request timeout, request log, gzip
       └─ App::handle
           ├─ CSP nonce, body limit
-          ├─ pre-routing: base path, /_nr/* framework assets, [[redirects]], trailing slash
+          ├─ pre-routing: base path, /_next-rust/* framework assets, [[redirects]], trailing slash
           ├─ global middleware stack (App::middleware + plugins + app/middleware.rs)
           │   └─ RouteEndpoint::dispatch
-          │       ├─ /_nr/action/* → origin check → signed token → action handler
+          │       ├─ /_next-rust/action/* → origin check → signed token → action handler
           │       ├─ sitemap.xml / robots.txt generators
           │       ├─ intercepting routes (soft navigation headers)
           │       ├─ trie match → page | API | programmatic route
@@ -338,7 +338,7 @@ cargo/rustc  ── type checks every page against its extractors ──▶ serv
         ],
         h2![id("frontend-runtime"), a![class("anchor"), href("#frontend-runtime"), "Frontend runtime"]],
         p![
-            code!["/_nr/runtime.js"],
+            code!["/_next-rust/runtime.js"],
             " is one dependency-free ES module (",
             del![
                 "4 KB gzipped) with four responsibilities: client navigation, streaming swaps after navigation, form and action enhancement, and island hydration. It never uses ",

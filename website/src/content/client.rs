@@ -27,7 +27,7 @@ pub fn content() -> Node {
                             code!["Link!"],
                             " navigation, prefetch, form enhancement, declarative islands, streaming swaps",
                         ],
-                        td![code!["/_nr/runtime.js"], ", a ~4 KB gzipped ES module, loaded only when used"],
+                        td![code!["/_next-rust/runtime.js"], ", a ~4 KB gzipped ES module, loaded only when used"],
                     ],
                     tr![
                         td!["Browser – island modules"],
@@ -135,14 +135,14 @@ div![h1!["Stats"], Counter(3)]"#,
         p!["For behaviour beyond the declarative operations, point an island at an ES module:"],
         pre![code![
             class("language-rust"),
-            r#"#[client(module = "/_nr/client/islands/chart.js")]
+            r#"#[client(module = "/_next-rust/client/islands/chart.js")]
 pub fn Chart(points: Vec<(f64, f64)>) -> impl View {
     canvas![width(600), height(300), aria("label", "Chart")]
 }"#,
         ],],
         pre![code![
             class("language-js"),
-            r#"// client/islands/chart.js – served from /_nr/client/
+            r#"// client/islands/chart.js – served from /_next-rust/client/
 export function hydrate(element, props) {
   const ctx = element.querySelector("canvas").getContext("2d");
   // draw props.points …
@@ -152,7 +152,7 @@ export function hydrate(element, props) {
             "Files in the project's ",
             code!["client/"],
             " directory are served under ",
-            code!["/_nr/client/"],
+            code!["/_next-rust/client/"],
             " with the same path-traversal protection as ",
             code!["public/"],
             ".",
@@ -175,7 +175,7 @@ pub fn hydrate(element: web_sys::Element, props: JsValue) { … }",
         ],],
         pre![code![
             class("language-rust"),
-            r#"#[client(module = "/_nr/client/islands/my_widgets.js")]
+            r#"#[client(module = "/_next-rust/client/islands/my_widgets.js")]
 pub fn Editor(doc: Document) -> impl View { … }"#,
         ],],
         p![
@@ -330,6 +330,29 @@ window.addEventListener("nr:navigate", (e) => console.log(e.detail.url));"#,
             code!["data-nr-navigating"],
             " attribute, for progress indicators.",
         ],
+        h3![id("requests"), a![class("anchor"), href("#requests"), "Requests from the browser"]],
+        p![
+            "Island code that talks to this site goes through the runtime rather than a bare ",
+            code!["fetch"],
+            ": the request carries the page's cookies and CSRF token, refuses other origins (so those credentials can never leak), turns a non-2xx response into an error with ",
+            code![".status"],
+            " and ",
+            code![".data"],
+            ", and drops the prefetch cache after a write.",
+        ],
+        pre![code![
+            class("language-js"),
+            r#"const user = await nextRust.action(url, { email });            // a server action (url from action!(x).url())
+const list = await nextRust.request("/api/items?page=2");       // GET, JSON out
+await nextRust.request("/api/items", { method: "POST", body: { name } });  // JSON in (FormData/string pass through)
+await nextRust.request("/api/slow", { timeout: 5000 });          // aborts after 5 s; or pass your own `signal`
+const audio = await nextRust.request("/api/speak", { method: "POST", body: { text }, as: "blob" });  // as: "blob" | "text" | "response"
+
+// Server-sent events (`Response::sse`) as an async iterator:
+for await (const { event, data } of nextRust.stream("/api/chat", { method: "POST", body: { prompt } })) {
+  if (event === "token") output.textContent += JSON.parse(data);
+}"#,
+        ],],
         p![
             "Navigation requests carry ",
             code!["x-nr-nav: 1"],

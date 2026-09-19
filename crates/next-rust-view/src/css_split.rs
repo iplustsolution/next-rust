@@ -1,17 +1,19 @@
-//! Per-page utility CSS.
+//! Per-page CSS.
 //!
-//! The app-wide Tailwind stylesheet holds every utility the whole app uses.
-//! A page needs only the rules for the classes it renders, so the renderer
-//! splits the stylesheet into pieces once and sends, per document, the
-//! pieces that page needs:
+//! An app-wide stylesheet (the Tailwind build, with the hand-written CSS
+//! imported into it, or the UI components' styles) holds every rule the
+//! whole app uses. A page needs only the rules for the classes it renders,
+//! so the renderer splits the stylesheet into pieces once and sends, per
+//! document, the pieces that page needs:
 //!
-//! * everything outside `@layer utilities` (layer order, theme variables,
-//!   the base reset) is always sent, once;
+//! * a rule whose selectors all start with a class is sent when one of
+//!   those classes is on the page, wherever it is in the sheet: Tailwind's
+//!   utilities, a component's `@layer components`, or a plain `.card{…}`
+//!   from an imported stylesheet;
+//! * everything else (layer order, theme variables, the base reset,
+//!   element and attribute selectors, `@font-face`) is always sent, once;
 //! * `@property` registrations, their `@layer properties` fallbacks and
-//!   `@keyframes` are sent once something sent refers to them;
-//! * inside `@layer utilities`, a rule is sent when the class its selector
-//!   starts with is used on the page (Tailwind writes one rule per class,
-//!   possibly grouped in `@media`/`@supports`).
+//!   `@keyframes` are sent once something sent refers to them.
 //!
 //! Each `<style>` gets the id `<sheet id>~<bitset of pieces>`, so the client
 //! runtime can report what it already has and later navigations and
@@ -141,52 +143,7 @@ static SPLITS: OnceLock<SplitCache> = OnceLock::new();
 impl Split {
     fn parse(css: &str) -> Split {
         let mut len = 0;
-        let mut items = Vec::new();
-        let mut text = String::new();
-        let mut rest = css;
-        let flush = |text: &mut String, items: &mut Vec<Item>, len: &mut usize| {
-            if !text.is_empty() {
-                items.push(Item::Text { index: *len, css: std::mem::take(text) });
-                *len += 1;
-            }
-        };
-        while !rest.is_empty() {
-            let (prelude, block, after) = next_block(rest);
-            // A leading comment (the license notice) stays as it is.
-            let (comment, prelude) = split_comments(prelude);
-            text.push_str(comment);
-            let head = normalize(prelude);
-            match block {
-                // Tailwind's utilities, and component libraries' rules.
-                Some(body) if head == "@layer utilities" || head == "@layer components" => {
-                    flush(&mut text, &mut items, &mut len);
-                    let inner = parse_utilities(body, &mut len);
-                    items.push(Item::Group { open: format!("{}{{", prelude.trim()), items: inner });
-                }
-                Some(body) if head == "@layer properties" => {
-                    flush(&mut text, &mut items, &mut len);
-                    items.push(Item::Group {
-                        open: format!("{}{{", prelude.trim()),
-                        items: parse_fallbacks(body, &mut len),
-                    });
-                }
-                Some(body) if head.starts_with("@property --") || head.starts_with("@keyframes ") => {
-                    flush(&mut text, &mut items, &mut len);
-                    let name = head.split_once(' ').map(|(_, n)| n.trim().to_owned()).unwrap_or_default();
-                    items.push(Item::Var { index: len, name, css: format!("{}{{{}}}", prelude.trim(), body) });
-                    len += 1;
-                }
-                Some(body) => {
-                    text.push_str(prelude);
-                    text.push('{');
-                    text.push_str(body);
-                    text.push('}');
-                }
-                None => text.push_str(prelude),
-            }
-            rest = after;
-        }
-        flush(&mut text, &mut items, &mut len);
+        let items = parse_rules(css, &mut len, true);
         let refs = references(&items);
         Split { items, len, refs }
     }
@@ -206,19 +163,19 @@ impl Split {
         known
     }
 
-    /// Pieces needed for `used` classes (all rules when `all`) that are not
-    /// in `sent`, plus sent rules that must be repeated to keep the order.
-    pub(crate) fn delta(&self, used: &dyn Fn(&str) -> bool, all: bool, sent: &Pieces) -> Pieces {
+    /// Pieces needed for `used` classes that are not in `sent`, plus sent
+    /// rules that must be repeated to keep the order.
+    pub(crate) fn delta(&self, used: &dyn Fn(&str) -> bool, sent: &Pieces) -> Pieces {
         let mut wanted = Pieces::with_len(self.len);
         visit(&self.items, &mut |item| match item {
             Item::Text { index, .. } => wanted.insert(*index),
-            Item::Rule { index, owners, .. } if all || owners.is_empty() || owners.iter().any(|o| used(o)) => {
+            Item::Rule { index, owners, .. } if owners.is_empty() || owners.iter().any(|o| used(o)) => {
                 wanted.insert(*index)
             }
             _ => {}
         });
         for (var, by) in &self.refs {
-            if all || by.iter().any(|p| wanted.contains(*p) || sent.contains(*p)) {
+            if by.iter().any(|p| wanted.contains(*p) || sent.contains(*p)) {
                 wanted.insert(*var);
             }
         }
@@ -402,34 +359,62 @@ fn split_comments(prelude: &str) -> (&str, &str) {
     }
 }
 
-fn parse_utilities(css: &str, len: &mut usize) -> Vec<Item> {
+/// Every rule of `css` as pieces. A rule whose selectors all start with a
+/// class is owned by those classes and sent when one of them is on the
+/// page; anything else (element and attribute selectors, `:root`,
+/// `@font-face`, statements such as `@import`) is always sent. Grouping
+/// at-rules (`@media`, `@supports`, `@layer`, `@container`) are parsed
+/// inside; `@property`, `@keyframes` and `@layer properties` become
+/// registrations sent when something refers to them. Only a leading
+/// comment of the whole sheet (`top`), such as a license, is kept.
+fn parse_rules(css: &str, len: &mut usize, top: bool) -> Vec<Item> {
     let mut items = Vec::new();
     let mut rest = css;
     while !rest.trim().is_empty() {
         let (prelude, block, after) = next_block(rest);
-        let head = prelude.trim_start();
+        let (comment, prelude) = split_comments(prelude);
+        if top && !comment.trim().is_empty() {
+            items.push(Item::Text { index: *len, css: comment.trim().to_owned() });
+            *len += 1;
+        }
+        let head = normalize(prelude);
         match block {
-            Some(body) if head.starts_with('@') && !head.starts_with("@font-face") => {
-                items.push(Item::Group { open: format!("{}{{", prelude.trim()), items: parse_utilities(body, len) });
+            Some(body) if head == "@layer properties" => {
+                items.push(Item::Group { open: format!("{}{{", prelude.trim()), items: parse_fallbacks(body, len) });
+            }
+            Some(body)
+                if head.starts_with("@property --")
+                    || head.starts_with("@keyframes ")
+                    || head.starts_with("@-webkit-keyframes ") =>
+            {
+                let name = head.split_once(' ').map(|(_, n)| n.trim().to_owned()).unwrap_or_default();
+                items.push(Item::Var { index: *len, name, css: format!("{}{{{}}}", prelude.trim(), body) });
+                *len += 1;
+            }
+            Some(body) if head.starts_with('@') && !head.starts_with("@font-face") && !head.starts_with("@page") => {
+                items.push(Item::Group { open: format!("{}{{", prelude.trim()), items: parse_rules(body, len, false) });
             }
             Some(body) => {
                 items.push(Item::Rule {
                     index: *len,
-                    owners: owner_classes(head),
+                    owners: owner_classes(head.as_str()),
                     css: format!("{}{{{}}}", prelude.trim(), body),
                     props: families(body),
                 });
                 *len += 1;
             }
             None => {
-                // A statement such as `@apply …;`: keep it.
-                items.push(Item::Rule {
-                    index: *len,
-                    owners: Vec::new(),
-                    css: prelude.trim().to_owned(),
-                    props: vec!["*".into()],
-                });
-                *len += 1;
+                // A statement (`@import …;`, `@layer a,b;`, `@apply …;`): keep it.
+                let css = prelude.trim();
+                if !css.is_empty() {
+                    items.push(Item::Rule {
+                        index: *len,
+                        owners: Vec::new(),
+                        css: css.to_owned(),
+                        props: vec!["*".into()],
+                    });
+                    *len += 1;
+                }
             }
         }
         rest = after;
@@ -583,7 +568,7 @@ mod tests {
 @media (width>=40rem){.sm\\:p-10{padding:2.5rem}.sm\\:w-\\[1\\.5rem\\]{width:1.5rem}}\
 :where(.space-y-2>:not(:last-child)){margin-block:.5rem}}@property --tw-x{syntax:\"*\";inherits:false}@keyframes spin{to{rotate:1turn}}";
 
-    static SHEET: Stylesheet = Stylesheet { id: "tw", css: CSS, per_class: Some(&[]) };
+    static SHEET: Stylesheet = Stylesheet { id: "tw", css: CSS, per_class: Some(&[]), scripts: &[] };
 
     fn css_of(style: &str) -> &str {
         &style[style.find('>').unwrap() + 1..style.rfind("</style>").unwrap()]
@@ -604,7 +589,7 @@ mod tests {
     fn sends_only_used_rules_and_everything_outside_utilities() {
         let split = Split::parse(CSS);
         let used = |c: &str| ["px-2", "sm:p-10"].contains(&c);
-        let pieces = split.delta(&used, false, &split.empty());
+        let pieces = split.delta(&used, &split.empty());
         let css = split.style(&SHEET, &pieces);
         assert_eq!(
             css_of(&css),
@@ -612,9 +597,11 @@ mod tests {
 @layer utilities{.px-2{padding-inline:.5rem}@media (width>=40rem){.sm\\:p-10{padding:2.5rem}}}",
             "`@property` and `@keyframes` nothing refers to are left out"
         );
-        // All pieces: the original stylesheet, byte for byte.
-        let all = split.delta(&|_| false, true, &split.empty());
-        assert_eq!(css_of(&split.style(&SHEET, &all)), CSS);
+        // Every class used: the original stylesheet, minus the registrations
+        // nothing refers to.
+        let all = split.delta(&|_| true, &split.empty());
+        let (rules, _) = CSS.split_once("@property").unwrap();
+        assert_eq!(css_of(&split.style(&SHEET, &all)), rules);
     }
 
     #[test]
@@ -632,9 +619,9 @@ mod tests {
         let css = "@layer utilities{.p-4{padding:1rem}.mt-2{margin-top:.5rem}.px-2{padding-inline:.5rem}}";
         let split = Split::parse(css);
         let mut sent = split.empty();
-        let first = split.delta(&|c| c == "px-2" || c == "mt-2", false, &sent);
+        let first = split.delta(&|c| c == "px-2" || c == "mt-2", &sent);
         split.record(&mut sent, &first);
-        let next = split.delta(&|c| c == "p-4", false, &sent);
+        let next = split.delta(&|c| c == "p-4", &sent);
         assert_eq!(
             css_of(&split.style(&SHEET, &next)),
             "@layer utilities{.p-4{padding:1rem}.px-2{padding-inline:.5rem}}"
@@ -648,14 +635,14 @@ mod tests {
 @property --tw-a{syntax:\"*\";inherits:false}@property --tw-b{syntax:\"*\";inherits:false}@keyframes spin{to{rotate:1turn}}";
         let split = Split::parse(css);
         let mut sent = split.empty();
-        let first = split.delta(&|c| c == "a" || c == "c", false, &sent);
+        let first = split.delta(&|c| c == "a" || c == "c", &sent);
         assert_eq!(
             css_of(&split.style(&SHEET, &first)),
             "/*! notice */@layer properties{@supports (x:y){*,:before{--tw-a:initial;}}}\
 @layer utilities{.a{--tw-a:1px;width:var(--tw-a)}.c{color:red}}@property --tw-a{syntax:\"*\";inherits:false}"
         );
         split.record(&mut sent, &first);
-        let next = split.delta(&|c| c == "b", false, &sent);
+        let next = split.delta(&|c| c == "b", &sent);
         assert_eq!(
             css_of(&split.style(&SHEET, &next)),
             "@layer properties{@supports (x:y){*,:before{--tw-b:0;}}}@layer utilities{.b{height:var(--tw-b)}}\
@@ -668,24 +655,24 @@ mod tests {
     fn later_chunks_send_what_is_missing_in_order() {
         let split = Split::parse(CSS);
         let mut sent = split.empty();
-        let first = split.delta(&|c| c == "px-2", false, &sent);
+        let first = split.delta(&|c| c == "px-2", &sent);
         split.record(&mut sent, &first);
         // `p-4` comes before `px-2`: `px-2` is repeated after it so it still wins.
-        let next = split.delta(&|c| c == "p-4" || c == "px-2", false, &sent);
+        let next = split.delta(&|c| c == "p-4" || c == "px-2", &sent);
         assert_eq!(
             css_of(&split.style(&SHEET, &next)),
             "@layer utilities{.p-4{padding:1rem}.px-2{padding-inline:.5rem}}"
         );
         split.record(&mut sent, &next);
-        assert!(split.delta(&|c| c == "p-4", false, &sent).is_empty(), "nothing new");
+        assert!(split.delta(&|c| c == "p-4", &sent).is_empty(), "nothing new");
     }
 
     #[test]
     fn cached_documents_are_restyled_for_the_browser() {
         let split = Split::parse(CSS);
-        let page = split.delta(&|c| c == "p-4" || c == "px-2", false, &split.empty());
+        let page = split.delta(&|c| c == "p-4" || c == "px-2", &split.empty());
         let html = format!("<head>{}</head>", split.style(&SHEET, &page));
-        let had = split.delta(&|c| c == "px-2", false, &split.empty());
+        let had = split.delta(&|c| c == "px-2", &split.empty());
         let had_id = split.style(&SHEET, &had).split('"').nth(1).unwrap().to_owned();
         let out = restyle_document(&html, &[&SHEET], &[&had_id]);
         assert_eq!(
@@ -699,7 +686,7 @@ mod tests {
     #[test]
     fn ids_round_trip_through_the_client() {
         let split = Split::parse(CSS);
-        let pieces = split.delta(&|c| c == "sm:w-[1.5rem]" || c == "hover:underline", false, &split.empty());
+        let pieces = split.delta(&|c| c == "sm:w-[1.5rem]" || c == "hover:underline", &split.empty());
         let style = split.style(&SHEET, &pieces);
         let id = style.split('"').nth(1).unwrap().to_owned();
         let known = split.known(&SHEET, &HashSet::from([id]));
@@ -707,5 +694,30 @@ mod tests {
         let whole = split.known(&SHEET, &HashSet::from(["tw".to_owned()]));
         assert!((0..split.len).all(|i| whole.contains(i)), "the whole sheet");
         assert_eq!(split.known(&SHEET, &HashSet::from(["tw~!!".to_owned()])), split.empty(), "garbage ignored");
+    }
+
+    #[test]
+    fn plain_rules_are_split_by_their_classes() {
+        // Hand-written CSS imported into the build: class rules go out per
+        // page; everything without a class owner is always sent.
+        let css = "@import url(x.css);:root{--c:red}h1{margin:0}.card{padding:1rem}.card .title{font-weight:700}\
+@media (width>=40rem){.card{padding:2rem}.wide{width:100%}}@font-face{font-family:F;src:url(f.woff2)}\
+.spin{animation:spin 1s}@keyframes spin{to{rotate:1turn}}[data-theme=dark]{--c:blue}";
+        let split = Split::parse(css);
+        let used = |c: &str| c == "card";
+        let pieces = split.delta(&used, &split.empty());
+        assert_eq!(
+            css_of(&split.style(&SHEET, &pieces)),
+            "@import url(x.css);:root{--c:red}h1{margin:0}.card{padding:1rem}.card .title{font-weight:700}\
+@media (width>=40rem){.card{padding:2rem}}@font-face{font-family:F;src:url(f.woff2)}[data-theme=dark]{--c:blue}"
+        );
+        let spin = split.delta(&|c| c == "spin", &split.empty());
+        let out = split.style(&SHEET, &spin);
+        assert!(
+            out.contains(".spin{animation:spin 1s}@keyframes spin{to{rotate:1turn}}") && !out.contains(".card"),
+            "{out}"
+        );
+        let all = split.delta(&|_| true, &split.empty());
+        assert_eq!(css_of(&split.style(&SHEET, &all)), css, "all pieces: the sheet byte for byte");
     }
 }

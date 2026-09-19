@@ -253,14 +253,7 @@ impl RateLimit {
         RateLimit {
             capacity,
             refill_every: period / capacity,
-            key: Arc::new(|req: &Request| {
-                req.header("x-forwarded-for")
-                    .filter(|_| crate::trust_proxy())
-                    .and_then(|v| v.split(',').next())
-                    .map(|s| s.trim().to_owned())
-                    .or_else(|| req.remote_addr().map(|a| a.ip().to_string()))
-                    .unwrap_or_else(|| "unknown".into())
-            }),
+            key: Arc::new(|req: &Request| req.client_ip().map_or_else(|| "unknown".into(), |ip| ip.to_string())),
         }
     }
 
@@ -338,7 +331,7 @@ pub fn protected(check: impl Fn(&Request) -> bool + Send + Sync + 'static, login
 
 /// Double-submit CSRF token protection for unsafe methods.
 ///
-/// A random token is kept in the `nr_csrf` cookie (readable by the page via
+/// A random token is kept in the `next_rust_csrf` cookie (readable by the page via
 /// [`crate::CsrfToken`]); unsafe requests must echo it in the
 /// `x-csrf-token` header or a `_csrf` form field.
 pub fn csrf() -> impl Middleware {
@@ -377,9 +370,28 @@ pub(crate) async fn form_field(req: &mut Request, name: &str) -> Option<String> 
     fields.into_iter().find(|(k, _)| k == name).map(|(_, v)| v)
 }
 
+/// The policy `[security] csp = "strict"` stands for: scripts only with the
+/// per-request nonce (`'strict-dynamic'` lets those scripts load modules and
+/// islands), everything else from this origin, no plugins, no framing by
+/// other sites, forms only to this origin. Inline `style` attributes stay
+/// allowed: components set widths and custom properties with them.
+pub const STRICT_CSP: &str = "default-src 'self'; \
+script-src 'self' 'nonce-{nonce}' 'strict-dynamic'; \
+style-src 'self' 'unsafe-inline'; \
+img-src 'self' data: blob:; \
+font-src 'self' data:; \
+connect-src 'self'; \
+media-src 'self' blob:; \
+worker-src 'self' blob:; \
+object-src 'none'; \
+base-uri 'self'; \
+form-action 'self'; \
+frame-ancestors 'self'";
+
 /// Apply a conservative set of security headers (enabled by default through
 /// `[security] headers = true`).
 pub(crate) fn apply_security_headers(res: &mut Response, csp: Option<&str>, nonce: &str, hsts_max_age: u64) {
+    let csp = csp.map(|c| if c.trim() == "strict" { STRICT_CSP } else { c });
     let defaults = [
         ("x-content-type-options", "nosniff"),
         ("x-frame-options", "SAMEORIGIN"),

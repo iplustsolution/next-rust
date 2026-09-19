@@ -1,5 +1,5 @@
 //! Server actions: `#[server_action]` functions exposed at
-//! `POST /_nr/action/<token>`.
+//! `POST /_next-rust/action/<token>`.
 //!
 //! Security (in the order the checks run):
 //!
@@ -14,7 +14,7 @@
 //!   are accepted, so `text/plain` cross-site form tricks can't reach the
 //!   JSON parser.
 //! * With `csrf = "token"`, a double-submit token (`x-csrf-token` header or
-//!   `_csrf` field matching the `nr_csrf` cookie) is also required.
+//!   `_csrf` field matching the `next_rust_csrf` cookie) is also required.
 //! * Errors are reduced to public messages in production, and responses are
 //!   never cached.
 
@@ -34,7 +34,7 @@ use crate::error::{Error, ErrorKind, Result};
 use crate::request::Request;
 use crate::response::Response;
 
-pub const FLASH_COOKIE: &str = "nr_flash";
+pub const FLASH_COOKIE: &str = "next_rust_flash";
 
 /// Shown when an action link is expired, copied from another browser or
 /// minted by a server with a different secret.
@@ -48,9 +48,21 @@ pub struct ActionContext {
     pub extensions: http::Extensions,
 }
 
+/// The client address, carried in [`ActionContext::extensions`] so the
+/// struct's public fields stay as they are.
+#[derive(Clone, Copy)]
+struct ClientAddr(Option<std::net::IpAddr>);
+
 impl ActionContext {
     pub fn extension<T: Send + Sync + 'static>(&self) -> Option<&T> {
         self.extensions.get::<T>()
+    }
+
+    /// The client's IP address, read as [`Request::client_ip`] reads it
+    /// (`X-Forwarded-For` only with `[server] trust_proxy`). For per-client
+    /// limits on an action: sign-ups, contact forms, password attempts.
+    pub fn client_ip(&self) -> Option<std::net::IpAddr> {
+        self.extensions.get::<ClientAddr>().and_then(|c| c.0)
     }
 }
 
@@ -63,7 +75,7 @@ pub(crate) async fn handle(inner: &AppInner, mut req: Request) -> Response {
         crate::log::warn("server action rejected: cross-origin request");
         return Response::text("Forbidden: cross-origin server action").with_status(403);
     }
-    let token = req.path().trim_start_matches("/_nr/action/");
+    let token = req.path().trim_start_matches("/_next-rust/action/");
     let binding = action_token::binding(req.cookies());
     let found = action_token::verify(token, binding.as_deref())
         .and_then(|key| inner.actions.get(&key).copied().ok_or(action_token::Rejection::Forged));
@@ -91,12 +103,13 @@ pub(crate) async fn handle(inner: &AppInner, mut req: Request) -> Response {
 
 /// Mint a URL for action `id` bound to `binding` (used by [`crate::TestClient`]).
 pub(crate) fn signed_url(id: &str, binding: &str, ttl: u64) -> String {
-    format!("/_nr/action/{}", action_token::mint(&action_token::action_key(id), binding, ttl))
+    format!("/_next-rust/action/{}", action_token::mint(&action_token::action_key(id), binding, ttl))
 }
 
 fn stale(req: &Request) -> Response {
     let res = if wants_json(req) {
-        Response::json(&serde_json::json!({ "ok": false, "error": STALE_MESSAGE, "code": "nr_stale" })).with_status(403)
+        Response::json(&serde_json::json!({ "ok": false, "error": STALE_MESSAGE, "code": "next_rust_stale" }))
+            .with_status(403)
     } else {
         // Plain form post: show the message on the page it came from.
         flash_back(req, &[], BTreeMap::new(), Some(STALE_MESSAGE.to_owned()))
@@ -180,22 +193,37 @@ fn local_path(candidate: &str) -> Option<String> {
         .then(|| candidate.to_owned())
 }
 
-fn back_location(req: &Request, fields: &[(String, String)]) -> String {
-    if let Some(r) = fields.iter().find(|(k, _)| k == "_redirect").and_then(|(_, v)| local_path(v)) {
-        return r;
-    }
+/// The `_redirect` field, when it is a local path.
+fn redirect_field(fields: &[(String, String)]) -> Option<String> {
+    fields.iter().find(|(k, _)| k == "_redirect").and_then(|(_, v)| local_path(v))
+}
+
+/// The page the form was posted from, when the browser says and it is on
+/// this site.
+fn referring_page(req: &Request) -> Option<String> {
     let host = req.header("host").unwrap_or_default();
     req.header("referer")
         .and_then(|r| r.split_once("://").map(|(_, rest)| rest.to_owned()))
         .and_then(|rest| rest.strip_prefix(host).map(str::to_owned))
         .and_then(|p| local_path(&p))
-        .unwrap_or_else(|| "/".into())
+}
+
+/// After a successful plain-form post: `_redirect`, else the form's page.
+fn success_location(req: &Request, fields: &[(String, String)]) -> String {
+    redirect_field(fields).or_else(|| referring_page(req)).unwrap_or_else(|| "/".into())
+}
+
+/// After a rejected plain-form post: back to the form's page, where the
+/// flash is shown. `_redirect` is where the form goes on success, so it is
+/// only used when the browser sent no usable referrer.
+fn error_location(req: &Request, fields: &[(String, String)]) -> String {
+    referring_page(req).or_else(|| redirect_field(fields)).unwrap_or_else(|| "/".into())
 }
 
 fn respond<O: Serialize>(req: &Request, json: bool, fields: &[(String, String)], result: Result<O>) -> Response {
     match (json, result) {
         (true, Ok(data)) => Response::json(&serde_json::json!({ "ok": true, "data": data })),
-        (false, Ok(_)) => Response::see_other(&back_location(req, fields)),
+        (false, Ok(_)) => Response::see_other(&success_location(req, fields)),
         (json, Err(e)) => {
             let status = e.status();
             match e.into_kind() {
@@ -249,7 +277,7 @@ fn flash_back(
     let json = serde_json::json!({ "errors": errors, "message": message, "values": values }).to_string();
     let json: String = json.chars().take(3000).collect();
     req.cookies().set(Cookie::encoded(FLASH_COOKIE, &json).max_age(std::time::Duration::from_secs(60)));
-    Response::see_other(&back_location(req, fields))
+    Response::see_other(&error_location(req, fields))
 }
 
 pub(crate) fn decode_flash(raw: &str) -> crate::context::FormState {
@@ -292,11 +320,12 @@ where
     Fut: Future<Output = Result<O>>,
 {
     let json = wants_json(&req);
-    let ctx = ActionContext {
+    let mut ctx = ActionContext {
         cookies: req.cookies().clone(),
         headers: req.headers().clone(),
         extensions: req.extensions().clone(),
     };
+    ctx.extensions.insert(ClientAddr(req.client_ip()));
     match read_input::<I>(&mut req).await {
         Ok((input, fields)) => {
             let result = f(ctx, input).await;
@@ -304,6 +333,31 @@ where
         }
         Err(e) => respond::<()>(&req, json, &[], Err(e)),
     }
+}
+
+/// Adapter for `async fn action(ctx: ActionContext) -> Result<O>`: the request
+/// context and no input (a submitted form's fields are only echoed back into
+/// the flash, as for an action without arguments).
+pub async fn run_action_ctx0<O, F, Fut>(mut req: Request, f: F) -> Response
+where
+    O: Serialize,
+    F: FnOnce(ActionContext) -> Fut,
+    Fut: Future<Output = Result<O>>,
+{
+    let json = wants_json(&req);
+    let mut ctx = ActionContext {
+        cookies: req.cookies().clone(),
+        headers: req.headers().clone(),
+        extensions: req.extensions().clone(),
+    };
+    ctx.extensions.insert(ClientAddr(req.client_ip()));
+    let fields: Vec<(String, String)> = if is_form(&req) {
+        req.bytes().await.ok().and_then(|b| serde_urlencoded::from_bytes(&b).ok()).unwrap_or_default()
+    } else {
+        Vec::new()
+    };
+    let result = f(ctx).await;
+    respond(&req, json, &fields, result)
 }
 
 /// Adapter for `async fn action() -> Result<O>`.

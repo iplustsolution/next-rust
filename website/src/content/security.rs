@@ -115,11 +115,11 @@ pub fn content() -> Node {
             ", ",
             code!["tests/pipeline.rs::public_files"],
             "). The same resolver serves ",
-            code!["/_nr/client/"],
+            code!["/_next-rust/client/"],
             ", ",
-            code!["/_nr/assets/"],
+            code!["/_next-rust/assets/"],
             " and ",
-            code!["/_nr/image"],
+            code!["/_next-rust/image"],
             ".",
         ],
         h3![
@@ -341,7 +341,7 @@ pub fn content() -> Node {
             li!["body size limits;"],
             li!["bounded caches (", code!["MemoryStore"], " LRU) and a bounded rate-limit map;"],
             li!["ISR regeneration deduplicated per path;"],
-            li!["the dev-only endpoints (", code!["/_nr/dev/*"], ") are disabled outside development (tested).",],
+            li!["the dev-only endpoints (", code!["/_next-rust/dev/*"], ") are disabled outside development (tested).",],
         ],
         p!["Not provided: connection limits per IP, or distributed rate limiting. Use a proxy or CDN."],
         h3![
