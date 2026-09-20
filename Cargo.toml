@@ -22,9 +22,12 @@ next-rust-assets = { path = "crates/next-rust-assets", version = "0.1.11" }
 next-rust-cache = { path = "crates/next-rust-cache", version = "0.1.11" }
 next-rust-server = { path = "crates/next-rust-server", version = "0.1.11", default-features = false }
 next-rust-macros = { path = "crates/next-rust-macros", version = "0.1.11" }
+next-rust-wasm = { path = "crates/next-rust-wasm", version = "0.1.11" }
 next-rust-build = { path = "crates/next-rust-build", version = "0.1.11" }
 next-rust-ui = { path = "crates/next-rust-ui", version = "0.1.11" }
 next-rust-icons = { path = "crates/next-rust-icons", version = "0.1.11" }
+next-rust-auth = { path = "crates/next-rust-auth", version = "0.1.11" }
+next-rust-jobs = { path = "crates/next-rust-jobs", version = "0.1.11" }
 
 # external (every entry is justified in docs/dependencies.md)
 serde = { version = "1", features = ["derive"] }
@@ -44,11 +47,22 @@ brotli = { version = "8", default-features = false, features = ["std"] }
 getrandom = "0.3"
 hmac = "0.12"
 sha2 = { version = "0.10", default-features = false }
+aes-gcm = "0.10"
+hkdf = "0.12"
+base64ct = { version = "1", features = ["alloc"] }
+argon2 = { version = "0.5", features = ["std"] }
 tokio-tungstenite = { version = "0.27", default-features = false, features = ["handshake"] }
+redis = { version = "0.27", default-features = false, features = ["tokio-comp", "connection-manager", "script"] }
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 syn = { version = "2", features = ["full"] }
 quote = "1"
 proc-macro2 = "1"
+
+# Crates opt in with `[lints] workspace = true`. Empty for now: the sections
+# have to exist for that inheritance to resolve at all.
+[workspace.lints.rust]
+
+[workspace.lints.clippy]
 
 [profile.release]
 lto = "thin"

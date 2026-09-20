@@ -31,38 +31,54 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures_util::StreamExt;
 use futures_util::future::join_all;
+use futures_util::{FutureExt, StreamExt};
 use next_rust_cache::{CacheEntry, CacheKey};
 use next_rust_router::Params;
 use next_rust_view::{
-    Children, DocumentParts, Metadata, Node, RenderFlags, Slots, View, escape_attr, escape_text, raw_html,
-    stream_document, suspense,
+    Children, DocumentParts, HoleContext, Metadata, Node, RenderFlags, Resume, Shell, Slots, View, escape_attr,
+    escape_text, raw_html, render_shell, resume_document, stream_document, suspense,
 };
 
-use crate::app::{AppInner, ErrorInfo, PageBody, PageDef, Rendering, SegmentDef};
+use crate::app::{AppInner, ErrorInfo, PageBody, PageDef, SegmentDef};
 use crate::context::{Ctx, RequestContext};
 use crate::error::{Error, ErrorKind, Result};
 use crate::middleware::BoxFuture;
+use crate::partial::{FragmentUse, HoleCx, SHELL_META, track_fragments};
 use crate::request::Request;
 use crate::response::{Body, Response};
 
-/// Placeholder nonce written into cached static HTML; replaced per request.
-pub(crate) const NONCE_PLACEHOLDER: &str = "nr-nonce-placeholder-5f3a9c";
+/// Placeholder nonce written into cached static HTML; replaced per request
+/// wherever it appears. It is random per process, so page content cannot
+/// contain it: a fixed string would be substituted inside ordinary text too,
+/// handing the request's live CSP nonce to whatever wrote that text (a CMS
+/// field, a route parameter, a file name).
+pub(crate) fn nonce_placeholder() -> &'static str {
+    static PLACEHOLDER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    PLACEHOLDER.get_or_init(|| format!("nr-nonce-placeholder-{}", crate::random_hex(16)))
+}
 
 pub(crate) async fn page_response(inner: &Arc<AppInner>, index: usize, req: Request) -> Response {
     let def = &inner.routes.pages[index];
     let nonce = req.extension::<crate::CspNonce>().map(|n| n.0.clone()).unwrap_or_else(|| crate::random_hex(16));
 
+    // Analytics start and stop with a document: see `crate::tracking`.
+    if inner.tracking.crosses_boundary(&req) {
+        return crate::tracking::full_load();
+    }
+
     if let PageBody::Html(html) = def.body
         && is_full_document(html)
     {
-        return full_html_page(inner, html, &nonce);
+        return full_html_page(inner, html, &req, &nonce);
     }
 
     let partial = partial_target(inner, def, &req);
 
-    if def.rendering == Rendering::Static && !inner.env.is_dev() {
+    // An intercepting route shares its URL with the page it stands in for,
+    // and the page cache is keyed by URL: cached, either one would be served
+    // for the other, and any visitor could choose which (`x-nr-from`).
+    if def.rendering.is_prerendered() && def.intercept_from.is_none() && !inner.env.is_dev() {
         return serve_static(inner, index, &req, &nonce, partial).await;
     }
 
@@ -83,8 +99,29 @@ fn is_full_document(html: &str) -> bool {
     head.contains("<!doctype") || head.contains("<html")
 }
 
-fn full_html_page(inner: &AppInner, html: &str, nonce: &str) -> Response {
+fn full_html_page(inner: &AppInner, html: &str, req: &Request, nonce: &str) -> Response {
     let mut body = html.to_owned();
+    // A document of its own still gets `[verification]` and `[analytics]`.
+    let tracking = &inner.tracking;
+    let decision = if crate::tracking::is_navigation(req) {
+        crate::tracking::Decision::Nothing
+    } else {
+        tracking.decide(req.path(), None)
+    };
+    let head = format!("{}{}", tracking.verification_head(), tracking.head(decision, nonce));
+    if !head.is_empty()
+        && let Some(pos) = body.to_ascii_lowercase().find("</head>")
+    {
+        body.insert_str(pos, &head);
+        let after_body = tracking.body_start(decision);
+        let lower = body.to_ascii_lowercase();
+        if !after_body.is_empty()
+            && let Some(open) = lower.find("<body")
+            && let Some(end) = lower[open..].find('>')
+        {
+            body.insert_str(open + end + 1, after_body);
+        }
+    }
     if inner.env.is_dev() {
         let script = crate::internal::dev_script(nonce);
         match body.to_ascii_lowercase().rfind("</body>") {
@@ -185,8 +222,9 @@ async fn render_partial(
     };
     match render_level(inner.clone(), index, level, ctx.clone(), streaming, false).await {
         Ok(region) if ctx.status() == 200 => {
+            let known = known_styles(&ctx);
             let mut res =
-                document_response_with(inner, &ctx, partial_metadata(metadata), region, streaming, known_styles(&ctx));
+                document_response_with(inner, &ctx, Some(index), partial_metadata(metadata), region, streaming, known);
             mark_partial(&mut res, &key);
             res
         }
@@ -225,7 +263,10 @@ fn mark_partial(res: &mut Response, key: &str) {
 
 /// Cut the region inside layout `key` out of a complete HTML document,
 /// leaving out icons and the stylesheets the browser already has.
-fn slice_partial(html: &str, key: &str, known_styles: &[&str]) -> Option<String> {
+///
+/// `complete`: `html` is a whole document and so is the result. Otherwise it
+/// is a shell, and the result ends where the holes are streamed.
+fn slice_partial(html: &str, key: &str, known_styles: &[&str], complete: bool) -> Option<String> {
     let open = format!("{MARKER_OPEN}{key}-->");
     let close = format!("{MARKER_CLOSE}{key}-->");
     let start = html.find(&open)? + open.len();
@@ -246,7 +287,45 @@ fn slice_partial(html: &str, key: &str, known_styles: &[&str]) -> Option<String>
             head.replace_range(at..at + len + "</style>".len(), "");
         }
     }
-    Some(format!("<!DOCTYPE html><html><head>{head}</head><body>{}{env}</body></html>", &html[start..end]))
+    let region = &html[start..end];
+    let scripts = scripts_outside(html, start..end);
+    Some(if complete {
+        format!("<!DOCTYPE html><html><head>{head}</head><body>{region}{scripts}{env}</body></html>")
+    } else {
+        format!("<!DOCTYPE html><html><head>{head}</head><body>{region}{scripts}")
+    })
+}
+
+/// The `<script>` tags of `<body>` that are not inside `region`.
+///
+/// A page's scripts sit at the end of `<body>`, outside every layout, so
+/// slicing a layout's region out of a cached page leaves them behind. That is
+/// only visible in production: a dynamically rendered partial is built from
+/// the page's own document and carries them, a pre-rendered one is cut out of
+/// stored HTML and did not. Navigating from a page that needs no scripts to
+/// one that does then delivered the new page complete, correct and inert —
+/// every component rendered and nothing responding to a click.
+///
+/// The browser drops what it has already run: both runtimes skip the runtime
+/// shim, and an inline script is matched by its `data-nr-js` id. The
+/// environment is carried separately, so it is left out here rather than sent
+/// twice.
+fn scripts_outside(html: &str, region: std::ops::Range<usize>) -> String {
+    const CLOSE: &str = "</script>";
+    let Some(body) = html.find("<body") else { return String::new() };
+    let mut out = String::new();
+    let mut at = body;
+    while let Some(rel) = html[at..].find("<script") {
+        let open = at + rel;
+        let Some(len) = html[open..].find(CLOSE) else { break };
+        let close = open + len + CLOSE.len();
+        at = close;
+        if region.contains(&open) || html[open..close].contains("__next_rust_env") {
+            continue;
+        }
+        out.push_str(&html[open..close]);
+    }
+    out
 }
 
 /// Render a page for `ctx` into a response.
@@ -271,7 +350,7 @@ pub(crate) async fn render_page(inner: &Arc<AppInner>, index: usize, ctx: Ctx, s
         Err(e) if ctx.is_static() => return static_failure(e),
         Err(e) => return global_error_page(inner, &ctx, &e, def.source).await,
     };
-    document_response(inner, &ctx, metadata, body, streaming)
+    document_response(inner, &ctx, Some(index), metadata, body, streaming)
 }
 
 fn static_failure(e: Error) -> Response {
@@ -326,7 +405,7 @@ fn render_level(
                 let content = async move {
                     match below_fut.await {
                         Ok(node) => node,
-                        Err(e) => streamed_error_node(&inner2, index, level, &ctx2, e).await,
+                        Err(e) => streamed_error_node(&inner2, Some((index, level)), &ctx2, e).await,
                     }
                 };
                 Ok(suspense(fallback, content))
@@ -395,18 +474,21 @@ async fn render_slots(seg: &crate::app::SegmentDef, ctx: &Ctx) -> Result<Slots> 
 }
 
 /// An error surfaced inside streamed content, after the response head was
-/// sent: render the nearest boundary in place.
-async fn streamed_error_node(inner: &Arc<AppInner>, index: usize, level: usize, ctx: &Ctx, e: Error) -> Node {
+/// sent: render the nearest boundary in place, looking up from segment
+/// `level` of page `index`.
+async fn streamed_error_node(inner: &Arc<AppInner>, at: Option<(usize, usize)>, ctx: &Ctx, e: Error) -> Node {
     if let ErrorKind::Redirect { location, .. } = e.kind() {
+        // Run by the browser as script and as a meta refresh: never a script URL.
+        let location = crate::response::safe_location(location);
         let url = escape_attr(location);
-        let js = serde_json::to_string(location).unwrap_or_default().replace("</", "<\\/");
+        let js = serde_json::to_string(location).unwrap_or_default().replace('<', "\\u003c");
         return raw_html(format!(
             "<script nonce=\"{}\">location.replace({js})</script><noscript><meta http-equiv=\"refresh\" content=\"0;url={url}\"></noscript>",
             escape_attr(&ctx.nonce)
         ));
     }
-    let def = &inner.routes.pages[index];
-    for seg in def.segments[..=level].iter().rev() {
+    let segments = at.map_or(&[][..], |(index, level)| &inner.routes.pages[index].segments[..=level]);
+    for seg in segments.iter().rev() {
         if e.is_not_found() {
             if let Some(nf) = seg.not_found
                 && let Ok(node) = nf(ctx.clone()).await
@@ -429,16 +511,123 @@ fn default_error_node(info: &ErrorInfo, dev: bool) -> Node {
         .into_node()
 }
 
+/// `index`: the page being rendered, whose boundaries catch errors of holes.
 pub(crate) fn document_response(
     inner: &Arc<AppInner>,
     ctx: &Ctx,
+    index: Option<usize>,
     metadata: Metadata,
     body: Node,
     streaming: bool,
 ) -> Response {
     // Client navigations keep the styles the page already has.
     let known = if ctx.headers.get("x-nr-nav").is_some_and(|v| v == "1") { known_styles(ctx) } else { Vec::new() };
-    document_response_with(inner, ctx, metadata, body, streaming, known)
+    document_response_with(inner, ctx, index, metadata, body, streaming, known)
+}
+
+/// What `dynamic` holes of page `index` are rendered with for this request.
+fn hole_context(inner: &Arc<AppInner>, ctx: &Ctx, index: Option<usize>) -> HoleContext {
+    let (inner, error_ctx) = (inner.clone(), ctx.clone());
+    Arc::new(HoleCx {
+        ctx: ctx.clone(),
+        on_error: Box::new(move |e| {
+            let (inner, ctx) = (inner.clone(), error_ctx.clone());
+            Box::pin(async move {
+                let at = index.map(|i| (i, inner.routes.pages[i].segments.len().saturating_sub(1)));
+                streamed_error_node(&inner, at, &ctx, e).await
+            })
+        }),
+    })
+}
+
+/// Markup before `</body>`: the public environment and the client scripts
+/// the rendered features need.
+fn document_tail(inner: &AppInner, nonce: &str) -> Box<dyn FnOnce(RenderFlags) -> String + Send> {
+    let client_nav = inner.config.rendering.client_navigation;
+    let enhance_forms = inner.config.client.enhance_forms;
+    let dev = inner.env.is_dev();
+    let wasm_runtime = inner.config.client.runtime.is_wasm();
+    let wasm_ui = inner.config.ui.script.is_wasm();
+    // Run the island module's `start()` on every page, not only on pages that
+    // happen to render an island or a UI component.
+    //
+    // The loader instantiates lazily, on first hydration, so an app whose
+    // browser logic lives in `start()` — restoring a colour mode, a resend
+    // countdown, filling `input[data-timezone]` before sign-up posts it —
+    // simply never ran it on an island-less page, and had to keep a
+    // hand-written `<script>` in the root layout to cover those pages. That
+    // script is exactly what `[ui] script = "wasm"` exists to remove.
+    //
+    // It costs no extra fetch: it boots the module this page's own islands
+    // would have booted anyway, and on a page with none it is the same module
+    // every other page already cached. `boot()` memoises its promise, so a
+    // page that also hydrates an island still instantiates once, and calling
+    // `start()` before any hydration is the order the loader already uses.
+    //
+    // Gated on `wasm_ui` because `/_next-rust/ui.js` only answers with the
+    // boot module ([`crate::internal::UI_BOOT_JS`]) when the UI script is
+    // wasm. With the JavaScript component script it would put the components'
+    // behaviour on every page that renders no components.
+    let wasm_start = wasm_ui && inner.config.build.wasm_islands;
+    let client_version = crate::internal::client_version(inner, dev);
+    let wasm_preload = inner.config.uses_wasm().then(|| crate::internal::wasm_module_url(inner)).flatten();
+    let env_json = inner.public_env_json.clone();
+    let nonce = nonce.to_owned();
+    Box::new(move |flags: RenderFlags| {
+        let mut t = String::new();
+        if flags.islands
+            && let Some(json) = env_json
+        {
+            t.push_str(&format!(
+                "<script id=\"__next_rust_env\" type=\"application/json\">{}</script>",
+                // `<` never appears raw: no `</script>`, no `<!--` state change.
+                json.replace('<', "\\u003c")
+            ));
+        }
+        // UI components call actions and navigate through the runtime.
+        if flags.islands || flags.ui || ((flags.links || (flags.forms && enhance_forms)) && client_nav) {
+            // `[client] enhance_forms = false`: the runtime leaves plain forms to the browser.
+            if !enhance_forms {
+                t.push_str("<script id=\"__next_rust_forms\" type=\"application/json\">false</script>");
+            }
+            // Start the module download now rather than when the shim runs.
+            // The shim is `type="module"`, so it is deferred: without this the
+            // fetch cannot begin until the document has finished parsing and
+            // the shim itself has loaded and executed. The link is parsed
+            // where it stands, so the two overlap instead of queueing.
+            //
+            // `crossorigin` is required even though this is same-origin:
+            // `as="fetch"` preloads are keyed by CORS mode, and the shim's own
+            // `fetch` is a CORS-mode request. Without the attribute the
+            // preload lands in a different cache entry and the module is
+            // downloaded twice — which is worse than not preloading at all.
+            if let Some(url) = &wasm_preload {
+                t.push_str(&format!("<link rel=\"preload\" as=\"fetch\" crossorigin href=\"{}\">", escape_attr(url)));
+            }
+            // `data-nr-shim` marks the one script a page is allowed to carry
+            // when `[client] runtime = "wasm"`: it loads the module and
+            // forwards its imports, and decides nothing. Tools that audit a
+            // page for remaining JavaScript key off it.
+            t.push_str(&format!(
+                "<script type=\"module\"{} src=\"/_next-rust/runtime.js?v={}\" nonce=\"{}\"></script>",
+                if wasm_runtime { " data-nr-shim" } else { "" },
+                client_version,
+                escape_attr(&nonce)
+            ));
+        }
+        if flags.ui || wasm_start {
+            // With `[ui] script = "wasm"` this is the boot module, not the
+            // components' behaviour, so it carries the same `data-nr-shim`
+            // mark the runtime's shim does.
+            t.push_str(&format!(
+                "<script type=\"module\"{} src=\"/_next-rust/ui.js?v={}\" nonce=\"{}\"></script>",
+                if wasm_ui { " data-nr-shim" } else { "" },
+                crate::internal::ui_version(dev, wasm_ui),
+                escape_attr(&nonce)
+            ));
+        }
+        t
+    })
 }
 
 /// Point icons from `public/` at a versioned URL (`/logo.svg?v=<hash>`) that
@@ -468,11 +657,21 @@ fn known_styles(ctx: &Ctx) -> Vec<String> {
 fn document_response_with(
     inner: &Arc<AppInner>,
     ctx: &Ctx,
+    index: Option<usize>,
     metadata: Metadata,
     mut body: Node,
     streaming: bool,
     known_styles: Vec<String>,
 ) -> Response {
+    // `[analytics]`: written into full documents only. A client navigation
+    // keeps the scripts of the document it started in, and one that would
+    // end on a page that opted out is loaded in full instead.
+    let navigation = ctx.headers.get("x-nr-nav").is_some_and(|v| v == "1");
+    let analytics = inner.tracking.decide(ctx.path(), Some(&metadata));
+    if navigation && analytics == crate::tracking::Decision::OptOut {
+        return crate::tracking::full_load();
+    }
+    let analytics = if navigation { crate::tracking::Decision::Nothing } else { analytics };
     next_rust_view::attrs::mark_active_links(&mut body, ctx.path());
     // App-wide stylesheets (Tailwind) come first, so page and module styles
     // can override them. Like any stylesheet they are hoisted into <head>
@@ -493,50 +692,46 @@ fn document_response_with(
             head_extra.push_str(&h);
         }
     }
-    let client_nav = inner.config.rendering.client_navigation;
-    let dev = inner.env.is_dev();
-    let env_json = inner.public_env_json.clone();
-    let tail_nonce = nonce.clone();
+    head_extra.push_str(&inner.tracking.head(analytics, &nonce));
+    // The motion stylesheet is the first stylesheet of the document, right
+    // after the metadata (charset, viewport, title): its cascade layer must
+    // be declared before Tailwind's so that everything the app styles wins.
+    let mut head = metadata.render_head();
+    // `[verification]`: real <meta> tags, in every document.
+    head.push_str(inner.tracking.verification_head());
+    for (id, css) in [&inner.motion, &inner.loader].into_iter().flatten() {
+        if !known_styles.iter().any(|k| k == id) {
+            head.push_str(&format!("<style data-nr-css=\"{id}\">{css}</style>"));
+        }
+    }
     let parts = DocumentParts {
         lang: inner.config.app.lang.clone(),
         html_attributes: metadata.html_attributes.clone(),
-        head: metadata.render_head(),
+        head,
         head_extra,
+        body_start: inner.tracking.body_start(analytics).to_owned(),
         body,
-        nonce: Some(nonce),
+        nonce: Some(nonce.clone()),
         generator: inner.config.build.signature.then(crate::signature),
-        tail: Box::new(move |flags: RenderFlags| {
-            let mut t = String::new();
-            if flags.islands
-                && let Some(json) = env_json
-            {
-                t.push_str(&format!(
-                    "<script id=\"__next_rust_env\" type=\"application/json\">{}</script>",
-                    json.replace("</", "<\\/")
-                ));
-            }
-            // UI components call actions and navigate through the runtime.
-            if flags.islands || flags.ui || (flags.links && client_nav) {
-                t.push_str(&format!(
-                    "<script type=\"module\" src=\"/_next-rust/runtime.js?v={}\" nonce=\"{}\"></script>",
-                    crate::internal::runtime_version(dev),
-                    escape_attr(&tail_nonce)
-                ));
-            }
-            if flags.ui {
-                t.push_str(&format!(
-                    "<script type=\"module\" src=\"/_next-rust/ui.js?v={}\" nonce=\"{}\"></script>",
-                    crate::internal::ui_version(dev),
-                    escape_attr(&tail_nonce)
-                ));
-            }
-            t
-        }),
+        tail: document_tail(inner, &nonce),
+        // A static render has no request: holes stay open (see `render_shell`).
+        hole_context: (!ctx.is_static()).then(|| hole_context(inner, ctx, index)),
         known_styles,
     };
-    let stream =
-        stream_document(parts, streaming).map(|chunk| Ok::<Bytes, crate::request::BoxError>(Bytes::from(chunk)));
-    let mut res = Response::new(http::StatusCode::OK, Body::Stream(Box::pin(stream)));
+    let body = if ctx.is_static() {
+        // Rendered once for many requests: the holes are handed to the caller.
+        let sink = ctx.clone();
+        Body::Stream(Box::pin(futures_util::stream::once(async move {
+            let (html, shell) = render_shell(parts).await;
+            *sink.shell.lock().unwrap_or_else(|e| e.into_inner()) = shell;
+            Ok::<Bytes, crate::request::BoxError>(Bytes::from(html))
+        })))
+    } else {
+        Body::Stream(Box::pin(
+            stream_document(parts, streaming).map(|chunk| Ok::<Bytes, crate::request::BoxError>(Bytes::from(chunk))),
+        ))
+    };
+    let mut res = Response::new(http::StatusCode::OK, body);
     res.status = http::StatusCode::from_u16(ctx.status()).unwrap_or(http::StatusCode::OK);
     res.set_header("content-type", "text/html; charset=utf-8");
     let extra = ctx.response_headers.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -588,7 +783,7 @@ pub(crate) async fn not_found_page(inner: &Arc<AppInner>, ctx: &Ctx) -> Response
     let mut res = match root_key {
         Some(key) if shown => {
             let mut res =
-                document_response_with(inner, ctx, partial_metadata(metadata), content, false, known_styles(ctx));
+                document_response_with(inner, ctx, None, partial_metadata(metadata), content, false, known_styles(ctx));
             mark_partial(&mut res, &key);
             res
         }
@@ -599,11 +794,11 @@ pub(crate) async fn not_found_page(inner: &Arc<AppInner>, ctx: &Ctx) -> Response
                 raw_html(format!("{MARKER_CLOSE}{key}-->"))
             ];
             let body = root_wrapped(inner, ctx, marked).await;
-            document_response(inner, ctx, metadata, body, false)
+            document_response(inner, ctx, None, metadata, body, false)
         }
         None => {
             let body = root_wrapped(inner, ctx, content).await;
-            document_response(inner, ctx, metadata, body, false)
+            document_response(inner, ctx, None, metadata, body, false)
         }
     };
     res.set_header("cache-control", "private, no-cache, no-store, max-age=0, must-revalidate");
@@ -622,6 +817,9 @@ pub(crate) async fn not_found_response(inner: &Arc<AppInner>, req: &Request) -> 
     let accepts_html = req.header("accept").is_none_or(|a| a.contains("text/html") || a.contains("*/*"));
     if !accepts_html || req.path().starts_with(&inner.config.api.prefix) {
         return Response::not_found();
+    }
+    if inner.tracking.crosses_boundary(req) {
+        return crate::tracking::full_load();
     }
     let nonce = req.extension::<crate::CspNonce>().map(|n| n.0.clone()).unwrap_or_default();
     let ctx = RequestContext::from_request(req, inner.config.clone(), nonce, inner.env.is_dev());
@@ -652,12 +850,52 @@ async fn global_error_page(inner: &Arc<AppInner>, ctx: &Ctx, e: &Error, source: 
         }
     };
     let metadata = Metadata::new().title("Error").robots("noindex");
-    document_response(inner, ctx, metadata, body, false)
+    document_response(inner, ctx, None, metadata, body, false)
 }
 
 // ---------------------------------------------------------------------------
 // Static rendering and ISR
 // ---------------------------------------------------------------------------
+
+/// A page rendered for the page cache.
+pub(crate) struct StaticRender {
+    /// The whole document, or with `shell` the document up to its tail.
+    pub(crate) html: String,
+    pub(crate) status: u16,
+    /// The page has `dynamic` holes: what finishes `html` for a request.
+    pub(crate) shell: Option<Arc<Shell>>,
+    fragments: FragmentUse,
+}
+
+impl StaticRender {
+    /// Seconds until the page is stale: the page's `REVALIDATE`, or sooner
+    /// when a cached fragment in it lives shorter.
+    pub(crate) fn revalidate(&self, inner: &AppInner, index: usize) -> Option<u64> {
+        let page = inner.routes.pages[index].revalidate.or(inner.config.rendering.revalidate);
+        let fragments = self.fragments.revalidate.map(|d| d.as_secs().max(1));
+        match (page, fragments) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        }
+    }
+
+    /// The cache entry of this render. A shell is registered with the app,
+    /// and the entry carries its token.
+    pub(crate) fn entry(&self, inner: &AppInner, index: usize, path: &str) -> CacheEntry {
+        let def = &inner.routes.pages[index];
+        let mut tags: Vec<String> = def.tags.iter().map(|t| (*t).to_owned()).collect();
+        tags.extend(self.fragments.tags.iter().filter(|t| !def.tags.contains(&t.as_str())).cloned());
+        let mut entry = CacheEntry::new(self.html.clone().into_bytes())
+            .revalidate(self.revalidate(inner, index).map(Duration::from_secs))
+            .tags(tags);
+        if let Some(shell) = &self.shell {
+            let token = crate::random_hex(8);
+            inner.shells.insert(path, &token, shell.clone(), None);
+            entry = entry.meta(SHELL_META, token);
+        }
+        entry
+    }
+}
 
 /// Render a static page to HTML. `Err` carries a response to send instead.
 #[allow(clippy::result_large_err)]
@@ -666,17 +904,24 @@ pub(crate) async fn render_static_html(
     index: usize,
     path: &str,
     params: Params,
-) -> std::result::Result<(String, u16), Response> {
-    let mut ctx_inner = RequestContext::for_static_with(path, params, inner.config.clone(), inner.env.is_dev());
-    if let Some(ctx) = Arc::get_mut(&mut ctx_inner) {
-        ctx.nonce = NONCE_PLACEHOLDER.to_owned();
+) -> std::result::Result<StaticRender, Response> {
+    let mut ctx = RequestContext::for_static_with(path, params, inner.config.clone(), inner.env.is_dev());
+    if let Some(ctx) = Arc::get_mut(&mut ctx) {
+        ctx.nonce = nonce_placeholder().to_owned();
     }
-    let res = render_page(inner, index, ctx_inner, false).await;
-    if res.headers.contains_key("x-nr-static-error") || res.status.is_redirection() {
-        return Err(res);
-    }
-    let status = res.status.as_u16();
-    Ok((res.into_text().await, status))
+    // The body is rendered while it is read, so that is tracked too.
+    let (rendered, fragments) = track_fragments(async {
+        let res = render_page(inner, index, ctx.clone(), false).await;
+        if res.headers.contains_key("x-nr-static-error") || res.status.is_redirection() {
+            return Err(res);
+        }
+        let status = res.status.as_u16();
+        Ok((res.into_text().await, status))
+    })
+    .await;
+    let (html, status) = rendered?;
+    let shell = ctx.shell.lock().unwrap_or_else(|e| e.into_inner()).take().map(Arc::new);
+    Ok(StaticRender { html, status, shell, fragments })
 }
 
 async fn static_params(inner: &Arc<AppInner>, index: usize) -> Option<Arc<Vec<Params>>> {
@@ -699,6 +944,23 @@ fn cache_path(path: &str) -> String {
     if path.len() > 1 { path.trim_end_matches('/').to_owned() } else { path.to_owned() }
 }
 
+/// A static page ready to send.
+struct StaticHit {
+    /// With the request's nonce filled in.
+    html: String,
+    status: u16,
+    shell: Option<Arc<Shell>>,
+    /// `x-nr-cache`
+    cache: &'static str,
+    /// `cache-control` of a complete page sent as it is cached.
+    cache_control: String,
+}
+
+/// What every response that must not be kept anywhere says. `no-store`
+/// alone would do for a current browser; the rest is for intermediaries and
+/// older clients that were known to need it.
+pub(crate) const NO_STORE: &str = "private, no-cache, no-store, max-age=0, must-revalidate";
+
 async fn serve_static(
     inner: &Arc<AppInner>,
     index: usize,
@@ -706,49 +968,115 @@ async fn serve_static(
     nonce: &str,
     partial: Option<(usize, String)>,
 ) -> Response {
-    let res = serve_static_full(inner, index, req, nonce).await;
+    let hit = match serve_static_full(inner, index, req, nonce).await {
+        Ok(hit) => hit,
+        Err(res) => return res,
+    };
     // Client navigations: the browser reports the styles it has, so cached
     // pages send only the CSS it is missing.
     let known: Vec<&str> =
         req.header("x-nr-styles").map(|v| v.split(',').map(str::trim).take(256).collect()).unwrap_or_default();
-    if res.status != http::StatusCode::OK || (partial.is_none() && known.is_empty()) {
-        return res;
-    }
-    let cache = res.headers.get("x-nr-cache").cloned();
-    let html = next_rust_view::restyle_document(&res.into_text().await, inner.routes.stylesheets, &known);
-    let Some((_, key)) = partial else {
-        let mut out =
-            Response::html(html).with_cache_control("private, no-cache, no-store, max-age=0, must-revalidate");
-        if let Some(c) = cache {
-            out.headers.insert("x-nr-cache", c);
-        }
-        return out;
-    };
-    match slice_partial(&html, &key, &known) {
-        Some(region) => {
-            let mut out = Response::html(region);
-            if let Some(c) = cache {
-                out.headers.insert("x-nr-cache", c);
+    let StaticHit { mut html, status, shell, cache, mut cache_control } = hit;
+    // The cached document has the `[analytics]` tags; a client navigation
+    // gets it without them, or is sent to load a page that opted out in full.
+    if crate::tracking::is_navigation(req) {
+        match inner.tracking.for_navigation(html) {
+            Ok((prepared, changed)) => {
+                html = prepared;
+                if changed {
+                    cache_control = NO_STORE.to_owned();
+                }
             }
-            mark_partial(&mut out, &key);
-            out
+            Err(()) => return crate::tracking::full_load(),
         }
-        None => Response::html(html).with_cache_control("private, no-cache, no-store, max-age=0, must-revalidate"),
     }
+    let mut region = None;
+    if status == 200 && (partial.is_some() || !known.is_empty()) {
+        html = next_rust_view::restyle_document(&html, inner.routes.stylesheets, &known);
+        cache_control = NO_STORE.to_owned();
+        if let Some((_, key)) = partial
+            && let Some(cut) = slice_partial(&html, &key, &known, shell.is_none())
+        {
+            html = cut;
+            region = Some(key);
+        }
+    }
+    let mut res = match shell {
+        None => Response::html(html).with_cache_control(&cache_control),
+        // The holes are this visitor's: the response is never stored. What is
+        // shared, the shell, is cached on the server only.
+        Some(shell) => resume_response(inner, index, req, nonce, html, shell, &known)
+            .with_header("x-nr-prerender", "partial")
+            .with_cache_control(NO_STORE),
+    };
+    res.status = http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::OK);
+    res.set_header("x-nr-cache", cache);
+    if let Some(key) = region {
+        mark_partial(&mut res, &key);
+    }
+    res
 }
 
-async fn serve_static_full(inner: &Arc<AppInner>, index: usize, req: &Request, nonce: &str) -> Response {
+/// Send a shell and stream this request's holes after it.
+fn resume_response(
+    inner: &Arc<AppInner>,
+    index: usize,
+    req: &Request,
+    nonce: &str,
+    html: String,
+    shell: Arc<Shell>,
+    known_styles: &[&str],
+) -> Response {
+    let ctx = RequestContext::from_request(req, inner.config.clone(), nonce.to_owned(), inner.env.is_dev());
+    let resume = Resume {
+        html,
+        shell,
+        context: hole_context(inner, &ctx, Some(index)),
+        nonce: Some(nonce.to_owned()),
+        tail: document_tail(inner, nonce),
+        // Crawlers, and everyone when streaming is off, get the holes in place.
+        streaming: inner.config.rendering.streaming && !is_bot(req.header("user-agent")),
+        known_styles: known_styles.iter().map(|s| (*s).to_owned()).collect(),
+    };
+    let stream = resume_document(resume).map(|chunk| Ok::<Bytes, crate::request::BoxError>(Bytes::from(chunk)));
+    let mut res = Response::new(http::StatusCode::OK, Body::Stream(Box::pin(stream)));
+    res.set_header("content-type", "text/html; charset=utf-8");
+    res
+}
+
+#[allow(clippy::result_large_err)]
+async fn serve_static_full(
+    inner: &Arc<AppInner>,
+    index: usize,
+    req: &Request,
+    nonce: &str,
+) -> std::result::Result<StaticHit, Response> {
     let def = &inner.routes.pages[index];
     let path = cache_path(req.path());
     let key = CacheKey::page(&path);
-    let revalidate = def.revalidate.or(inner.config.rendering.revalidate);
 
+    // The token of a cached shell whose holes this process does not have.
+    let mut foreign = None;
     if let Ok(Some(entry)) = inner.page_store.get(&key).await {
-        let stale = entry.is_stale();
-        if stale {
-            spawn_regeneration(inner.clone(), index, path.clone(), req.params().clone());
+        // A shell is only usable with its holes, which live in this process.
+        let local = entry.meta.get(SHELL_META).map(|token| inner.shells.get(&path, token).ok_or(token));
+        match local.transpose() {
+            Ok(local) => {
+                let stale = entry.is_stale();
+                if stale {
+                    spawn_regeneration(inner.clone(), index, path.clone(), req.params().clone());
+                }
+                let html = local.as_ref().and_then(|l| l.html.as_deref()).map(str::as_bytes);
+                return Ok(StaticHit {
+                    html: fill_nonce(html.unwrap_or(&entry.value), nonce),
+                    status: 200,
+                    shell: local.map(|l| l.shell),
+                    cache: if stale { "STALE" } else { "HIT" },
+                    cache_control: static_cache_control(entry.revalidate.map(|d| d.as_secs())),
+                });
+            }
+            Err(token) => foreign = Some(token.clone()),
         }
-        return cached_html(&entry.value, nonce, if stale { "STALE" } else { "HIT" }, revalidate);
     }
 
     if !def.dynamic_params
@@ -758,29 +1086,46 @@ async fn serve_static_full(inner: &Arc<AppInner>, index: usize, req: &Request, n
         let ok = allowed.is_some_and(|list| list.iter().any(|p| params_equal(p, req.params())));
         if !ok {
             let ctx = RequestContext::from_request(req, inner.config.clone(), nonce.to_owned(), inner.env.is_dev());
-            return not_found_page(inner, &ctx).await;
+            return Err(not_found_page(inner, &ctx).await);
         }
     }
 
     match render_static_html(inner, index, &path, req.params().clone()).await {
-        Ok((html, 200)) => {
-            let entry = CacheEntry::new(html.clone().into_bytes())
-                .revalidate(revalidate.map(Duration::from_secs))
-                .tags(def.tags.iter().copied());
-            if let Err(e) = inner.page_store.set(key, entry).await {
-                crate::log::warn(&format!("could not cache {path}: {e}"));
+        Ok(render) if render.status == 200 => {
+            let revalidate = render.revalidate(inner, index);
+            match (&foreign, &render.shell) {
+                // Someone else's entry stays: what was rendered here serves
+                // this process for as long as that entry is there.
+                (Some(token), Some(shell)) => {
+                    inner.shells.insert(&path, token, shell.clone(), Some(render.html.as_str().into()));
+                }
+                _ => {
+                    if let Err(e) = inner.page_store.set(key, render.entry(inner, index, &path)).await {
+                        crate::log::warn(&format!("could not cache {path}: {e}"));
+                    }
+                }
             }
-            cached_html(html.as_bytes(), nonce, "MISS", revalidate)
+            Ok(StaticHit {
+                html: fill_nonce(render.html.as_bytes(), nonce),
+                status: 200,
+                shell: render.shell,
+                cache: "MISS",
+                cache_control: static_cache_control(revalidate),
+            })
         }
-        Ok((html, status)) => cached_html(html.as_bytes(), nonce, "BYPASS", None)
-            .with_status(status)
-            .with_cache_control("private, no-cache, no-store, max-age=0, must-revalidate"),
+        Ok(render) => Ok(StaticHit {
+            html: fill_nonce(render.html.as_bytes(), nonce),
+            status: render.status,
+            shell: render.shell,
+            cache: "BYPASS",
+            cache_control: NO_STORE.to_owned(),
+        }),
         Err(res) => {
             if res.headers.contains_key("x-nr-static-error") {
                 crate::log::error(&format!("static render of {path} failed"));
-                return Response::text("Internal Server Error").with_status(500);
+                return Err(Response::text("Internal Server Error").with_status(500));
             }
-            res
+            Err(res)
         }
     }
 }
@@ -789,15 +1134,32 @@ fn params_equal(a: &Params, b: &Params) -> bool {
     a.len() == b.len() && a.iter().all(|(k, v)| b.value(k) == Some(v))
 }
 
-fn cached_html(bytes: &[u8], nonce: &str, cache: &str, revalidate: Option<u64>) -> Response {
+fn fill_nonce(bytes: &[u8], nonce: &str) -> String {
     let text = String::from_utf8_lossy(bytes);
-    let html =
-        if text.contains(NONCE_PLACEHOLDER) { text.replace(NONCE_PLACEHOLDER, nonce) } else { text.into_owned() };
-    let cc = match revalidate {
+    let placeholder = nonce_placeholder();
+    if text.contains(placeholder) { text.replace(placeholder, nonce) } else { text.into_owned() }
+}
+
+fn static_cache_control(revalidate: Option<u64>) -> String {
+    match revalidate {
         Some(secs) => format!("public, max-age=0, s-maxage={secs}, stale-while-revalidate"),
         None => "public, max-age=0, must-revalidate".to_owned(),
-    };
-    Response::html(html).with_header("x-nr-cache", cache).with_cache_control(&cc)
+    }
+}
+
+/// Marks a path as being revalidated for as long as it lives. A guard rather
+/// than a plain `remove` at the end: a page that panics while it is rendered
+/// would otherwise leave its path marked for the life of the process, and
+/// never be revalidated again.
+struct Revalidating {
+    inner: Arc<AppInner>,
+    path: String,
+}
+
+impl Drop for Revalidating {
+    fn drop(&mut self) {
+        self.inner.revalidating.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.path);
+    }
 }
 
 fn spawn_regeneration(inner: Arc<AppInner>, index: usize, path: String, params: Params) {
@@ -807,19 +1169,65 @@ fn spawn_regeneration(inner: Arc<AppInner>, index: usize, path: String, params: 
             return;
         }
     }
+    let guard = Revalidating { inner: inner.clone(), path: path.clone() };
     tokio::spawn(async move {
-        let def = &inner.routes.pages[index];
-        let revalidate = def.revalidate.or(inner.config.rendering.revalidate);
-        match render_static_html(&inner, index, &path, params).await {
-            Ok((html, 200)) => {
-                let entry = CacheEntry::new(html.into_bytes())
-                    .revalidate(revalidate.map(Duration::from_secs))
-                    .tags(def.tags.iter().copied());
+        let _guard = guard;
+        let render =
+            std::panic::AssertUnwindSafe(render_static_html(&inner, index, &path, params)).catch_unwind().await;
+        match render {
+            Ok(Ok(render)) if render.status == 200 => {
+                let entry = render.entry(&inner, index, &path);
                 let _ = inner.page_store.set(CacheKey::page(&path), entry).await;
                 crate::log::debug(&format!("revalidated {path}"));
             }
+            Err(_) => crate::log::error(&format!("revalidation of {path} panicked; serving stale content")),
             _ => crate::log::warn(&format!("revalidation of {path} failed; serving stale content")),
         }
-        inner.revalidating.lock().unwrap_or_else(|e| e.into_inner()).remove(&path);
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A page stores its scripts at the end of `<body>`, outside every
+    /// layout. Slicing a layout's region out of a pre-rendered page used to
+    /// leave them behind, so navigating to a page whose scripts the browser
+    /// did not have yet delivered it complete and inert — the components
+    /// rendered and nothing answered a click. Only production saw it: a
+    /// dynamically rendered partial is built from the page's own document and
+    /// always carried them.
+    #[test]
+    fn a_sliced_page_keeps_the_scripts_that_live_outside_the_layout() {
+        let html = concat!(
+            "<!DOCTYPE html><html><head><title>t</title></head><body>",
+            "<header>shared</header>",
+            "<!--nr-l:abc--><main><button>in the region</button></main><!--/nr-l:abc-->",
+            r#"<script type="module" data-nr-shim src="/_next-rust/ui.js"></script>"#,
+            r#"<script id="__next_rust_env" type="application/json">{}</script>"#,
+            "</body></html>",
+        );
+        let cut = slice_partial(html, "abc", &[], true).expect("the region is there");
+        assert!(cut.contains("in the region"), "{cut}");
+        assert!(cut.contains(r#"src="/_next-rust/ui.js""#), "the page's script has to travel with it: {cut}");
+        // The shared layout is not sent again — the browser keeps it.
+        assert!(!cut.contains("shared"), "{cut}");
+        // The environment is appended on its own, so it must not be doubled.
+        assert_eq!(cut.matches("__next_rust_env").count(), 1, "{cut}");
+    }
+
+    /// A script that belongs to the region is part of the region, and must
+    /// not be sent a second time after it.
+    #[test]
+    fn a_script_inside_the_region_is_not_repeated() {
+        let html = concat!(
+            "<!DOCTYPE html><html><head></head><body>",
+            r#"<!--nr-l:k--><div><script src="/inside.js"></script></div><!--/nr-l:k-->"#,
+            r#"<script src="/outside.js"></script>"#,
+            "</body></html>",
+        );
+        let cut = slice_partial(html, "k", &[], true).expect("the region is there");
+        assert_eq!(cut.matches("/inside.js").count(), 1, "{cut}");
+        assert_eq!(cut.matches("/outside.js").count(), 1, "{cut}");
+    }
 }

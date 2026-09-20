@@ -1,0 +1,35 @@
+version: 2
+updates:
+  # Cargo.lock for the whole workspace (one lockfile at the root). Version
+  # requirements in Cargo.toml are only widened when a new major needs it.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    versioning-strategy: lockfile-only
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: deps
+    groups:
+      cargo:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  # Actions are pinned to commit SHAs; Dependabot moves the SHA and the
+  # version comment next to it together.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+    groups:
+      actions:
+        patterns: ["*"]
+    ignore:
+      # It publishes no tags, only branches, so Dependabot has no version to
+      # move the pinned SHA to. Re-pin it by hand when it matters.
+      - dependency-name: dtolnay/rust-toolchain

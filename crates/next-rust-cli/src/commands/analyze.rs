@@ -22,6 +22,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let count = |k: &str, v: &str| routes.iter().filter(|r| r[k] == v).count();
     println!("{}", ui::bold("Routes"));
     println!("  static   {}", count("rendering", "static"));
+    println!("  partial  {}", count("rendering", "partial"));
     println!("  dynamic  {}", routes.iter().filter(|r| r["rendering"] == "dynamic" && r["kind"] != "api").count());
     println!("  api      {}", count("kind", "api"));
 

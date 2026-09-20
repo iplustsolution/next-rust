@@ -152,11 +152,7 @@ pub(crate) fn same_origin(req: &Request, allowed: &[String]) -> bool {
     if allowed.iter().any(|a| a == origin) {
         return true;
     }
-    let host = if crate::trust_proxy() {
-        req.header("x-forwarded-host").or_else(|| req.header("host"))
-    } else {
-        req.header("host")
-    };
+    let host = if crate::trust_proxy() { req.header("x-forwarded-host").or_else(|| req.host()) } else { req.host() };
     let origin_host = origin.split_once("://").map(|(_, h)| h);
     matches!((origin_host, host), (Some(o), Some(h)) if o.eq_ignore_ascii_case(h))
 }
@@ -189,8 +185,7 @@ async fn read_input<I: DeserializeOwned>(req: &mut Request) -> Result<(I, Vec<(S
 }
 
 fn local_path(candidate: &str) -> Option<String> {
-    (candidate.starts_with('/') && !candidate.starts_with("//") && !candidate.contains('\\'))
-        .then(|| candidate.to_owned())
+    crate::response::is_local_path(candidate).then(|| candidate.to_owned())
 }
 
 /// The `_redirect` field, when it is a local path.
@@ -201,7 +196,7 @@ fn redirect_field(fields: &[(String, String)]) -> Option<String> {
 /// The page the form was posted from, when the browser says and it is on
 /// this site.
 fn referring_page(req: &Request) -> Option<String> {
-    let host = req.header("host").unwrap_or_default();
+    let host = req.host().filter(|h| !h.is_empty())?;
     req.header("referer")
         .and_then(|r| r.split_once("://").map(|(_, rest)| rest.to_owned()))
         .and_then(|rest| rest.strip_prefix(host).map(str::to_owned))
@@ -229,6 +224,8 @@ fn respond<O: Serialize>(req: &Request, json: bool, fields: &[(String, String)],
             match e.into_kind() {
                 ErrorKind::Redirect { location, .. } => {
                     if json {
+                        // The client runtime navigates to this: never a script URL.
+                        let location = crate::response::safe_location(&location);
                         Response::json(&serde_json::json!({ "ok": false, "redirect": location }))
                     } else {
                         Response::see_other(&location)
@@ -267,17 +264,58 @@ fn flash_back(
 ) -> Response {
     let values: BTreeMap<String, String> = fields
         .iter()
-        .filter(|(k, _)| {
-            !k.starts_with('_')
-                && !k.to_ascii_lowercase().contains("password")
-                && !k.to_ascii_lowercase().contains("token")
-        })
+        .filter(|(k, _)| !k.starts_with('_') && !is_sensitive_field(k))
         .map(|(k, v)| (k.clone(), v.chars().take(256).collect()))
         .collect();
-    let json = serde_json::json!({ "errors": errors, "message": message, "values": values }).to_string();
-    let json: String = json.chars().take(3000).collect();
-    req.cookies().set(Cookie::encoded(FLASH_COOKIE, &json).max_age(std::time::Duration::from_secs(60)));
+    req.cookies().set(Cookie::encoded(FLASH_COOKIE, &flash_json(errors, message, values)).max_age(FLASH_TTL));
     Response::see_other(&error_location(req, fields))
+}
+
+const FLASH_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+/// Browsers drop cookies over about 4096 bytes, name and attributes included.
+const FLASH_MAX_ENCODED: usize = 3600;
+
+/// Fields whose values are never echoed back into the form.
+fn is_sensitive_field(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    ["password", "passwd", "pwd", "token", "secret", "cvv", "cvc", "otp", "card_number", "cardnumber"]
+        .iter()
+        .any(|s| name.contains(s))
+}
+
+/// The flash as JSON that fits in a cookie once percent-encoded. It is
+/// always valid JSON: when it is too large the submitted values go first
+/// (the form comes back empty but the errors show), then the messages are
+/// shortened.
+fn flash_json(
+    mut errors: BTreeMap<String, String>,
+    mut message: Option<String>,
+    values: BTreeMap<String, String>,
+) -> String {
+    let encode = |errors: &BTreeMap<String, String>, message: &Option<String>, values: &BTreeMap<String, String>| {
+        serde_json::json!({ "errors": errors, "message": message, "values": values }).to_string()
+    };
+    let fits = |json: &str| crate::cookies::percent_encode(json).len() <= FLASH_MAX_ENCODED;
+    let json = encode(&errors, &message, &values);
+    if fits(&json) {
+        return json;
+    }
+    let empty = BTreeMap::new();
+    let mut limit = 200;
+    loop {
+        let json = encode(&errors, &message, &empty);
+        if fits(&json) || limit == 0 {
+            return if fits(&json) { json } else { encode(&empty, &None, &empty) };
+        }
+        while errors.len() > 16 {
+            errors.pop_last();
+        }
+        for v in errors.values_mut() {
+            *v = v.chars().take(limit).collect();
+        }
+        message = message.map(|m| m.chars().take(limit).collect());
+        limit /= 2;
+    }
 }
 
 pub(crate) fn decode_flash(raw: &str) -> crate::context::FormState {

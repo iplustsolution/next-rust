@@ -4,7 +4,169 @@ use next_rust::prelude::*;
 
 pub fn content() -> Node {
     fragment![
+        p![
+            code!["next-rust"],
+            " is the command-line tool (CLI: a program you run by typing in a terminal) that creates a project, runs it while you work, builds the production program and checks that everything is in order.",
+        ],
+        div![
+            class("callout"),
+            p![
+                strong!["In plain words. "],
+                "Think of it as the remote control of your project. ",
+                code!["next-rust new"],
+                " makes the project folder, ",
+                code!["next-rust dev"],
+                " shows the site on your own computer and refreshes it as you type, ",
+                code!["next-rust build"],
+                " turns the project into one finished program, and ",
+                code!["next-rust doctor"],
+                " tells you what is wrong when something does not work.",
+            ],
+        ],
+        p!["Every command has the same shape, and ", code!["--help"], " after any command explains it:"],
         pre![code![class("language-text"), r"next-rust <COMMAND> [OPTIONS]"]],
+        p!["A normal working day uses four of them, typed in the project folder:"],
+        pre![code![
+            class("language-sh"),
+            r"next-rust new my-app     # once: create the project folder my-app/
+cd my-app
+next-rust dev            # while you work: http://localhost:3000, rebuilds on every save
+next-rust build          # when you are done: one production program in .next-rust/
+next-rust start          # try that production program locally",
+        ]],
+        h2![id("commands-at-a-glance"), a![class("anchor"), href("#commands-at-a-glance"), "Commands at a glance"]],
+        div![
+            class("table-wrap"),
+            table![
+                thead![tr![th!["command"], th!["what it is for"]]],
+                tbody![
+                    tr![td![a![href("#new-name"), code!["new"]]], td!["create a new project"]],
+                    tr![
+                        td![a![href("#dev"), code!["dev"]]],
+                        td!["run the site on your computer and rebuild on every change"]
+                    ],
+                    tr![td![a![href("#build"), code!["build"]]], td!["make the production program (one file)"]],
+                    tr![td![a![href("#start"), code!["start"]]], td!["run the program that ", code!["build"], " made"]],
+                    tr![
+                        td![a![href("#check"), code!["check"]]],
+                        td!["find mistakes without building or running anything"]
+                    ],
+                    tr![
+                        td![a![href("#routes"), code!["routes"]]],
+                        td!["list every URL of the site and how it is rendered"]
+                    ],
+                    tr![
+                        td![a![href("#analyze"), code!["analyze"]]],
+                        td!["report page sizes and the size of the last build"]
+                    ],
+                    tr![
+                        td![a![href("#generate-kind-route"), code!["generate"]]],
+                        td!["write a starter file for a page, layout, API route, …"]
+                    ],
+                    tr![
+                        td![a![href("#doctor"), code!["doctor"]]],
+                        td!["check the computer and the project for common problems"]
+                    ],
+                    tr![
+                        td![a![href("#docker"), code!["docker"]]],
+                        td!["write the files needed to package the app as a container"]
+                    ],
+                    tr![td![a![href("#editor"), code!["editor"]]], td!["add VS Code snippets and settings"]],
+                    tr![td![a![href("#upgrade"), code!["upgrade"]]], td!["update the framework and this tool"]],
+                    tr![td![a![href("#clean"), code!["clean"]]], td!["delete the build output folder"]],
+                ],
+            ],
+        ],
+        h2![
+            id("files-and-folders"),
+            a![class("anchor"), href("#files-and-folders"), "Files and folders the CLI works with"]
+        ],
+        div![
+            class("table-wrap"),
+            table![
+                thead![tr![th!["path"], th!["what it is"], th!["safe to delete?"]]],
+                tbody![
+                    tr![
+                        td![code!["next-rust.toml"]],
+                        td![
+                            "the project's settings, in the project root (",
+                            a![href("/docs/configuration"), "configuration"],
+                            ")"
+                        ],
+                        td!["yes, the defaults apply; but it is yours, keep it in Git"],
+                    ],
+                    tr![
+                        td![code!["build.rs"]],
+                        td![
+                            "the build script: a tiny Rust file in the project root that Cargo runs before compiling. It reads ",
+                            code!["app/"],
+                            " and generates the route table",
+                        ],
+                        td!["no: without it no page is part of the program (", code!["doctor"], " reports it)"],
+                    ],
+                    tr![
+                        td![code!["src/main.rs"]],
+                        td!["the program's entry point; one line, ", code!["next_rust::app!();"]],
+                        td!["no"],
+                    ],
+                    tr![
+                        td![code!["target/"]],
+                        td![
+                            "Cargo's working folder: compiled pieces, reused so the next build is faster. Can grow to several gigabytes"
+                        ],
+                        td!["yes; the next build recreates it, slowly. Never commit it"],
+                    ],
+                    tr![
+                        td![code!["target/next-rust/"]],
+                        td![
+                            "reports of the last build (",
+                            code!["routes.json"],
+                            ", ",
+                            code!["build.json"],
+                            ") that ",
+                            code!["analyze"],
+                            " reads"
+                        ],
+                        td!["yes"],
+                    ],
+                    tr![
+                        td![code![".next-rust/"]],
+                        td![
+                            "the output folder (",
+                            code!["[build] output"],
+                            "): the finished production binary ",
+                            code![".next-rust/<name>"],
+                            ", and ",
+                            code![".next-rust/dev/"],
+                            " with the dev server's status",
+                        ],
+                        td!["yes, ", code!["next-rust clean"], " does exactly that. Never commit it"],
+                    ],
+                    tr![
+                        td![code!["Dockerfile"], ", ", code![".dockerignore"]],
+                        td!["the recipe for a container image, written by ", code!["next-rust docker"]],
+                        td!["yes, if you do not deploy with Docker"],
+                    ],
+                    tr![
+                        td![code![".vscode/"]],
+                        td!["editor snippets and settings, written by ", code!["new"], " and ", code!["editor"]],
+                        td!["yes"],
+                    ],
+                    tr![
+                        td![code!["~/.next-rust/"], ", ", code!["~/.cache/next-rust"]],
+                        td![
+                            "in your home folder, not the project: the time of the last update check, and the downloaded Tailwind engine"
+                        ],
+                        td!["yes; the engine is downloaded again when needed"],
+                    ],
+                ],
+            ],
+        ],
+        p![
+            "A ",
+            em!["binary"],
+            " is a finished program file the computer runs directly, like an app you double-click. Rust code is compiled into one; nothing else has to be installed to run it.",
+        ],
         p![
             "The CLI depends only on the standard library and the framework's own crates (no argument-parsing library, no async runtime). It drives ",
             code!["cargo"],
@@ -30,19 +192,48 @@ pub fn content() -> Node {
             code![".env.example"],
             ".",
         ],
-        p!["By default the project depends on ", code!["https://github.com/iplustsolution/next-rust"], "."],
+        p![
+            "The name may contain ASCII letters, digits, ",
+            code!["-"],
+            " and ",
+            code!["_"],
+            ", must not start with a digit, and the folder must be empty or not exist yet. The project is styled with Tailwind CSS by default.",
+        ],
+        p![
+            "The project depends on ",
+            code!["next-rust"],
+            " from crates.io (the public Rust package registry) when this CLI's version is published there; otherwise, or with ",
+            code!["--git"],
+            ", on ",
+            code!["https://github.com/iplustsolution/next-rust"],
+            ".",
+        ],
         div![
             class("table-wrap"),
             table![
                 thead![tr![th!["option"], th![]]],
-                tbody![tr![
-                    td![code!["--framework-path <dir>"]],
-                    td!["depend on a local Next Rust checkout (path dependencies) instead"],
-                ],],
+                tbody![
+                    tr![
+                        td![code!["--framework-path <dir>"]],
+                        td!["depend on a local Next Rust checkout (path dependencies) instead"],
+                    ],
+                    tr![
+                        td![code!["--git"]],
+                        td!["depend on the GitHub repository even when a crates.io release exists"]
+                    ],
+                    tr![
+                        td![code!["--no-tailwind"]],
+                        td!["use a plain CSS file (", code!["app/globals.css"], ") instead of Tailwind"],
+                    ],
+                ],
             ],
         ],
         h2![id("dev"), a![class("anchor"), href("#dev"), code!["dev"]]],
-        p!["Development server:"],
+        p![
+            "The development server: it runs the site on your own computer (",
+            code!["http://localhost:3000"],
+            ") and keeps it up to date while you edit. Nothing here is visible to the internet. It:",
+        ],
         ul![
             li!["validates routes on every change and prints readable diagnostics;"],
             li![
@@ -119,6 +310,11 @@ pub fn content() -> Node {
             ],
         ],
         h2![id("build"), a![class("anchor"), href("#build"), code!["build"]]],
+        p![
+            "Makes the production version: one program file that contains the whole site and is ready to copy to a server (",
+            a![href("/docs/deployment"), "deployment"],
+            "). It takes longer than a development build because the compiler spends its time making the file small and fast. Step by step, it:",
+        ],
         ol![
             li!["validates routes (fails on errors);"],
             li![
@@ -162,15 +358,17 @@ pub fn content() -> Node {
                 "shows each step as it happens: routes, compiling with a live progress bar (percentage, units done, what is compiling now, then link-time optimization), embedded files, the pre-render check and the output. In CI logs, where nothing can be redrawn, it prints a line at every 25%. Then it prints a summary:",
             ],
         ],
+        p!["The summary lists each route, the size of its pre-rendered HTML and how it is rendered:"],
         pre![code![
             class("language-text"),
             r"Route                                              Size
 ○ /                                               705 B  1 page
 ○ /blog/:slug                                     2.1 kB  12 pages · revalidate 3600s
+◐ /shop/:slug                                     1.8 kB  40 pages · revalidate 3600s · shell + dynamic holes
 ƒ /api/hello                                             api
 λ /products/:id                                          dynamic segment without generate_params
 
-○  static (pre-rendered)   λ  dynamic (server-rendered)   ƒ  API",
+○  static (pre-rendered)   ◐  partial (pre-rendered shell, per-request holes)   λ  dynamic (server-rendered)   ƒ  API",
         ],],
         div![
             class("table-wrap"),
@@ -187,12 +385,20 @@ pub fn content() -> Node {
             code!["NEXT_RUST_ENV=production"],
             ". ",
             code!["--port"],
-            " overrides the port.",
+            " overrides the port. It fails with a clear message when there is no build yet: run ",
+            code!["next-rust build"],
+            " first. On a server you do not need the CLI at all; you run the binary itself.",
         ],
         h2![id("check"), a![class("anchor"), href("#check"), code!["check"]]],
-        p!["Validates routes and special-file exports, then runs ", code!["cargo check"], "."],
+        p![
+            "Validates routes and special-file exports, then runs ",
+            code!["cargo check"],
+            " (Rust's type check, which finds compile errors without producing a program). It is the quickest way to ask \"is anything broken?\", and a good step for CI (continuous integration: the automated checks that run on every push).",
+        ],
         h2![id("routes"), a![class("anchor"), href("#routes"), code!["routes"]]],
-        p!["Prints the route table."],
+        p![
+            "Prints the route table: every URL the site answers, the file it comes from, and whether it is static (prepared ahead) or dynamic (built per request). Use it to confirm the framework understood your folder names.",
+        ],
         div![
             class("table-wrap"),
             table![
@@ -231,7 +437,9 @@ pub fn content() -> Node {
             code!["api"],
             ", ",
             code!["middleware"],
-            ".",
+            ". It refuses to overwrite a file that exists. ",
+            code!["g"],
+            " is an alias. Run it from the project folder; the route is the URL, written the way the folder is named:",
         ],
         pre![code![
             class("language-sh"),
@@ -308,7 +516,35 @@ next-rust generate loading /dashboard",
             code![".env"],
             " git-ignore, port availability, and route diagnostics.",
         ],
+        p![
+            "Run it first whenever something fails for a reason that does not look like your code. Each check prints a green line or a red one that names the fix, and the command exits with ",
+            code!["1"],
+            " when it found a problem. This is the output of a healthy project (versions and counts differ):",
+        ],
+        pre![code![
+            class("language-text"),
+            r"✓ rustc: rustc 1.89.0
+✓ cargo: cargo 1.89.0
+✓ Rust version supports Next Rust (≥ 1.89)
+✓ configuration: /home/you/my-app/next-rust.toml
+✓ Cargo.toml found
+✓ build.rs found
+✓ src/main.rs includes the generated routes
+✓ next-rust-build is a build dependency
+✓ .env files are git-ignored
+✓ port 3000 is free
+✓ 4 routes, no route errors
+
+Everything looks good.",
+        ]],
         h2![id("docker"), a![class("anchor"), href("#docker"), code!["docker"]]],
+        p![
+            "Docker packages a program with everything it needs into an image that runs the same on any server. A ",
+            code!["Dockerfile"],
+            " is the recipe for that image; ",
+            code![".dockerignore"],
+            " lists what to leave out of it. Both go in the project root.",
+        ],
         p![
             "Writes a multi-stage ",
             code!["Dockerfile"],
@@ -379,8 +615,75 @@ next-rust generate loading /dashboard",
         ],
         p!["The time of the last check is stored in ", code!["~/.next-rust/last-update-check"], "."],
         h2![id("clean"), a![class("anchor"), href("#clean"), code!["clean"]]],
-        p!["Removes the build output directory. It refuses to delete a directory outside the project."],
+        p![
+            "Removes the build output directory (",
+            code![".next-rust/"],
+            " unless ",
+            code!["[build] output"],
+            " says otherwise). It refuses to delete a directory outside the project. It does not touch ",
+            code!["target/"],
+            "; ",
+            code!["cargo clean"],
+            " empties that one.",
+        ],
         h2![id("exit-codes"), a![class("anchor"), href("#exit-codes"), "Exit codes"]],
-        p![code!["0"], " success, ", code!["1"], " failure (diagnostics were printed)."],
+        p![
+            "An exit code is the number a command hands back when it finishes; scripts and CI use it to decide whether to continue. ",
+            code!["0"],
+            " success, ",
+            code!["1"],
+            " failure (diagnostics were printed).",
+        ],
+        h2![id("common-mistakes"), a![class("anchor"), href("#common-mistakes"), "Common mistakes"]],
+        ul![
+            li![
+                strong!["A misspelled flag. "],
+                "Unknown flags are ignored silently, so ",
+                code!["--prot 8080"],
+                " starts on the default port without complaint. Flags accept both ",
+                code!["--port 3000"],
+                " and ",
+                code!["--port=3000"],
+                ".",
+            ],
+            li![
+                strong!["Running a command outside the project. "],
+                "Commands look for ",
+                code!["next-rust.toml"],
+                " and ",
+                code!["Cargo.toml"],
+                " from the current folder upwards. ",
+                code!["cd"],
+                " into the app first (in a workspace: into the app's own folder).",
+            ],
+            li![strong!["start or analyze before build. "], "Both read what ", code!["build"], " wrote.",],
+            li![
+                strong!["A new page that does not appear under plain cargo run. "],
+                "The route table is generated by ",
+                code!["build.rs"],
+                ", so a new file under ",
+                code!["app/"],
+                " needs a rebuild. ",
+                code!["next-rust dev"],
+                " does that for you.",
+            ],
+            li![
+                strong!["Port already in use. "],
+                "Another program (often a forgotten dev server) holds the port. Stop it, or pass ",
+                code!["--port"],
+                "; ",
+                code!["doctor"],
+                " reports this.",
+            ],
+            li![
+                strong!["Committing build output. "],
+                code!["target/"],
+                " and ",
+                code![".next-rust/"],
+                " belong in ",
+                code![".gitignore"],
+                "; new projects have them there already.",
+            ],
+        ],
     ]
 }

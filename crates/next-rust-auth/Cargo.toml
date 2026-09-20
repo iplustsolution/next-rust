@@ -1,0 +1,39 @@
+[package]
+name = "next-rust-auth"
+description = "Authentication and rate-limit building blocks for Next Rust: sealed tokens, __Host- cookies, rotating sessions with reuse detection, argon2id passwords, one-time codes and in-memory/Redis limiters."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["next-rust", "auth", "session", "rate-limit", "argon2"]
+categories = ["web-programming", "authentication"]
+readme = "../../README.md"
+
+[features]
+default = ["password"]
+# argon2id hashing and the password policy.
+password = ["dep:argon2"]
+# Redis backends: `RedisLimiter` and `RedisGrace`.
+redis = ["dep:redis"]
+
+[dependencies]
+next-rust-server = { workspace = true, default-features = false }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+http.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+getrandom.workspace = true
+sha2.workspace = true
+# AES-256-GCM and HKDF from the same family as the workspace's hmac/sha2:
+# pure Rust, no C toolchain.
+aes-gcm.workspace = true
+hkdf.workspace = true
+base64ct.workspace = true
+argon2 = { workspace = true, optional = true }
+redis = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }

@@ -111,6 +111,10 @@ fn static_page(_ctx: Ctx) -> R {
 fn static_form(_ctx: Ctx) -> R {
     Box::pin(async { Ok(form![ActionRef::new(CREATE_USER_ID), button!["Go"]].into_node()) })
 }
+/// A plain search form and nothing else that would need the runtime.
+fn search_form(_ctx: Ctx) -> R {
+    Box::pin(async { Ok(form![action("/search"), input![name("q")]].into_node()) })
+}
 fn static_needs_cookies(ctx: Ctx) -> R {
     Box::pin(async move {
         let _c = Cookies::from_context(&ctx)?;
@@ -266,6 +270,7 @@ fn build_with(env: Environment, tweak: impl FnOnce(&mut Config)) -> TestApp {
             page("/photo/[id]", PageBody::Rust(photo), vec![root_seg(), SegmentDef::default()]),
             modal,
             page("/ip", PageBody::Rust(client_ip_page), vec![root_seg(), SegmentDef::default()]),
+            page("/search-form", PageBody::Rust(search_form), vec![root_seg(), SegmentDef::default()]),
         ],
         apis: vec![ApiDef {
             pattern: "/api/users/[id]",
@@ -345,6 +350,32 @@ async fn renders_page_with_layout_metadata_and_security_headers() {
     assert_eq!(headers["x-content-type-options"], "nosniff");
     assert_eq!(headers["x-global"], "1");
     assert_eq!(headers["x-root-mw"], "1");
+}
+
+#[tokio::test]
+async fn a_plain_form_pulls_in_the_runtime_unless_forms_are_left_to_the_browser() {
+    const RUNTIME: &str = "src=\"/_next-rust/runtime.js?v=";
+    const OFF: &str = "<script id=\"__next_rust_forms\" type=\"application/json\">false</script>";
+    let t = build(Environment::Test);
+    let (_, _, body) = get(&t.app, "/search-form").await;
+    assert!(body.contains("<form action=\"/search\"><input name=\"q\"></form>"), "{body}");
+    assert!(body.contains(RUNTIME) && !body.contains(OFF), "the runtime sends the form: {body}");
+    let (_, _, body) = get(&t.app, "/static").await;
+    assert!(!body.contains(RUNTIME), "nothing on this page needs it: {body}");
+
+    // `[client] enhance_forms = false`: a form alone loads nothing, and a
+    // runtime that is there for a link is told to leave forms alone.
+    let off = build_with(Environment::Test, |c| c.client.enhance_forms = false);
+    let (_, _, body) = get(&off.app, "/search-form").await;
+    assert!(!body.contains(RUNTIME) && !body.contains(OFF), "{body}");
+    let (_, _, body) = get(&off.app, "/").await;
+    let (marker, runtime) = (body.find(OFF).expect("told"), body.find(RUNTIME).expect("runtime"));
+    assert!(marker < runtime, "the switch is in the document before the runtime runs: {body}");
+
+    // Forms are sent as navigations: no runtime without client navigation.
+    let no_nav = build_with(Environment::Test, |c| c.rendering.client_navigation = false);
+    let (_, _, body) = get(&no_nav.app, "/search-form").await;
+    assert!(!body.contains(RUNTIME), "{body}");
 }
 
 #[tokio::test]
@@ -451,6 +482,13 @@ async fn redirects_from_pages_config_and_trailing_slash() {
     let (status, headers, _) = get(&t.app, "/blog/hello/").await;
     assert_eq!(status, 308);
     assert_eq!(headers["location"], "/blog/hello");
+
+    // The trailing-slash redirect never points at another host.
+    for hostile in ["//evil.example/", "///evil.example/", "//evil.example/a/"] {
+        let (status, headers, _) = get(&t.app, hostile).await;
+        let location = headers.get("location").map(|l| l.to_str().unwrap().to_owned()).unwrap_or_default();
+        assert!(status == 404 || (status == 308 && !location.starts_with("//")), "{hostile}: {status} {location}");
+    }
 
     // root middleware rewrite
     let (status, _, body) = get(&t.app, "/old-home").await;
@@ -642,6 +680,18 @@ async fn server_actions() {
     assert!(!cookie.contains("hunter2"), "passwords are never echoed back");
     let res = client.send(form(&url, "name=Ada&_redirect=//evil.com")).await;
     assert_eq!((res.status, res.header("location")), (303, Some("/signup?step=1")), "open redirects are ignored");
+    // Browsers remove tabs and newlines from URLs and read `\` as `/`, so
+    // these are `//evil.com` too.
+    for smuggled in ["/%09/evil.com", "/%0A/evil.com", "/%5Cevil.com", "/ /evil.com"] {
+        let res = client.send(form(&url, &format!("name=Ada&_redirect={smuggled}"))).await;
+        assert_eq!((res.status, res.header("location")), (303, Some("/signup?step=1")), "{smuggled}");
+    }
+    // A huge submission still produces a flash cookie the browser keeps.
+    let big = format!("name=&bio={}&note={}", "é".repeat(4000), "x".repeat(4000));
+    let res = client.send(form(&url, &big)).await;
+    let cookie = res.cookies().into_iter().find(|c| c.starts_with("next_rust_flash=")).unwrap();
+    assert!(cookie.len() < 4000, "flash cookie of {} bytes", cookie.len());
+    assert!(cookie.contains("errors"), "{cookie}");
     // `_redirect` is the success destination: a rejected post goes back to
     // the form, where the flash is shown…
     let res = client.send(form(&url, "name=&_redirect=/welcome")).await;

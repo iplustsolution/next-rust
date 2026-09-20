@@ -13,8 +13,14 @@
 /// file loaded with `import()`), which lets top-level names be mangled too;
 /// a classic script keeps its top-level names, since other scripts may use
 /// them.
-#[cfg(feature = "minify-js")]
 pub fn minify(source: &str, module: bool) -> Result<String, String> {
+    minify_with(source, module, false)
+}
+
+/// [`minify`]; `drop_console` also removes `console.*` calls (`[build]
+/// drop_console`). `debugger` statements always go.
+#[cfg(feature = "minify-js")]
+pub fn minify_with(source: &str, module: bool, drop_console: bool) -> Result<String, String> {
     use oxc_allocator::Allocator;
     use oxc_codegen::{Codegen, CodegenOptions, CommentOptions};
     use oxc_minifier::{CompressOptions, MangleOptions, Minifier, MinifierOptions};
@@ -32,7 +38,7 @@ pub fn minify(source: &str, module: bool) -> Result<String, String> {
         let mut program = parsed.program;
         let options = MinifierOptions {
             mangle: Some(MangleOptions { top_level: module, ..MangleOptions::default() }),
-            compress: Some(CompressOptions::default()),
+            compress: Some(CompressOptions { drop_console, ..CompressOptions::default() }),
         };
         let minified = Minifier::new(options).minify(&allocator, &mut program);
         let comments = CommentOptions { normal: false, jsdoc: false, annotation: true, ..CommentOptions::default() };
@@ -50,7 +56,7 @@ pub fn minify(source: &str, module: bool) -> Result<String, String> {
 }
 
 #[cfg(not(feature = "minify-js"))]
-pub fn minify(_source: &str, _module: bool) -> Result<String, String> {
+pub fn minify_with(_source: &str, _module: bool, _drop_console: bool) -> Result<String, String> {
     Err("next-rust-build was compiled without the `minify-js` feature".into())
 }
 
@@ -79,6 +85,15 @@ mod tests {
         let out = minify(src, false).unwrap();
         assert!(out.contains("helper") && out.contains("visible"), "{out}");
         assert!(minify_any("import x from './x.js'; export const y = x;").is_ok());
+    }
+
+    #[test]
+    fn console_calls_go_only_when_asked() {
+        let src = "export function hydrate(el) { console.log('secret detail', el); debugger; el.hidden = false; }";
+        let kept = minify_with(src, true, false).unwrap();
+        assert!(kept.contains("console.log") && !kept.contains("debugger"), "{kept}");
+        let dropped = minify_with(src, true, true).unwrap();
+        assert!(!dropped.contains("console") && !dropped.contains("secret") && dropped.contains("hidden"), "{dropped}");
     }
 
     #[test]

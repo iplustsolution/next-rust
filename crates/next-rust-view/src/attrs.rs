@@ -266,7 +266,30 @@ pub fn action_result(key: impl AttrText) -> Attr {
     Attr::new("data-nr-result", key.into_attr_text())
 }
 
-/// Keep the scroll position after a client navigation (`Link!`).
+/// On a GET form (a search box, filters): send it as the visitor types,
+/// `debounce_ms` after the last change, instead of on Enter. The request of
+/// the keystroke before is dropped, history is replaced and focus stays where
+/// it is. Pair it with [`swap_target`] so only the results change. Without
+/// JavaScript the form submits on Enter as usual.
+///
+/// ```
+/// use next_rust_view::*;
+/// let html = render_static(form![action("/search"), live_search(250), swap_target("#results")]);
+/// assert_eq!(html, r##"<form action="/search" data-nr-live="250" data-nr-target="#results"></form>"##);
+/// ```
+pub fn live_search(debounce_ms: u32) -> Attr {
+    Attr::new("data-nr-live", debounce_ms.to_string())
+}
+
+/// On a form: when its answer arrives, change only the element matching this
+/// CSS selector (`"#results"`) instead of the page. The element is updated in
+/// place, so what stays keeps its focus, caret and scroll position. When
+/// either side lacks the element the page is swapped as usual.
+pub fn swap_target(selector: impl AttrText) -> Attr {
+    Attr::new("data-nr-target", selector.into_attr_text())
+}
+
+/// Keep the scroll position after a client navigation (`Link!`, or a form).
 pub fn scroll(enabled: bool) -> Attr {
     if enabled { Attr::none() } else { Attr::new("data-nr-scroll", "false") }
 }

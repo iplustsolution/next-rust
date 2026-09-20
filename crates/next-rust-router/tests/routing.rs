@@ -384,6 +384,8 @@ fn matcher_edge_cases() {
     assert_eq!(m.at("/docs/a%2Fb").unwrap().params.get_all("slug").unwrap(), ["a/b"]);
     assert!(m.at("/docs/%FF").is_none(), "invalid utf-8");
     assert!(m.at("/docs/%zz").is_none(), "invalid escape");
+    assert!(m.at("/docs/%+f").is_none() && m.at("/docs/%-1").is_none(), "an escape is two hex digits");
+    assert!(m.at("/docs/a%00.md").is_none(), "NUL never reaches a parameter");
     assert_eq!(m.insert(&[PatternSegment::Static("a".into())], "dup"), Err(InsertError::Duplicate));
     assert_eq!(
         m.insert(&[PatternSegment::CatchAll("x".into()), PatternSegment::Static("y".into())], "bad"),

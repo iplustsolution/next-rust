@@ -522,4 +522,272 @@ mod tests {
             assert!(out.starts_with("<p>hi</p>") && out.ends_with("</form>n"));
         }
     }
+
+    /// xorshift64*: seeded, so a failure is reproducible.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+    }
+
+    const ALPHABET: &[&str] = &[
+        "A",
+        "Z",
+        "a",
+        "z",
+        "0",
+        "9",
+        "-",
+        "_",
+        "+",
+        "/",
+        "=",
+        " ",
+        "\t",
+        "\n",
+        "\0",
+        "~",
+        ".",
+        "%",
+        "é",
+        "日",
+        "\u{feff}",
+        "\u{10ffff}",
+    ];
+
+    /// Nothing an attacker can send verifies, nothing panics, and the reason
+    /// a token is refused is the accurate one.
+    #[test]
+    fn no_generated_token_ever_verifies() {
+        let keys = test_keys();
+        let mut rng = Rng(0xAC10_0BAD_5EED);
+        let mut malformed = 0usize;
+        let mut forged = 0usize;
+        for _ in 0..60_000 {
+            let token: String = (0..rng.below(80)).map(|_| ALPHABET[rng.below(ALPHABET.len())]).collect();
+            match verify_at(&keys, &token, Some(BIND), 0) {
+                Ok(key) => panic!("{token:?} verified as {key:?}"),
+                Err(Rejection::Malformed) => malformed += 1,
+                Err(Rejection::Forged) => forged += 1,
+                Err(other) => panic!("{token:?} -> {other:?}"),
+            }
+            // Without a binding the answer is `Unbound`, and only after the
+            // token is well formed: the two reasons never swap places.
+            let no_bind = verify_at(&keys, &token, None, 0);
+            let shaped = base64url_decode(&token).is_some_and(|b| b.len() == TOKEN_LEN && b[0] == VERSION);
+            assert_eq!(no_bind, Err(if shaped { Rejection::Unbound } else { Rejection::Malformed }), "{token:?}");
+        }
+        assert!(malformed > 1_000 && forged == 0, "malformed {malformed}, forged {forged}");
+
+        // Every base64url string of every length up to 200: only the ones
+        // that are exactly a token's length can get past `Malformed`.
+        for len in 0..200usize {
+            let token: String = (0..len).map(|i| B64[(i * 7 + len) % 64] as char).collect();
+            let got = verify_at(&keys, &token, Some(BIND), 0);
+            assert!(got.is_err(), "{len}: {token} verified");
+            if base64url_decode(&token).is_none_or(|b| b.len() != TOKEN_LEN || b[0] != VERSION) {
+                assert_eq!(got, Err(Rejection::Malformed), "len {len}");
+            }
+        }
+    }
+
+    /// A token that *is* ours, changed in every way an attacker can change it.
+    #[test]
+    fn a_real_token_survives_nothing_but_being_left_alone() {
+        let keys = test_keys();
+        let key = [0x5Au8; KEY_LEN];
+        let token = mint_at(&keys, &key, BIND, 2_000);
+        assert_eq!(verify_at(&keys, &token, Some(BIND), 1_999), Ok(key));
+        // Re-encoding is the identity, so a client cannot re-spell a token.
+        assert_eq!(base64url_encode(&base64url_decode(&token).unwrap()), token);
+
+        // Truncated and extended.
+        for cut in 0..token.len() {
+            assert_eq!(verify_at(&keys, &token[..cut], Some(BIND), 0), Err(Rejection::Malformed), "cut {cut}");
+        }
+        for extra in ["A", "AA", "AAA", "AAAA", "=", "==", "\n", "\0", "é"] {
+            let longer = format!("{token}{extra}");
+            assert_eq!(verify_at(&keys, &longer, Some(BIND), 0), Err(Rejection::Malformed), "+{extra:?}");
+        }
+        // Every character replaced by every other character of the alphabet.
+        let mut changed = 0usize;
+        for i in 0..token.len() {
+            for &c in B64.iter() {
+                let mut spelled: Vec<u8> = token.clone().into_bytes();
+                if spelled[i] == c {
+                    continue;
+                }
+                spelled[i] = c;
+                changed += 1;
+                let other = String::from_utf8(spelled).unwrap();
+                assert!(verify_at(&keys, &other, Some(BIND), 0).is_err(), "byte {i} -> {}", c as char);
+            }
+        }
+        assert_eq!(changed, token.len() * 63);
+
+        // Bindings: another visitor's, none, an empty one.
+        assert_eq!(verify_at(&keys, &token, Some(&BIND.replace('a', "b")), 0), Err(Rejection::Forged));
+        assert_eq!(verify_at(&keys, &token, Some(""), 0), Err(Rejection::Forged));
+        assert_eq!(verify_at(&keys, &token, None, 0), Err(Rejection::Unbound));
+        // A token minted for the empty binding is not a token for any cookie
+        // value — and `binding()` never returns an empty string anyway.
+        let empty_bound = mint_at(&keys, &key, "", 2_000);
+        assert_eq!(verify_at(&keys, &empty_bound, Some(BIND), 0), Err(Rejection::Forged));
+
+        // Another server secret.
+        for secret in [b"another secret, 32 bytes or more!".as_slice(), b"0123456789abcdef0123456789abcdeg"] {
+            let other = Keys::from_secret(secret, true);
+            assert_eq!(verify_at(&other, &token, Some(BIND), 0), Err(Rejection::Forged));
+            assert_eq!(verify_at(&keys, &mint_at(&other, &key, BIND, 2_000), Some(BIND), 0), Err(Rejection::Forged));
+        }
+
+        // Time.
+        assert_eq!(verify_at(&keys, &token, Some(BIND), 2_000), Ok(key));
+        assert_eq!(verify_at(&keys, &token, Some(BIND), 2_001), Err(Rejection::Expired));
+        assert_eq!(verify_at(&keys, &token, Some(BIND), u64::MAX), Err(Rejection::Expired));
+        // An expiry beyond what four bytes hold is clamped, not wrapped.
+        let far = mint_at(&keys, &key, BIND, u64::MAX);
+        assert_eq!(verify_at(&keys, &far, Some(BIND), u64::from(u32::MAX)), Ok(key));
+        assert_eq!(verify_at(&keys, &far, Some(BIND), u64::from(u32::MAX) + 1), Err(Rejection::Expired));
+        // A wrong binding on an expired token is still a forgery: the
+        // signature is checked before anything the token claims is read.
+        assert_eq!(verify_at(&keys, &token, Some(""), 3_000), Err(Rejection::Forged));
+    }
+
+    /// Every version byte: only this version's tokens are even considered,
+    /// and a version change is `Malformed`, not `Forged`.
+    #[test]
+    fn every_version_byte_but_ours_is_refused_before_the_signature() {
+        let keys = test_keys();
+        let key = [3u8; KEY_LEN];
+        let mut raw = base64url_decode(&mint_at(&keys, &key, BIND, 9_000)).unwrap();
+        for v in 0u8..=255 {
+            raw[0] = v;
+            let token = base64url_encode(&raw);
+            let got = verify_at(&keys, &token, Some(BIND), 0);
+            if v == VERSION {
+                assert_eq!(got, Ok(key));
+            } else {
+                assert_eq!(got, Err(Rejection::Malformed), "version {v}");
+            }
+        }
+    }
+
+    #[test]
+    fn base64url_decoding_is_total_and_only_accepts_its_own_spelling() {
+        let mut rng = Rng(0xB64B_64B6_4B64);
+        for _ in 0..60_000 {
+            let s: String = (0..rng.below(40)).map(|_| ALPHABET[rng.below(ALPHABET.len())]).collect();
+            if let Some(bytes) = base64url_decode(&s) {
+                assert_eq!(base64url_encode(&bytes), s, "{s:?} is not its own encoding");
+            }
+        }
+        // Padding, the standard alphabet and whitespace are all refused.
+        for bad in ["=", "A===", "AA==", "A+A", "A/A", "A A", "A\nA", "Aé", "A\u{0}", "A"] {
+            assert_eq!(base64url_decode(bad), None, "{bad:?}");
+        }
+        // Non-canonical trailing bits are refused, the canonical spelling is not.
+        assert_eq!(base64url_decode("AB"), None);
+        assert_eq!(base64url_decode("AA"), Some(vec![0]));
+        assert_eq!(base64url_decode(""), Some(Vec::new()));
+        for len in 0..80usize {
+            let data: Vec<u8> = (0..len).map(|i| (i as u64 * 131 + 7) as u8).collect();
+            assert_eq!(base64url_decode(&base64url_encode(&data)), Some(data));
+        }
+    }
+
+    /// The marker prefix is derived from the server secret, so page content
+    /// cannot ask to be turned into a token. This tries hard to make it.
+    #[test]
+    fn content_that_looks_like_a_marker_is_never_minted() {
+        let s = sealer();
+        let mut rng = Rng(0x0BAD_C0DE_1111);
+        let real = &s.keys.marker_prefix;
+        for _ in 0..4_000 {
+            // A marker in the documented shape, with a prefix the attacker
+            // chose: `nr~<16 hex>~<24 hex>~`.
+            let guess: String = (0..16).map(|_| char::from(b"0123456789abcdef"[rng.below(16)])).collect();
+            let body_key: String = (0..KEY_LEN * 2).map(|_| char::from(b"0123456789abcdef"[rng.below(16)])).collect();
+            let body = format!("<p>nr~{guess}~{body_key}~ and /_next-rust/action/nr~{guess}~{body_key}~</p>");
+            if body.contains(real.as_str()) {
+                continue; // 1 in 2^64; the test would be wrong, not the code.
+            }
+            let out = String::from_utf8(s.replace(body.as_bytes())).unwrap();
+            assert_eq!(out, body, "content minted a token");
+        }
+        // Near misses around the real prefix: the key has to be 24 lowercase
+        // hex digits followed by `~`, and nothing else is touched.
+        let k = "0".repeat(KEY_LEN * 2);
+        for tail in [
+            String::new(),
+            "~".into(),
+            k.clone(),
+            format!("{k}x"),
+            format!("{}~", &k[..KEY_LEN * 2 - 1]),
+            format!("{}A~", &k[..KEY_LEN * 2 - 1]),
+            format!("{}~~", &k[..KEY_LEN * 2 - 1]),
+            format!("{}{k}~", &k[..1]),
+            "ABCDEFABCDEFABCDEFABCDEF~".into(),
+            "00000000000000000000000/~".into(),
+        ] {
+            let body = format!("<p>{real}{tail}</p>");
+            let out = String::from_utf8(s.replace(body.as_bytes())).unwrap();
+            let minted = out != body;
+            let ok = tail.len() > KEY_LEN * 2
+                && tail.as_bytes()[KEY_LEN * 2] == b'~'
+                && tail.as_bytes()[..KEY_LEN * 2].iter().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase());
+            assert_eq!(minted, ok, "{tail:?} -> {out}");
+        }
+    }
+
+    /// A sealed body is the same however the stream is cut up, including
+    /// through the middle of a marker and around near misses.
+    #[tokio::test]
+    async fn every_two_and_three_way_split_seals_identically() {
+        let s = sealer();
+        let keys = s.keys;
+        let p = &keys.marker_prefix;
+        let body = format!(
+            "<a href=\"/_next-rust/action/{m}\">x</a>{p}zz{p}{k}!<form action=\"/_next-rust/action/{m}\"></form>",
+            m = marker(&s, 9),
+            k = "0".repeat(KEY_LEN * 2),
+        );
+        let bytes = body.as_bytes();
+        let whole = s.replace(bytes);
+        assert_ne!(whole, bytes, "the body really does contain markers");
+        let mut runs = 0usize;
+        for i in 0..=bytes.len() {
+            for j in [i, (i + bytes.len()) / 2, bytes.len()] {
+                let parts = [&bytes[..i], &bytes[i..j], &bytes[j..]];
+                let chunks: Vec<Result<Bytes, crate::request::BoxError>> =
+                    parts.iter().map(|c| Ok(Bytes::copy_from_slice(c))).collect();
+                let stream: ByteStream = Box::pin(futures_util::stream::iter(chunks));
+                let sealer = Sealer { keys, binding: BIND.into(), ttl: 60 };
+                let out: Vec<Bytes> = seal_stream(stream, sealer).map(|c| c.unwrap()).collect().await;
+                let out = out.concat();
+                runs += 1;
+                // Tokens carry a fresh nonce, so compare the shape, not the bytes.
+                assert_eq!(out.len(), whole.len(), "split at {i}/{j}");
+                let text = String::from_utf8(out).unwrap();
+                assert!(!text.contains(&marker(&s, 9)), "split at {i}/{j} left a marker: {text}");
+                assert!(text.contains(&format!("{p}zz")), "split at {i}/{j} ate a near miss: {text}");
+                let tokens: Vec<&str> =
+                    text.split("/_next-rust/action/").skip(1).map(|t| t.split('"').next().unwrap()).collect();
+                assert_eq!(tokens.len(), 2, "{text}");
+                for token in tokens {
+                    assert_eq!(verify_at(keys, token, Some(BIND), 0), Ok([9; KEY_LEN]), "split at {i}/{j}");
+                }
+            }
+        }
+        assert!(runs > 100);
+    }
 }

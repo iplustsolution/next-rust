@@ -1,0 +1,39 @@
+# The WebAssembly module this site loads.
+#
+# One module is shared by the whole site: the app's islands and, with
+# `[ui] script = "wasm"`, the shipped components' behaviour all link into this
+# crate. `next-rust build` compiles it for wasm32-unknown-unknown and serves
+# the result from /_next-rust/client/__nrw/islands.wasm.
+#
+# Two lines below are load-bearing and fail quietly when they are wrong:
+#
+#   [lib] crate-type = ["cdylib"]   without it cargo builds an rlib, there is
+#                                   no module, and every island is inert
+#   [workspace]                     cargo reads [profile.*] from the workspace
+#                                   root only, so without this empty table the
+#                                   crate inherits the app's profile and the
+#                                   module is about twice the size
+#
+# `next-rust doctor` checks both.
+[workspace]
+
+[package]
+name = "next-rust-website-islands"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+next-rust-wasm = { path = "../../crates/next-rust-wasm" }
+next-rust-ui-wasm = { path = "../../crates/next-rust-ui-wasm" }
+
+# Size is the whole point: the browser downloads this.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

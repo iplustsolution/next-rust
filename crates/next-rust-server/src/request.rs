@@ -134,12 +134,13 @@ impl Request {
         self.remote_addr
     }
 
-    /// The client's IP address. With `[server] trust_proxy`, the first
-    /// `X-Forwarded-For` entry (the address your proxy saw); otherwise, or
-    /// when that entry is not an address, the peer's. Never trust the header
-    /// without a proxy that overwrites it: clients can send anything.
+    /// The client's IP address. With `[server] trust_proxy`, the address your
+    /// proxy saw: the last `X-Forwarded-For` entry (with `[server]
+    /// trusted_proxies = n`, the n-th from the right). Proxies append to the
+    /// header, so entries further left are whatever the client sent and are
+    /// never used. Otherwise, or when that entry is not an address, the peer's.
     pub fn client_ip(&self) -> Option<IpAddr> {
-        client_ip_from(self.headers(), self.remote_addr, crate::trust_proxy())
+        client_ip_from(self.headers(), self.remote_addr, crate::trusted_proxies())
     }
 
     pub fn extensions(&self) -> &http::Extensions {
@@ -206,8 +207,18 @@ impl Request {
     }
 
     /// Whether the connection (or the trusted proxy) used HTTPS.
+    ///
+    /// `X-Forwarded-Proto` only counts with `[server] trust_proxy`: without a
+    /// proxy that overwrites it, any client can send it.
     pub fn is_secure(&self) -> bool {
-        self.parts.uri.scheme_str() == Some("https") || self.header("x-forwarded-proto") == Some("https")
+        self.parts.uri.scheme_str() == Some("https")
+            || (crate::trust_proxy() && self.header("x-forwarded-proto") == Some("https"))
+    }
+
+    /// The host the request was sent to: the `Host` header, or the
+    /// `:authority` of an HTTP/2 request (which has no `Host` header).
+    pub(crate) fn host(&self) -> Option<&str> {
+        self.header("host").or_else(|| self.parts.uri.authority().map(|a| a.as_str()))
     }
 
     /// Read the whole body (enforcing the body limit: 413 when exceeded).
@@ -290,14 +301,25 @@ fn read_error(e: &(dyn std::error::Error + Send + Sync)) -> Error {
     Error::http(400, format!("failed to read request body: {e}"))
 }
 
-/// See [`Request::client_ip`]; `trust` is `[server] trust_proxy`.
-pub(crate) fn client_ip_from(headers: &HeaderMap, peer: Option<SocketAddr>, trust: bool) -> Option<IpAddr> {
-    if trust
-        && let Some(first) =
-            headers.get("x-forwarded-for").and_then(|v| v.to_str().ok()).and_then(|v| v.split(',').next())
-        && let Some(ip) = parse_ip(first.trim())
-    {
-        return Some(ip);
+/// See [`Request::client_ip`]; `proxies` is `[server] trusted_proxies`, or 0
+/// when `X-Forwarded-For` is not trusted.
+pub(crate) fn client_ip_from(headers: &HeaderMap, peer: Option<SocketAddr>, proxies: usize) -> Option<IpAddr> {
+    if proxies > 0 {
+        // A header sent twice reads as one list, in order.
+        let entries: Vec<&str> = headers
+            .get_all("x-forwarded-for")
+            .iter()
+            .filter_map(|v| v.to_str().ok())
+            .flat_map(|v| v.split(','))
+            .map(str::trim)
+            .filter(|e| !e.is_empty())
+            .collect();
+        // Counted from the right: what the outermost trusted proxy appended.
+        // A shorter list did not pass every proxy; its first entry is the
+        // best there is.
+        if let Some(ip) = entries.get(entries.len().saturating_sub(proxies)).and_then(|e| parse_ip(e)) {
+            return Some(ip);
+        }
     }
     peer.map(|a| a.ip())
 }
@@ -346,20 +368,29 @@ mod tests {
         use std::net::{Ipv4Addr, Ipv6Addr};
         let peer: SocketAddr = "10.0.0.1:443".parse().unwrap();
         let mut h = HeaderMap::new();
-        h.insert("x-forwarded-for", "203.0.113.7, 10.0.0.1".parse().unwrap());
-        assert_eq!(client_ip_from(&h, Some(peer), false), Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))), "untrusted");
-        assert_eq!(client_ip_from(&h, Some(peer), true), Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))));
+        // The client sent `6.6.6.6`; the proxy appended what it saw.
+        h.insert("x-forwarded-for", "6.6.6.6, 203.0.113.7".parse().unwrap());
+        assert_eq!(client_ip_from(&h, Some(peer), 0), Some(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))), "untrusted");
+        assert_eq!(client_ip_from(&h, Some(peer), 1), Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))), "not the spoof");
+        // A CDN in front of a load balancer: two entries are ours.
+        h.insert("x-forwarded-for", "6.6.6.6, 203.0.113.7, 198.51.100.9".parse().unwrap());
+        assert_eq!(client_ip_from(&h, Some(peer), 2), Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))));
+        // The header sent twice is one list; a short list gives its first entry.
+        h.insert("x-forwarded-for", "6.6.6.6".parse().unwrap());
+        h.append("x-forwarded-for", "203.0.113.7".parse().unwrap());
+        assert_eq!(client_ip_from(&h, Some(peer), 1), Some(IpAddr::V4(Ipv4Addr::new(203, 0, 113, 7))));
+        assert_eq!(client_ip_from(&h, Some(peer), 5), Some(IpAddr::V4(Ipv4Addr::new(6, 6, 6, 6))));
         for (value, want) in [
             ("198.51.100.2:5678", IpAddr::V4(Ipv4Addr::new(198, 51, 100, 2))),
             ("[2001:db8::1]:5678", IpAddr::V6("2001:db8::1".parse::<Ipv6Addr>().unwrap())),
             ("[2001:db8::1]", IpAddr::V6("2001:db8::1".parse::<Ipv6Addr>().unwrap())),
         ] {
             h.insert("x-forwarded-for", value.parse().unwrap());
-            assert_eq!(client_ip_from(&h, Some(peer), true), Some(want), "{value}");
+            assert_eq!(client_ip_from(&h, Some(peer), 1), Some(want), "{value}");
         }
         // Garbage falls back to the peer rather than becoming its own client.
         h.insert("x-forwarded-for", "not-an-ip".parse().unwrap());
-        assert_eq!(client_ip_from(&h, Some(peer), true), Some(peer.ip()));
-        assert_eq!(client_ip_from(&HeaderMap::new(), None, true), None);
+        assert_eq!(client_ip_from(&h, Some(peer), 1), Some(peer.ip()));
+        assert_eq!(client_ip_from(&HeaderMap::new(), None, 1), None);
     }
 }

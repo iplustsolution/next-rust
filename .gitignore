@@ -5,3 +5,9 @@
 /website/.next-rust
 .claude/worktrees/
 local.sh
+# Where CI keeps the downloaded Tailwind CLI (NEXT_RUST_CACHE_DIR).
+/.tailwind-cache/
+
+# An islands crate is its own workspace (it builds for wasm32 with its own
+# profile), so its target directory is not the one at the root.
+target/

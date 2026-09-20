@@ -1,0 +1,31 @@
+# The shared WebAssembly module this site loads.
+#
+# `[ui] script = "wasm"` in next-rust.toml puts the UI components' behaviour
+# in Rust; the build compiles this crate to one module the whole site shares,
+# and `start` below wires the components up. An app's own islands are listed
+# here too, one `hydrate_<Name> => path` each.
+#
+# It is deliberately its own workspace: it builds for wasm32 with its own
+# profile, and it must not inherit the framework workspace's.
+[workspace]
+
+[package]
+name = "example-ui-islands"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+next-rust-wasm = { path = "../../../crates/next-rust-wasm" }
+next-rust-ui-wasm = { path = "../../../crates/next-rust-ui-wasm" }
+
+# Size is the whole point: the browser downloads this.
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

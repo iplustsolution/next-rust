@@ -11,6 +11,7 @@ use next_rust_view::{Attr, attrs::raw_attr};
 /// Button![on_press = Press::navigate("/settings"), "Settings"]
 /// Button![on_press = Press::emit("open-cart"), "Cart"]              // `nr:open-cart` event
 /// Button![on_press = Press::open_modal("confirm"), "Delete…"]       // opens `Modal![id = "confirm", ..]`
+/// Button![on_press = Press::toast("Copied"), "Copy"]                // a toast in the page's `Toaster!`
 /// ```
 ///
 /// After a successful action the page refreshes (see [`Press::no_refresh`]);
@@ -30,6 +31,7 @@ enum Kind {
     Script(String),
     OpenModal(String),
     CloseModal,
+    Toast(String),
 }
 
 impl Press {
@@ -54,6 +56,11 @@ impl Press {
     /// focus trapped, page behind inert).
     pub fn open_modal(id: impl Into<String>) -> Self {
         Press { kind: Kind::OpenModal(id.into()), input: None, refresh: true }
+    }
+
+    /// Show a toast in the page's [`Toaster`](struct@crate::Toaster).
+    pub fn toast(message: impl Into<String>) -> Self {
+        Press { kind: Kind::Toast(message.into()), input: None, refresh: true }
     }
 
     /// Close the modal the element is inside.
@@ -89,7 +96,18 @@ impl Press {
             Kind::Action(url) => ("action", url),
             Kind::Navigate(href) => ("navigate", href),
             Kind::Emit(name) => ("emit", name),
-            Kind::OpenModal(id) => ("modal", id),
+            Kind::Toast(message) => ("toast", message),
+            // `commandfor`/`command`: browsers with invoker commands open the
+            // dialog even without the script.
+            Kind::OpenModal(id) => {
+                return vec![
+                    Attr::new("data-nr-ui", "press"),
+                    Attr::new("data-nr-press", "modal"),
+                    Attr::new("data-nr-press-target", id.clone()),
+                    Attr::new("commandfor", id.clone()),
+                    Attr::new("command", "show-modal"),
+                ];
+            }
             Kind::CloseModal => {
                 return vec![Attr::new("data-nr-ui", "press"), Attr::new("data-nr-press", "close-modal")];
             }

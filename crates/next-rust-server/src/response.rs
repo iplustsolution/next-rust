@@ -116,7 +116,11 @@ impl Response {
 
     pub fn redirect_with(location: &str, status: StatusCode) -> Self {
         let mut r = Response::new(status, Body::Empty);
-        match HeaderValue::from_str(location) {
+        // Browsers drop tabs inside URLs, so `/\t/evil.example` would be read
+        // as `//evil.example`. (CR, LF and other control characters are
+        // refused by `HeaderValue` below.)
+        let location = location.replace('\t', "");
+        match HeaderValue::from_str(&location) {
             Ok(v) => {
                 r.headers.insert(LOCATION, v);
             }
@@ -213,6 +217,40 @@ impl Response {
             Err(e) => format!("<body error: {e}>"),
         }
     }
+}
+
+/// Whether `target` is a path on this site: safe to redirect to when it came
+/// from the request (a `next` query parameter, a `_redirect` form field, a
+/// `Referer`). It must start with a single `/` and contain no backslash,
+/// whitespace or control character: browsers read `//host` and `/\host` as
+/// another site, and remove tabs and newlines before parsing, so
+/// `/<tab>/host` is one too.
+///
+/// ```
+/// use next_rust_server::is_local_path;
+/// assert!(is_local_path("/account?tab=billing"));
+/// assert!(!is_local_path("https://evil.example"));
+/// assert!(!is_local_path("//evil.example"));
+/// assert!(!is_local_path("/\\evil.example"));
+/// assert!(!is_local_path("/\t/evil.example"));
+/// ```
+pub fn is_local_path(target: &str) -> bool {
+    target.starts_with('/')
+        && !target.starts_with("//")
+        && !target.chars().any(|c| c == '\\' || c.is_control() || c.is_whitespace())
+}
+
+/// A redirect target handed to script (`location.replace`, the client
+/// runtime's `navigate`): `javascript:`, `vbscript:` and `data:` URLs would
+/// run there, so they become `/`.
+pub(crate) fn safe_location(location: &str) -> &str {
+    let scheme: String = location
+        .chars()
+        .filter(|c| !c.is_ascii_control() && !c.is_whitespace())
+        .take(16)
+        .collect::<String>()
+        .to_ascii_lowercase();
+    if ["javascript:", "vbscript:", "data:"].iter().any(|s| scheme.starts_with(s)) { "/" } else { location }
 }
 
 /// Conversion into a [`Response`].
@@ -317,6 +355,37 @@ impl IntoResponse for Error {
                 r.status = status;
                 r
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_paths() {
+        for ok in ["/", "/a/b?next=1#top", "/caf%C3%A9"] {
+            assert!(is_local_path(ok), "{ok}");
+        }
+        for bad in ["", "a", "https://evil.example", "//evil.example", "/\\evil.example", "/\t/evil.example"] {
+            assert!(!is_local_path(bad), "{bad:?}");
+        }
+        assert!(!is_local_path("/\n/evil.example") && !is_local_path("/ /evil.example"));
+    }
+
+    #[test]
+    fn redirects_drop_tabs_and_refuse_line_breaks() {
+        assert_eq!(Response::redirect("/a\tb").header("location"), Some("/ab"));
+        assert_eq!(Response::redirect("/a\r\nset-cookie: x=1").status.as_u16(), 500);
+    }
+
+    #[test]
+    fn script_urls_are_not_redirect_targets_for_script() {
+        assert_eq!(safe_location("/welcome"), "/welcome");
+        assert_eq!(safe_location("https://example.com/x"), "https://example.com/x");
+        for bad in ["javascript:alert(1)", " JaVa\tScript:alert(1)", "data:text/html,<script>", "vbscript:x"] {
+            assert_eq!(safe_location(bad), "/", "{bad}");
         }
     }
 }

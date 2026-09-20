@@ -1,0 +1,25 @@
+[package]
+name = "next-rust-runtime"
+description = "The Next Rust browser runtime as Rust: client navigation, prefetching, the loading bar, form enhancement and island hydration, compiled to WebAssembly."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["next-rust", "wasm", "client", "runtime", "browser"]
+categories = ["wasm", "web-programming"]
+readme = "../../README.md"
+# Not published: the crate exists to produce `runtime.wasm`, which is checked
+# into `next-rust-server` the way `RUNTIME_JS_MIN` is. Nothing depends on it.
+publish = false
+
+[lib]
+# `rlib` so the workspace can test the parts that are pure logic on the host;
+# `cdylib` is what `wasm32-unknown-unknown` links into `runtime.wasm`.
+crate-type = ["rlib", "cdylib"]
+
+[dependencies]
+
+[dev-dependencies]

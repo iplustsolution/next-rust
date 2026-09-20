@@ -126,15 +126,47 @@ pub fn outside_classes(css: &str, config: &Config) -> Vec<String> {
     let mut classes: BTreeSet<String> = scripts.sources;
     classes.extend(config.tailwind.keep_classes.iter().cloned());
     classes.extend(config.tailwind.safelist.iter().cloned());
+    // Per-page stylesheets read these as names too: attributes, elements,
+    // ids and custom properties a page keeps whatever it renders.
+    classes.extend(config.assets.css_safelist.iter().cloned());
+    classes.extend(
+        config.assets.css_keep_vars.iter().map(|v| if v.starts_with("--") { v.clone() } else { format!("--{v}") }),
+    );
+    classes.extend(config.assets.css_static_attributes.iter().map(|a| format!("!{a}")));
     classes.into_iter().collect()
 }
 
 /// Classes each script adds, by script key (see `next_rust_view::script_key`):
 /// a page that loads the script gets their rules. Scripts a script imports
-/// count towards it.
+/// count towards it. The other names of the stylesheet a script mentions
+/// are listed with them: attributes (`data-open`, also as `dataset.open`),
+/// elements, ids, custom properties and keyframes it may set, so the rules
+/// and variables for them reach the pages that load it.
 pub fn script_classes(css: &str, config: &Config) -> Vec<(String, Vec<String>)> {
     let found = next_rust_assets::css::class_selectors(css);
-    let usage = script_usage(config, &|c| found.all.contains(c));
+    let mut usage = script_usage(config, &|c| found.all.contains(c));
+    // Of this stylesheet, the UI components' and the project's own
+    // (`global_css!`, `css_module!`): their pages go by this list too.
+    let mut names = next_rust_assets::css::dynamic_names(css);
+    names.extend(next_rust_assets::css::dynamic_names(next_rust_ui::UI_CSS.css));
+    for dir in project_dirs(config) {
+        for (_, path) in embeddable_files(&dir) {
+            if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("css"))
+                && let Ok(text) = std::fs::read_to_string(&path)
+            {
+                names.extend(next_rust_assets::css::dynamic_names(&next_rust_assets::css::minify(&text)));
+            }
+        }
+    }
+    for (key, source) in script_sources(config) {
+        let own = usage.by_script.entry(key).or_default();
+        script_words(&source, &mut |w| {
+            // `<dialog`: an element the script creates; `<*`: any element.
+            if names.contains(w.strip_prefix('<').unwrap_or(w)) || w == "<*" {
+                own.insert(w.to_owned());
+            }
+        });
+    }
     let mut out = Vec::new();
     for key in usage.by_script.keys() {
         let mut classes = BTreeSet::new();
@@ -154,6 +186,80 @@ pub fn script_classes(css: &str, config: &Config) -> Vec<(String, Vec<String>)> 
         }
     }
     out
+}
+
+/// The scripts a page can load, by key, with their source.
+fn script_sources(config: &Config) -> Vec<(String, String)> {
+    let is_script = |rel: &str| matches!(rel.rsplit('.').next(), Some("js" | "mjs"));
+    let mut out = Vec::new();
+    for prefix in ["client", "assets"] {
+        for (rel, path) in crate::rust_sources::files(config, prefix) {
+            if is_script(&rel)
+                && let Ok(source) = std::fs::read_to_string(&path)
+            {
+                out.push((format!("{prefix}/{rel}"), source));
+            }
+        }
+    }
+    for (rel, path) in embeddable_files(&config.public_dir()) {
+        if is_script(&rel)
+            && let Ok(bytes) = std::fs::read(&path)
+        {
+            out.push((rel, String::from_utf8_lossy(&bytes).into_owned()));
+        }
+    }
+    out
+}
+
+/// (The same reading as the renderer's, `next_rust_view::css_split`, for
+/// inline scripts.) The names a script may set or read: every word, `data-foo-bar` for
+/// `dataset.fooBar`, and `<tag` for an element it creates
+/// (`createElement("dialog")`, `"<dialog>"` in a string; `<*` when the
+/// element is not a literal).
+fn script_words(text: &str, f: &mut dyn FnMut(&str)) {
+    for word in text.split(|c: char| !(c.is_alphanumeric() || c == '-' || c == '_')) {
+        if !word.is_empty() && word.len() <= 64 {
+            f(word);
+        }
+    }
+    for (at, _) in text.match_indices("dataset.") {
+        let rest = &text[at + "dataset.".len()..];
+        let end = rest.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$')).unwrap_or(rest.len());
+        if end == 0 || end > 64 {
+            continue;
+        }
+        let mut name = String::from("data-");
+        for c in rest[..end].chars() {
+            if c.is_ascii_uppercase() {
+                name.push('-');
+            }
+            name.push(c.to_ascii_lowercase());
+        }
+        f(&name);
+    }
+    let tag_end = |s: &str| s.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-')).unwrap_or(s.len());
+    for (at, _) in text.match_indices('<') {
+        let rest = &text[at + 1..];
+        let end = tag_end(rest);
+        if end > 0 && end <= 64 && rest.as_bytes()[0].is_ascii_alphabetic() {
+            f(&format!("<{}", rest[..end].to_ascii_lowercase()));
+        }
+    }
+    for (at, m) in text.match_indices("createElement") {
+        // `createElement("x")`, `createElementNS(ns, "x")`.
+        let rest = &text[at + m.len()..];
+        let args = rest.strip_prefix("NS").unwrap_or(rest).trim_start();
+        let Some(args) = args.strip_prefix('(') else { continue };
+        let args = &args[..args.find(')').unwrap_or(args.len())];
+        let last = args.rsplit(',').next().unwrap_or(args).trim();
+        let literal = last.strip_prefix(['"', '\'', '`']).filter(|l| l.len() > 1 && l.ends_with(['"', '\'', '`']));
+        match literal {
+            Some(l) if tag_end(&l[..l.len() - 1]) == l.len() - 1 => {
+                f(&format!("<{}", l[..l.len() - 1].to_ascii_lowercase()))
+            }
+            _ => f("<*"),
+        }
+    }
 }
 
 /// Every class something knows: the Tailwind stylesheet (`css`, or the
@@ -200,7 +306,7 @@ pub fn known_classes(css: &str, config: &Config, extra: &[String], tailwind_out:
         }
     }
     for stylesheet in &config.tailwind.stylesheets {
-        if let Ok(text) = std::fs::read_to_string(config.resolve(stylesheet)) {
+        if let Some(text) = crate::rust_sources::stylesheet_source(&config.resolve(stylesheet)) {
             known.extend(next_rust_assets::css::class_selectors(&text).all);
         }
     }
@@ -259,14 +365,8 @@ fn continued(literal: &str) -> String {
 
 /// The directories whose files may name classes.
 fn project_dirs(config: &Config) -> Vec<PathBuf> {
-    let mut dirs = vec![
-        config.app_dir(),
-        config.root.join("src"),
-        config.root.join("styles"),
-        config.public_dir(),
-        config.root.join("client"),
-        config.root.join("assets"),
-    ];
+    let mut dirs = vec![config.app_dir(), config.root.join("src"), config.root.join("styles"), config.public_dir()];
+    dirs.extend(crate::rust_sources::script_dirs(config).into_iter().map(|(_, dir)| dir));
     dirs.extend(config.tailwind.sources.iter().map(|s| config.resolve(s)));
     dirs
 }
@@ -331,8 +431,9 @@ pub fn script_usage(config: &Config, is_class: &dyn Fn(&str) -> bool) -> ScriptU
     let mut usage = ScriptUsage::default();
     let is_script = |rel: &str| matches!(rel.rsplit('.').next(), Some("js" | "mjs"));
     // Scripts that are compiled into the binary can be rewritten.
-    for (prefix, dir) in [("client", config.root.join("client")), ("assets", config.root.join("assets"))] {
-        for (rel, path) in embeddable_files(&dir) {
+    // So can the scripts declared in Rust (`client_script!`, `asset_script!`).
+    for prefix in ["client", "assets"] {
+        for (rel, path) in crate::rust_sources::files(config, prefix) {
             let Ok(source) = std::fs::read_to_string(&path) else { continue };
             let key = format!("{prefix}/{rel}");
             let mut own = BTreeSet::new();
@@ -368,6 +469,56 @@ pub fn script_usage(config: &Config, is_class: &dyn Fn(&str) -> bool) -> ScriptU
             usage.imports.insert(rel.clone(), relative_imports(&rel, &source));
         }
         usage.by_script.insert(rel, own);
+    }
+    // The islands crate (`[build] wasm_islands`): its string literals are
+    // compiled into a WebAssembly module, where nothing can rewrite them, so
+    // a class it names must keep its spelling — exactly the rule `names.rs`
+    // already applies to the `data-*` names in the same crate.
+    //
+    // They go into `sources` rather than `by_script`, so every page gets their
+    // rules: one module is shared by the whole site, and which page a given
+    // island lands on is not knowable here. Without this a class only a wasm
+    // island writes is renamed in the stylesheet and then pruned as unused,
+    // while the module keeps asking for the original name — a breakage that
+    // appears only in release builds.
+    //
+    // Only `src/` is walked: `islands/target` is a full wasm build tree, and
+    // walking it on every build-script run costs a great deal to learn
+    // nothing the crate's own sources do not already say.
+    let islands = config.root.join("islands").join("src");
+    if config.build.wasm_islands && islands.is_dir() {
+        for (_, path) in embeddable_files(&islands) {
+            if path.extension().is_some_and(|e| e == "rs")
+                && let Ok(source) = std::fs::read_to_string(&path)
+            {
+                for literal in crate::names::rust_strings(&source) {
+                    fixed_in(literal, is_class, &mut usage.sources);
+                }
+            }
+        }
+    }
+    // The components' own behaviour, when `[ui] script = "wasm"` serves it
+    // from the module instead of `UI_JS`. It is the islands rule again, for
+    // the framework's crate rather than the app's: `next-rust-ui-wasm` holds
+    // `.nr-select-trigger`, `.nr-calendar` and the rest as literals in a wasm
+    // data section, where nothing can rewrite them.
+    //
+    // With `script = "js"` this is already handled, and invisibly: the server
+    // rewrites `UI_JS` through `next_rust_ui::rename_classes`, so the script
+    // follows the short names. There is no such pass for a module, so the
+    // names have to be kept — which is what `[build] minify_names` is told to
+    // do for the same list in `lib.rs`, and what the components' documented
+    // behaviour promises ("release builds cannot shorten names a wasm module
+    // knows"). Without this the classes are renamed in the markup and the
+    // stylesheet while the module goes on querying the originals, every
+    // component silently stops mounting, and only a release build shows it.
+    //
+    // `sources`, not `by_script`: one module is shared by the whole site, so
+    // every page that renders a component needs the rules.
+    if config.ui.script.is_wasm() {
+        for name in next_rust_ui::UI_WASM_NAMES.lines().map(str::trim).filter(|name| !name.is_empty()) {
+            fixed_in(name, is_class, &mut usage.sources);
+        }
     }
     // Extra Tailwind sources: nothing loads them, so their classes go everywhere.
     for dir in config.tailwind.sources.iter().map(|s| config.resolve(s)) {
@@ -443,8 +594,8 @@ fn reserved_names(config: &Config) -> BTreeSet<String> {
             }
         }
     };
-    let mut dirs = vec![config.app_dir(), config.root.join("src"), config.public_dir(), config.root.join("client")];
-    dirs.push(config.root.join("assets"));
+    let mut dirs = vec![config.app_dir(), config.root.join("src"), config.public_dir()];
+    dirs.extend(crate::rust_sources::script_dirs(config).into_iter().map(|(_, dir)| dir));
     dirs.extend(config.tailwind.sources.iter().map(|s| config.resolve(s)));
     for dir in dirs {
         for (_, path) in embeddable_files(&dir) {
@@ -456,8 +607,13 @@ fn reserved_names(config: &Config) -> BTreeSet<String> {
             match ext.as_str() {
                 // Identifiers never become classes; strings may.
                 "rs" | "js" | "mjs" => {
+                    // A script declared in Rust is one long literal; it is
+                    // read as a script from its written-out copy instead.
+                    let declared = if ext == "rs" { crate::rust_sources::declared_literals(&text) } else { Vec::new() };
                     for literal in string_literals(&text) {
-                        words(literal, &mut names);
+                        if !declared.iter().any(|d| d == literal) {
+                            words(literal, &mut names);
+                        }
                     }
                 }
                 "css" => names.extend(next_rust_assets::css::class_selectors(&text).all),
@@ -466,7 +622,7 @@ fn reserved_names(config: &Config) -> BTreeSet<String> {
         }
     }
     for stylesheet in &config.tailwind.stylesheets {
-        if let Ok(css) = std::fs::read_to_string(config.resolve(stylesheet)) {
+        if let Some(css) = crate::rust_sources::stylesheet_source(&config.resolve(stylesheet)) {
             names.extend(next_rust_assets::css::class_selectors(&css).all);
         }
     }
@@ -475,7 +631,7 @@ fn reserved_names(config: &Config) -> BTreeSet<String> {
 
 /// The contents of the string literals in Rust or JavaScript source
 /// (`"…"`, `'…'`, `` `…` `` and `r#"…"#`).
-fn string_literals(source: &str) -> Vec<&str> {
+pub(crate) fn string_literals(source: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let bytes = source.as_bytes();
     let mut i = 0;
@@ -534,7 +690,7 @@ fn source_counts<'a>(config: &Config, candidates: &[&'a String]) -> HashMap<&'a 
 /// attribute names (`data-nr-class-<name>`) without escaping, and never
 /// changed by the case-insensitive parts of HTML. That gives 27 one-character
 /// and 1,026 two-character names.
-struct ShortNames {
+pub(crate) struct ShortNames {
     first: Vec<u8>,
     rest: Vec<u8>,
     len: u32,
@@ -542,7 +698,7 @@ struct ShortNames {
 }
 
 impl ShortNames {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         let mut rng = seed;
         let mut first: Vec<u8> = (b'a'..=b'z').chain(std::iter::once(b'_')).collect();
         let mut rest: Vec<u8> = (b'a'..=b'z').chain(b'0'..=b'9').chain(*b"_-").collect();
@@ -650,6 +806,60 @@ mod tests {
         assert_eq!(outside_classes(css, &config), ["kept"]);
         assert_eq!(script_classes(css, &config), [("menu.js".to_owned(), vec!["is-open".to_owned()])]);
         assert_eq!(map_source(&script_classes(css, &config)), "&[\n    (\"menu.js\", &[\"is-open\"]),\n]");
+        // The attributes, elements, ids and custom properties a script names
+        // go with it too, so per-page stylesheets keep their rules.
+        std::fs::write(
+            root.join("public/theme.js"),
+            "root.dataset.siteTheme = t; document.createElement('dialog'); el.style.setProperty('--fill', 1); color()",
+        )
+        .unwrap();
+        let themed = "[data-site-theme=x]{--bg:0}dialog{color:red}.bar{width:var(--fill)}details{top:0}";
+        let listed = script_classes(themed, &config);
+        let (key, names) = &listed[0];
+        assert_eq!(key, "theme.js");
+        for name in ["--fill", "<dialog", "data-site-theme"] {
+            assert!(names.iter().any(|n| n == name), "{name} missing from {names:?}");
+        }
+        // `details` is in the stylesheet, not in the script; `color` is in neither.
+        assert!(!names.iter().any(|n| n == "<details" || n == "details" || n == "color"), "{names:?}");
+        config.assets.css_safelist = vec!["data-mode".into()];
+        config.assets.css_keep_vars = vec!["brand".into(), "--accent".into()];
+        config.assets.css_static_attributes = vec!["data-theme".into()];
+        assert_eq!(outside_classes(css, &config), ["!data-theme", "--accent", "--brand", "data-mode", "kept"]);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    /// `[ui] script = "wasm"` serves the components' behaviour from the wasm
+    /// module, whose selectors are literals in a data section that nothing
+    /// can rewrite. So their classes must keep their names and their rules —
+    /// otherwise the markup and the stylesheet say `.ws-` while the module
+    /// queries `.nr-select-trigger`, every component silently fails to mount,
+    /// and it happens only in release builds.
+    #[test]
+    fn a_wasm_ui_module_keeps_the_component_class_names() {
+        let root = std::env::temp_dir().join(format!("nr-ui-wasm-names-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("app")).unwrap();
+        std::fs::write(root.join("app/page.rs"), r#"div![class("mt-4")]"#).unwrap();
+        let css = ".mt-4{margin-top:1rem}.nr-select-trigger{display:none}.nr-ui-js{color:red}";
+
+        let mut config = Config::from_toml_str("[tailwind]\nenabled = true").unwrap();
+        config.root = root.clone();
+        // `script = "js"` is the default: the server rewrites `UI_JS` with the
+        // short names, so the components' classes are shortened like any other.
+        let shortened: Vec<String> = shorten(css, &config, 42, &[]).names.into_iter().map(|(c, _)| c).collect();
+        assert!(shortened.iter().any(|c| c == "nr-select-trigger"), "{shortened:?}");
+        assert!(!outside_classes(css, &config).iter().any(|c| c == "nr-select-trigger"));
+
+        config.ui.script = next_rust_core::config::UiScript::Wasm;
+        let shortened: Vec<String> = shorten(css, &config, 42, &[]).names.into_iter().map(|(c, _)| c).collect();
+        assert_eq!(shortened, ["mt-4"], "only the component classes are spared, not every class");
+        // …and every page that renders a component keeps their rules, because
+        // one module is shared by the whole site.
+        let kept = outside_classes(css, &config);
+        for name in ["nr-select-trigger", "nr-ui-js"] {
+            assert!(kept.iter().any(|c| c == name), "`{name}` is not kept: {kept:?}");
+        }
         std::fs::remove_dir_all(root).unwrap();
     }
 }

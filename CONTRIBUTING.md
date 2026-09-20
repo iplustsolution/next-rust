@@ -72,6 +72,40 @@ Paste the output into `RUNTIME_JS_MIN` and update `RUNTIME_JS_SOURCE_HASH`
 stay in sync and that the minified copy keeps the public attribute and header
 names.
 
+### The WebAssembly runtime
+
+`[client] runtime = "wasm"` serves the same behaviour from
+`crates/next-rust-runtime`, a `no_std` crate compiled to
+`wasm32-unknown-unknown`, behind a shim in
+`crates/next-rust-server/src/wasm_runtime/shim.js`. Three files are generated and
+checked in, exactly as `RUNTIME_JS_MIN` is, so that building an application
+never needs the wasm target or `wasm-opt`:
+
+```sh
+rustup target add wasm32-unknown-unknown     # once
+crates/next-rust-runtime/regenerate.sh       # rebuilds all three
+```
+
+It writes `src/wasm_runtime/runtime.wasm` and `src/wasm_runtime/shim.min.js`; paste the
+hash the failing `minified_shim_matches_source` test prints into
+`RUNTIME_SHIM_SOURCE_HASH`. Two rules matter when changing either side:
+
+- **The opcode numbers in `crates/next-rust-runtime/src/host.rs` are the ABI.**
+  Append, never renumber or reuse: the shim indexes its table with the number
+  the module passes, and a stale cached shim against a new module is silent
+  nonsense rather than an error.
+- **The shim decides nothing.** `the_shim_carries_no_framework_behaviour`
+  fails if it learns any of the framework's own vocabulary — `data-nr-*`,
+  `x-nr-*`, `nr-island`, `__next_rust_env`, `text/event-stream` — because
+  knowing a name means implementing a rule about it, and the whole point is
+  that the rules are in Rust. If you find yourself needing one in JavaScript,
+  the logic that wants it belongs in `next-rust-runtime` instead.
+
+`wasm-opt` must be given `--enable-bulk-memory` and
+`--enable-nontrapping-float-to-int`: rustc emits both by default and
+binaryen's validator otherwise rejects the module and writes nothing, which
+looks exactly like success.
+
 ## What a good pull request has
 
 - **A test.** Framework behaviour is easy to break by accident. For a bug,
@@ -87,6 +121,12 @@ names.
   cargo clippy --workspace --all-targets --all-features -- -D warnings
   cargo test --workspace --all-features
   ```
+
+  CI also checks every feature on its own (`cargo hack check --each-feature`),
+  the minimum Rust version (`cargo +1.89 check --workspace --all-features`), packaging
+  (`cargo package` of every published crate) and licenses (`cargo deny check`, see `deny.toml`). The
+  Redis tests of `next-rust-jobs` and `next-rust-auth` run when `REDIS_URL` is set and
+  skip themselves otherwise.
 
 - **A clear description.** Say what changed and why. If you picked one of
   several possible approaches, a sentence on why helps reviewers a lot.
@@ -120,12 +160,19 @@ to `main` that passes CI is released by the
    every crate, tags `vX.Y.Z` and creates a GitHub release with generated notes.
 3. It commits the new version back to `main` as `release: vX.Y.Z [skip ci]`,
    so pull before you push again.
+4. It builds the `next-rust` command-line tool for Linux (gnu and musl),
+   macOS and Windows and attaches each archive to the GitHub release with a
+   SHA-256 checksum and a build provenance attestation
+   (`gh attestation verify <archive> --repo iplustsolution/next-rust`).
 
-All ten crates always share one version: each crate's `Cargo.toml` uses
+All published crates always share one version: each crate's `Cargo.toml` uses
 `version.workspace = true`, and the workflow refuses to release if they
 differ. If a release stops part-way (for example on a crates.io rate limit),
 the next run publishes the missing crates with that same version before
 anything newer is released.
+
+A new crate is added to the ordered list in `.github/scripts/release-crates.sh`,
+after the crates it depends on; CI's Package job fails until it is there.
 
 To jump to a bigger version (for example `0.1.0`), set `version` under
 `[workspace.package]` and the matching `version = "…"` values in

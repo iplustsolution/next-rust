@@ -76,9 +76,24 @@ These are the mistakes that cost real time, all of them mechanical:
    `[assets] css_safelist`. Don't "fix" a production-only styling bug by turning Tailwind off.
    Pages receive only the rules for classes they render plus those of the scripts they load: a class that
    only a script adds in a way the build can't see must be in `keep_classes`.
+   The same happens to `data-*` attributes, CSS custom properties, `@keyframes`/`@layer` names and the ids the
+   UI components generate (`[build] minify_names`): short random names in the HTML, in every stylesheet and in
+   the scripts the build rewrites. A name only code the build can't read knows (a third-party script from a
+   URL, HTML built in a string at runtime, `"data-" + key`, `dataset[key]`, a regex) needs
+   `[build] keep_names`, or it breaks in release only. Your own ids keep their names unless you list them in
+   `[build] rename_ids` (`"auth-*"` takes a family), because `/page#pricing` and other sites link to them.
 10. **Reach for `next_rust::ui` before hand-building controls.** Buttons, fields, select, date picker, toggles,
     avatars, cards and layout exist (`use next_rust::ui::*;`, see `references/app-api.md#ui-components`).
     Restyle them with `class(..)`; don't copy their markup.
+11. **Motion is built in; don't add page fades or hover transitions by hand.** Pages fade into each other
+    and every hover/focus/class change eases by default (`[animation]` in `next-rust.toml`, see
+    `references/cli-and-config.md#animation`). Your own `transition` or Tailwind `transition-*` utilities
+    win over it; `data-nr-motion="off"` excludes a subtree; `enabled = false` turns it all off.
+12. **Analytics and site verification are config, never app code.** Google/Bing/… verification metas,
+    GA4, Tag Manager, pixels, Plausible/Umami, `ads.txt` and app-link files come from `[verification]` and
+    `[analytics]` in `next-rust.toml` (`references/cli-and-config.md#analytics-and-verification`): CSP, nonce,
+    consent, exclusions and client-navigation page views are handled. Don't paste a vendor snippet into a
+    layout; opt a page out with `Metadata::new().analytics(false)`.
 
 ## Building an app
 
@@ -235,6 +250,33 @@ pub fn Counter(count: i32) -> impl View {
 Island arguments are serialized into the HTML as props, so they are public — never pass secrets. For real
 client code, `#[client(module = "/_next-rust/client/x.js")]` loads an ES module exporting `hydrate(element, props)`.
 
+Browser logic can be **Rust compiled to WebAssembly** instead of JavaScript. Don't set this up by hand —
+`next-rust generate islands` (or `next-rust new --wasm`) writes the `islands/` crate correctly and turns the
+key on, and `next-rust doctor` checks every prerequisite:
+
+```sh
+rustup target add wasm32-unknown-unknown   # once per machine
+next-rust generate islands                 # --ui also moves the shipped components to Rust
+next-rust doctor                           # target, wasm-opt, the crate, and every wiring
+```
+
+Three independent switches, all defaulting to JavaScript: `[build] wasm_islands` (your own `islands/` crate,
+reached with `#[client(wasm = "Name")]`), `[ui] script = "wasm"` (the shipped components — needs
+`start: next_rust_ui_wasm::boot` in the crate's `islands!`) and `[client] runtime = "wasm"` (the framework's
+runtime, which needs **nothing** from the project: it ships prebuilt inside `next-rust-server`). Any of them
+adds `'wasm-unsafe-eval'` to the CSP automatically.
+
+An island is two lines that must agree exactly and case-sensitively: `#[client(wasm = "Counter")]` on the
+server, `hydrate_Counter => crate::counter,` in the crate's `next_rust_wasm::islands! { … }`.
+
+**Nothing here fails a build** — a missing target, a missing crate, an island the module doesn't export are
+all `NR03xx` warnings, and the build then ships a binary with the behaviour left out. The symptom is a
+component that renders, looks finished and does nothing, with no console error. So read the build warnings,
+and run `next-rust doctor` when a page looks right and is inert. **A readable JavaScript shim always remains,
+and wasm is obfuscation, not a security boundary**: the module is downloadable and disassemblable and its
+strings are plain text, so secrets stay on the server. `/docs/wasm-islands`,
+`references/cli-and-config.md#webassembly` and `references/diagnostics.md`.
+
 ### Styling
 
 With `[tailwind] enabled = true` (the default for new projects) just write classes; the CSS for exactly the
@@ -242,10 +284,16 @@ classes you use is generated and inlined. Otherwise `global_css!("globals.css")`
 `css_module!("card.module.css")` for scoped classes (`styles.card_title`, a compile error if the class
 doesn't exist). `asset!("fonts/inter.woff2")` returns a content-hashed URL.
 
+Scripts and CSS can live in Rust instead of `.js`/`.css` files: `client_script!("x.js", r#"…"#)` (then
+`#[client(script = "x.js")]`), `asset_script!("js/site.js", r#"…"#)` (then `asset!("js/site.js")`) and
+`stylesheet!(r#"…"#)` in a file listed in `[tailwind] stylesheets`. `[build] inline_assets = true` writes all
+scripts into the page (no `.js` requests; CSP nonces and client navigation keep working). Details in
+`references/app-api.md` under "Styling, assets and fonts".
+
 ### Static, dynamic and ISR
 
 ```rust
-pub const RENDERING: Rendering = Rendering::Static;   // Static | Dynamic | Auto (default)
+pub const RENDERING: Rendering = Rendering::Static;   // Static | Dynamic | Partial | Auto (default)
 pub const REVALIDATE: u64 = 60;                       // seconds; serve stale, re-render in background
 pub const TAGS: &[&str] = &["posts"];                 // for revalidate_tag("posts")
 
@@ -256,6 +304,20 @@ pub async fn generate_params() -> Vec<Params> {       // takes no arguments
 
 `next_rust::revalidate_path("/blog/hello").await` and `revalidate_tag("posts").await` invalidate on demand.
 For cached data, `cache(key, CacheOptions::revalidate(60).tag("posts"), || async { … }).await`.
+
+A mostly static page with a per-visitor corner stays static: wrap the corner in a hole. The shell is cached
+like any static page and sent first; holes run per request and stream in (partial prerendering —
+`references/app-api.md`, "Partial prerendering"):
+
+```rust
+dynamic(p!["Loading…"], |ctx| async move {            // ctx: the request (ctx.cookies, ctx.extract::<Query>()?)
+    Ok::<_, Error>(p![format!("Hi {}", ctx.cookies.get("user").unwrap_or_default())])
+})
+```
+
+Never take `Cookies`/`Headers`/`Query`/… as arguments of such a page or its layouts — read them inside the
+hole. `cached(key, CacheOptions::revalidate(300).tag("posts"), || async { view }).await?` caches a rendered
+fragment.
 
 ## Verify what you built
 
@@ -303,7 +365,9 @@ Errors come with a code and a `help:` line — read them, they name the fix. The
 | `NR0210` | A server action takes at most two arguments (`ActionContext`, input). |
 
 `references/diagnostics.md` lists every code with the usual cause. `next-rust doctor` checks the environment
-(toolchain, config, port, `.env` in `.gitignore`) when something looks wrong outside your code.
+(toolchain, config, port, `.env` in `.gitignore`, and the whole WebAssembly setup) when something looks wrong
+outside your code. The `NR03xx` family is the exception to everything above: those are **warnings on a build
+that succeeded**, and their symptom is a page that renders correctly and does nothing.
 
 ## Working on the framework itself
 
@@ -330,7 +394,7 @@ Read the one you need; they're written to be skimmed with a search:
 
 | File | Read it when |
 | --- | --- |
-| `references/app-api.md` | You need an exact signature, extractor, response helper, metadata setter, cookie/session API, middleware, SSE, cache or testing detail. |
+| `references/app-api.md` | You need an exact signature, extractor, response helper, metadata setter, cookie/session API, middleware, SSE, cache, background job (`#[job]`, `#[cron]`, `JobRunner`) or testing detail. |
 | `references/cli-and-config.md` | You need a CLI flag, a `next-rust.toml` key and its default, an environment variable, or what `next-rust build` actually does. |
 | `references/framework-internals.md` | You are changing the framework: crate map, dependency rules, where each concern lives, the client-runtime procedure, codegen, CI and release automation. |
 | `references/diagnostics.md` | A build failed with an `NR0xxx` code. |

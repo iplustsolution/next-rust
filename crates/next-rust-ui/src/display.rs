@@ -5,7 +5,7 @@ use next_rust_view::{Element, Node, View};
 
 use crate::button::{common_methods, with_parts};
 use crate::icons::{self, icon};
-use crate::{Color, Extra, Radius, Size, Variant, apply, attr, flag, next_id, root, styled};
+use crate::{Color, Extra, Radius, Size, Variant, apply, attr, first_element, flag, next_id, root, styled, trim_float};
 
 /// A message that stands out: information, a success, a warning, an error.
 ///
@@ -334,10 +334,6 @@ fn percent(value: f64, min: f64, max: f64) -> (f64, String) {
     let span = (max - min).max(f64::EPSILON);
     let ratio = ((value - min) / span).clamp(0.0, 1.0);
     ((ratio * 1000.0).round() / 10.0, trim_float(value))
-}
-
-fn trim_float(v: f64) -> String {
-    if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
 }
 
 impl View for Progress {
@@ -772,23 +768,6 @@ impl View for EmptyState {
         }
         styled(el)
     }
-}
-
-/// The first element among the nodes, looking inside fragments (a
-/// component renders as a fragment of its stylesheet and its element).
-fn first_element(nodes: &mut [Node]) -> Option<&mut Element> {
-    for node in nodes {
-        match node {
-            Node::Element(el) => return Some(el),
-            Node::Fragment(inner) => {
-                if let Some(el) = first_element(inner) {
-                    return Some(el);
-                }
-            }
-            _ => {}
-        }
-    }
-    None
 }
 
 /// Side of the anchor a [`Tooltip`] shows on.

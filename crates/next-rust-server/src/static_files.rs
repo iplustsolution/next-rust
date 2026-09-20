@@ -37,7 +37,10 @@ pub async fn resolve_safe(root: &Path, url_path: &str) -> Option<(PathBuf, std::
     }
     let root = tokio::fs::canonicalize(root).await.ok()?;
     let full = tokio::fs::canonicalize(root.join(&rel)).await.ok()?;
-    if !full.starts_with(&root) {
+    // The name the file really has: a link, a Windows short name
+    // (`ENV~1`) or a case-insensitive alias must not reach a hidden file.
+    let hidden = |inside: &Path| inside.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'));
+    if full.strip_prefix(&root).map_or(true, hidden) {
         return None;
     }
     let meta = tokio::fs::metadata(&full).await.ok()?;

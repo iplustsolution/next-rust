@@ -22,8 +22,18 @@ pub struct Avatar {
     radius: Option<Radius>,
     color: Color,
     bordered: bool,
+    status: Option<AvatarStatus>,
     unstyled: bool,
     extra: Extra,
+}
+
+/// Presence shown as a dot on an [`Avatar`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AvatarStatus {
+    Online,
+    Away,
+    Busy,
+    Offline,
 }
 
 impl Avatar {
@@ -72,6 +82,11 @@ impl Avatar {
         self.bordered = v;
         self
     }
+    /// A presence dot in the corner (its name is read out too).
+    pub fn status(mut self, v: AvatarStatus) -> Self {
+        self.status = Some(v);
+        self
+    }
 }
 
 /// Initials of a name: "Ada Lovelace" → "AL", "ada" → "A".
@@ -95,6 +110,7 @@ impl View for Avatar {
             self.color.class(),
             self.radius.map(Radius::class).unwrap_or(""),
             if self.bordered { "nr-avatar-bordered" } else { "" },
+            if self.status.is_some() { "nr-avatar-with-status" } else { "" },
         ];
         let mut el = root("span", &classes, self.unstyled, class);
         match (&self.src, &self.name) {
@@ -128,6 +144,20 @@ impl View for Avatar {
                     .with(attr("alt", self.name.unwrap_or_default()))
                     .with(attr("loading", "lazy"))
                     .with(attr("decoding", "async"))
+                    .into_node(),
+            );
+        }
+        if let Some(status) = self.status {
+            let (class, text) = match status {
+                AvatarStatus::Online => ("nr-avatar-status nr-c-success", "Online"),
+                AvatarStatus::Away => ("nr-avatar-status nr-c-warning", "Away"),
+                AvatarStatus::Busy => ("nr-avatar-status nr-c-danger", "Busy"),
+                AvatarStatus::Offline => ("nr-avatar-status nr-c-default", "Offline"),
+            };
+            el.children.push(
+                Element::new("span")
+                    .with(attr("class", class))
+                    .with(Element::new("span").with(attr("class", "nr-sr")).with(text))
                     .into_node(),
             );
         }

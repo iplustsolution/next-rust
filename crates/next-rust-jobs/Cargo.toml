@@ -1,0 +1,29 @@
+[package]
+name = "next-rust-jobs"
+description = "Background jobs for Next Rust: durable queues with retries, scheduled (cron) tasks with a leader lock, in-memory and Redis backends."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["next-rust", "jobs", "queue", "cron", "redis"]
+categories = ["web-programming", "asynchronous"]
+readme = "../../README.md"
+
+[features]
+default = []
+# The reliable Redis backend. Off by default: it is the only thing here that
+# pulls in a dependency the framework does not already have.
+redis = ["dep:redis"]
+
+[dependencies]
+tokio = { workspace = true, features = ["rt", "time", "sync", "macros"] }
+serde.workspace = true
+serde_json.workspace = true
+getrandom.workspace = true
+redis = { workspace = true, optional = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time"] }

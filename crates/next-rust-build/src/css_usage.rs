@@ -29,6 +29,7 @@ pub(crate) const SKIP: &[&str] = &[
 pub fn collect(config: &Config) -> Vec<String> {
     let mut names = BTreeSet::new();
     let mut dirs = vec![config.app_dir(), config.root.join("src"), config.public_dir(), config.root.join("client")];
+    dirs.extend(config.generated.iter().map(|g| g.join("client")));
     dirs.extend(config.tailwind.sources.iter().map(|s| config.resolve(s)));
     for dir in dirs {
         for (_, path) in embeddable_files(&dir) {
@@ -38,6 +39,29 @@ pub fn collect(config: &Config) -> Vec<String> {
             }
             let Ok(bytes) = std::fs::read(&path) else { continue };
             words(&String::from_utf8_lossy(&bytes), &mut names);
+        }
+    }
+    // The islands crate (`[build] wasm_islands`): its string literals are
+    // compiled into a WebAssembly module, where nothing can rewrite them, so
+    // a class it names must survive pruning — the same rule `class_names.rs`
+    // applies when it decides which classes may be renamed, and `names.rs`
+    // applies to the `data-*` names in the same crate.
+    //
+    // Without this, a class only a wasm island writes is pruned out of the
+    // stylesheet as unused while the module goes on asking for it: a
+    // release-only breakage with nothing in the build output to explain it.
+    //
+    // Only `src/` is walked. `islands/target` is a full wasm build tree and
+    // holds nothing the crate's own sources do not.
+    if config.build.wasm_islands {
+        for (_, path) in embeddable_files(&config.root.join("islands").join("src")) {
+            if path.extension().is_some_and(|e| e == "rs")
+                && let Ok(source) = std::fs::read_to_string(&path)
+            {
+                for literal in crate::names::rust_strings(&source) {
+                    words(literal, &mut names);
+                }
+            }
         }
     }
     names.extend(config.assets.css_safelist.iter().cloned());

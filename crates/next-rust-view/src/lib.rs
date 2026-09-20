@@ -35,14 +35,16 @@ pub mod style;
 mod tags;
 
 pub use attrs::*;
-pub use components::{Children, ImageProps, LinkProps, Slots, each, fragment_of, island, raw_html, suspense, when};
-pub use css_split::restyle_document;
+pub use components::{
+    Children, ImageProps, LinkProps, Slots, each, fragment_of, hole, island, raw_html, suspense, when,
+};
+pub use css_split::{restyle_document, set_framework_scripts, set_script_names};
 pub use escape::{escape_attr, escape_text, is_safe_url};
 pub use metadata::Metadata;
-pub use node::{Attr, AttrValue, Element, IntoViewResult, Node, Part, Suspense, View};
+pub use node::{Attr, AttrValue, Element, Hole, HoleContext, HoleFn, IntoViewResult, Node, Part, Suspense, View};
 pub use render::{
-    DocumentParts, RenderFlags, STREAMING_RUNTIME, render_static, render_to_string, resolve, script_key,
-    stream_document,
+    DocumentParts, RenderFlags, Rendered, Resume, STREAMING_RUNTIME, Shell, render_fragment, render_shell,
+    render_static, render_to_string, resolve, resolve_with, resume_document, script_key, stream_document,
 };
 pub use style::{CssClass, Stylesheet};
 pub use tags::{TAGS, VOID_TAGS};

@@ -1,0 +1,35 @@
+# The component showcase.
+#
+# Everything here is the default but one line, and that line is what this
+# example is for.
+
+[ui]
+# Where the components' browser behaviour comes from.
+#
+#   "js"    the component script at /_next-rust/ui.js  (the default)
+#   "wasm"  the same behaviour in Rust, compiled into the shared
+#           WebAssembly module, with a two-line loader in the page
+#
+# The markup, the stylesheet, the ARIA and the keyboard contract are
+# identical either way, and every component still works with no script at
+# all — this is a delivery choice, not a behaviour one. It costs bytes
+# rather than saving them; the components page of the documentation has the
+# measurements.
+#
+# It is on here because that is what this example is: the one place in the
+# repository where the Rust component layer is exercised end to end. The
+# cost is that every build of it compiles `islands/` for wasm32, which takes
+# a few seconds and needs the target installed — a missing target is a
+# warning, never a failed build, and the page falls back to the script.
+#
+# `islands/src/lib.rs` next door is the whole of it: its `islands!` names
+# `start: next_rust_ui_wasm::boot`, which is what wires the components up.
+# Set this to "js" to go back to the JavaScript path.
+script = "wasm"
+
+# `[build] wasm_islands` is deliberately *not* set here. It is the key for an
+# app's own `#[client(wasm = "…")]` islands, and this example has none: the
+# module it loads carries nothing but the kit. `[ui] script = "wasm"` already
+# builds the module and calls its `start`, and turning the other key on as
+# well only earns an NR0311 — "the module exports no island" — which is true
+# and would be noise.

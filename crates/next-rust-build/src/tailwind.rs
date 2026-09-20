@@ -247,9 +247,25 @@ pub fn input_css(config: &Config) -> String {
     css
 }
 
-/// The `[tailwind] stylesheets`, resolved against the config file, in order.
-pub fn stylesheet_paths(config: &Config) -> Vec<PathBuf> {
+/// The `[tailwind] stylesheets` as configured, resolved against the config
+/// file, in order: `.css` files and Rust files holding `stylesheet!(…)`.
+pub fn configured_stylesheets(config: &Config) -> Vec<PathBuf> {
     config.tailwind.stylesheets.iter().map(|s| config.resolve(s)).collect()
+}
+
+/// The CSS files Tailwind imports for `[tailwind] stylesheets`, in order. A
+/// Rust file stands for the CSS the build wrote out of it (see
+/// `rust_sources`).
+pub fn stylesheet_paths(config: &Config) -> Vec<PathBuf> {
+    configured_stylesheets(config)
+        .into_iter()
+        .map(|sheet| match &config.generated {
+            Some(generated) if sheet.extension().is_some_and(|e| e == "rs") => {
+                generated.join("styles").join(crate::rust_sources::stylesheet_file(&sheet))
+            }
+            _ => sheet,
+        })
+        .collect()
 }
 
 /// Directories Tailwind scans; a change in any of them regenerates the CSS.

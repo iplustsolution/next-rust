@@ -4,9 +4,9 @@ use crate::ui::{ACTIONS, BUTTON, BUTTON_PRIMARY};
 pub fn NotFound() -> impl View {
     main![
         id("content"),
-        class("mx-auto max-w-[560px] px-6 py-30 text-center"),
+        class("mx-auto max-w-[35rem] px-6 py-30 text-center"),
         p![class("font-mono text-sm/[normal] font-semibold tracking-[0.2em] text-muted"), "404"],
-        h1![class("mt-3.5 mb-4 text-[clamp(30px,5vw,44px)] font-bold tracking-[-0.035em]"), "This page doesn't exist"],
+        h1![class("mt-3.5 mb-4 text-[clamp(1.875rem,5vw,2.75rem)] font-bold tracking-[-0.035em]"), "This page doesn't exist"],
         p![class("text-muted"), "It may have moved when the docs were reorganized. Search usually finds it."],
         div![
             class(ACTIONS),

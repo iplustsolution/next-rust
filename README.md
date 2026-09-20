@@ -402,6 +402,9 @@ it:
   on-demand revalidation, and streaming with `loading.rs`. Next Rust works
   out which pages can be static, and `next-rust routes` tells you why the
   others aren't.
+  Partial prerendering keeps a page static around its per-visitor parts:
+  the cached shell is sent at once, and `dynamic(..)` holes stream in after
+  it, each rendered for the request.
 - **Backend:** API routes, middleware at any level of the tree, cookies,
   sessions, CORS, rate limiting, server-sent events and WebSockets.
 - **Frontend:** HTML is escaped unless you explicitly ask for raw output.
@@ -410,6 +413,10 @@ it:
   they use client navigation or an interactive island, and even then it's a
   single ~4 KB script. Navigating between pages that share layouts renders
   and sends only the part below them; the layouts stay on screen.
+- **Analytics & SEO:** metadata, sitemap, robots and feeds in Rust; search-engine
+  verification, Google Analytics, Tag Manager, pixels and Plausible/Umami from
+  `next-rust.toml` alone (`[verification]`, `[analytics]`), with consent mode,
+  excluded paths and the CSP handled by the framework.
 - **Tooling:** `new`, `dev`, `build`, `start`, `routes`, `check`, `doctor`,
   `generate` and `docker`.
 
@@ -427,8 +434,9 @@ crates/
 ├── next-rust-view     the HTML macros and the streaming renderer
 ├── next-rust-ui       ready-made components (buttons, fields, select, date picker, …)
 ├── next-rust-icons    every Lucide icon
+├── next-rust-auth     optional auth kit: sealed tokens, sessions, passwords, codes, rate limits
 ├── next-rust-server   HTTP, middleware, rendering pipeline, caching, actions
-├── next-rust-macros   #[client], #[server_action], css_module!, asset!
+├── next-rust-macros   #[client], #[server_action], css_module!, asset!, client_script!, stylesheet!
 ├── next-rust-cache    cache stores
 ├── next-rust-core     config, .env loading, diagnostics
 └── next-rust-assets   hashing, MIME types, CSS processing

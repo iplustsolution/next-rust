@@ -29,11 +29,13 @@ both crate lists in `.github/workflows/release.yml`; the release stops at "Pick 
 | `next-rust-view` | The HTML DSL: elements, attributes, escaping, metadata, streaming renderer, short class names. |
 | `next-rust-ui` | Ready-made components (buttons, fields, select, date picker, toggles, avatars, cards, layout), their stylesheet and browser script, all as Rust. |
 | `next-rust-icons` | Every Lucide icon, generated into `src/generated.rs` by `examples/generate.rs`. |
+| `next-rust-auth` | Optional auth kit (`next_rust::auth`, feature `auth`): sealed tokens, `__Host-` cookies, rotating sessions over a `SessionStore` trait, argon2id passwords, one-time codes, in-memory/Redis limiters. Depends only on `next-rust-server`. Redis tests run when `REDIS_URL` is set. |
 | `next-rust-router` | Filesystem routing: scan, segment parsing, validation, ranking, the trie matcher. |
 | `next-rust-cache` | Cache abstraction with in-memory and filesystem stores, tags, revalidation. |
+| `next-rust-jobs` | Background jobs (`next_rust::jobs`): queues with retries and dead letters, cron with a per-tick lock, in-memory and Redis (`redis` feature) backends. Depends on no other framework crate; the `#[job]`/`#[cron]` macros live in `next-rust-macros`, the `AppBuilder::jobs` glue in `next-rust`. |
 | `next-rust-core` | Config, `.env` loading, environment/rendering modes, diagnostics, brand strings. |
 | `next-rust-assets` | Content hashing, MIME detection, CSS minification, CSS-module scoping, CSS pruning and class renaming. |
-| `next-rust-macros` | `#[client]`, `#[server]`, `#[server_action]`, `css_module!`, `global_css!`, `asset!`, `action!`. |
+| `next-rust-macros` | `#[client]`, `#[server]`, `#[server_action]`, `css_module!`, `global_css!`, `asset!`, `action!`, `client_script!`, `asset_script!`, `stylesheet!`. |
 | `next-rust-build` | Everything `build.rs` does: analysis, diagnostics, codegen, Tailwind compilation, class shortening. |
 | `next-rust-cli` | The `next-rust` binary. |
 
@@ -54,8 +56,8 @@ These are architectural constraints, not preferences — breaking one changes wh
 - New external dependencies need a row in the dependency table on the Architecture documentation page, and
   default features off wherever possible.
 
-Publish order (which is also dependency order): assets, core, router, view, cache, server, macros, build,
-next-rust, cli.
+Publish order (which is also dependency order): assets, core, router, view, cache, server, macros, jobs,
+build, next-rust, cli.
 
 ## Where to change what
 
@@ -64,13 +66,20 @@ next-rust, cli.
 | Wrong URL, wrong route precedence, segment parsing | `crates/next-rust-router/src/{scan,segment,rank,matcher}.rs`, tests in `tests/routing.rs` |
 | Missing or wrong diagnostic, wrong generated code | `crates/next-rust-build/src/{analyze,codegen}.rs`, tests in `tests/codegen.rs` |
 | A request answered wrongly | `dispatch` in `crates/next-rust-server/src/app.rs` |
+| Job retries, claims, cron ticks, shutdown | `crates/next-rust-jobs/src/{runner,cron,backoff}.rs`, `backend/{memory,redis}.rs`; one scenario suite in `tests/common/mod.rs` runs against both backends (`REDIS_URL=… cargo test -p next-rust-jobs --features redis`) |
 | HTML output, escaping, streaming | `crates/next-rust-view/src/{render,node,attrs}.rs` |
 | Partial navigation, layout reuse | `crates/next-rust-server/src/render.rs`, tests in `tests/partial.rs` |
+| Partial prerendering (`dynamic` holes, shells, `cached`) | `crates/next-rust-view/src/render.rs` (`render_shell`, `resume_document`, `Node::Hole`/`Node::Rendered`), `crates/next-rust-server/src/{partial,render}.rs`, tests in `tests/ppr.rs` |
 | Static files, embedded assets | `crates/next-rust-server/src/{static_files,embed}.rs` |
 | CSS minify/scope/prune/rename | `crates/next-rust-assets/src/css.rs`, `crates/next-rust-build/src/{css_usage,class_names}.rs` |
+| Short `data-*`/custom property/keyframes/layer/id names, compact HTML (`[build] minify_names`, `minify_html`) | planning in `crates/next-rust-build/src/names.rs`, shared rules in `crates/next-rust-assets/src/names.rs`, response rewriting in `crates/next-rust-server/src/markup.rs`, tests in `crates/next-rust-server/tests/markup.rs` |
+| Scripts/styles declared in Rust (`client_script!`, `stylesheet!`) | `crates/next-rust-build/src/rust_sources.rs` (extraction to `$OUT_DIR/next_rust_src`), `Config::generated` |
+| Inline delivery (`[build] inline_assets`) | `crates/next-rust-build/src/js_inline.rs` (modules → factories, lazy modules), `crates/next-rust-server/src/inline.rs` (rewrites the finished response; `/_next-rust/m/<hash>`), `loadModule`/`inlined` in the runtime |
 | Tailwind engine, download, input CSS | `crates/next-rust-build/src/tailwind.rs`, `crates/next-rust-cli/src/tailwind.rs` |
 | A config key | `crates/next-rust-core/src/config.rs` **and** `website/src/content/configuration.rs` |
 | CLI output, progress UI, starter template | `crates/next-rust-cli/src/{ui,project,starter,templates}.rs`, `commands/` |
+| The wasm pipeline: what is built, and every way it can fail quietly | `crates/next-rust-build/src/{wasm_islands,wasm_shim,wasm_size}.rs` (`NR03xx`) |
+| Turning wasm on, and checking it (`new --wasm`, `generate islands`, `doctor`) | `crates/next-rust-cli/src/wasm.rs` |
 
 ## Build-time codegen
 
@@ -84,7 +93,8 @@ and `(group)` work at all. Output must be **deterministic**: sorted directory en
 `HashMap`. A test asserts byte-identical output across runs.
 
 Release-only behaviour is env-driven so it can be toggled in tests: `NEXT_RUST_EMBED`, `NEXT_RUST_MINIFY`,
-`NEXT_RUST_PRUNE_CSS`, `NEXT_RUST_MINIFY_CLASSES`, `NEXT_RUST_CLASS_SEED` (see `cli-and-config.md`).
+`NEXT_RUST_PRUNE_CSS`, `NEXT_RUST_MINIFY_CLASSES`, `NEXT_RUST_CLASS_SEED`, `NEXT_RUST_MINIFY_HTML`,
+`NEXT_RUST_MINIFY_NAMES` (see `cli-and-config.md`).
 
 ## The browser runtime is duplicated on purpose
 
@@ -109,6 +119,64 @@ prints. A second test, `minified_runtime_keeps_public_contract`, checks the mini
 
 If Node is unavailable, a careful hand-edit of the minified copy is acceptable as long as both tests pass —
 but say so in the change description.
+
+### And it exists a third time, in Rust
+
+`[client] runtime = "wasm"` serves the same behaviour from `crates/next-rust-runtime`, a `no_std` crate
+compiled to `wasm32-unknown-unknown`, behind `crates/next-rust-server/src/wasm_runtime/shim.js`. Both the module
+(`runtime.wasm`) and the minified shim are generated and checked in, by `crates/next-rust-runtime/regenerate.sh`,
+so an application never needs the wasm target. `RUNTIME_SHIM_SOURCE_HASH` guards the shim the way
+`RUNTIME_JS_SOURCE_HASH` guards the runtime.
+
+Two things will bite you here:
+
+- **The opcode numbers in `next-rust-runtime/src/host.rs` are the ABI.** Append; never renumber or reuse. The
+  shim indexes a table with the number the module passes, so a mismatch is silent wrong behaviour.
+- **The shim must decide nothing.** `the_shim_carries_no_framework_behaviour` fails if it contains `data-nr-*`,
+  `x-nr-*`, `__next_rust_env`, `eval` and friends. Framework rules live in Rust; the shim calls browser APIs.
+
+`wasm-opt` needs `--enable-bulk-memory --enable-bulk-memory-opt --enable-nontrapping-float-to-int
+--enable-sign-ext --enable-mutable-globals`, or it rejects the module and writes nothing — which looks like
+success. `wasm_islands.rs::opt_args` passes all of them, and `optimize` warns (`NR0307`/`NR0308`) on every
+path where a `wasm-opt` that exists did not produce something smaller.
+
+**There are two modules today, not one**, whatever `wasm_islands.rs`'s module doc says about "one module for
+the whole site". `[client] runtime = "wasm"` is served from `/_next-rust/runtime.wasm` — the prebuilt module
+`next-rust-server` carries — and needs nothing from the application: no `islands/` crate, no wasm target.
+Only `[build] wasm_islands` and `[ui] script = "wasm"` share `client/__nrw/islands.wasm`. A page with both
+fetches the shared machinery twice (~68 kB brotli); `internal.rs::wasm_module_url` documents this as a known
+duplication. `wasm_islands.rs` still *watches* `next-rust-runtime` so editing it rebuilds, but no longer
+counts it as a contributor — counting it made the key demand a crate it had no use for.
+
+### Diagnostics for the wasm pipeline: `NR03xx`
+
+`wasm_islands.rs` owns a family of its own, listed in its `DIAGNOSTICS` table (a test asserts every code is
+spelled out exactly once, as a `const`). They come from two passes, and both are `Diagnostic` values so the
+build script and `next-rust doctor` cannot disagree:
+
+- `wasm_islands::preflight(&config)` — source only: the `#[client(wasm = "…")]` attributes in `app/`/`src/`,
+  the islands crate's manifest, and its `islands!` invocation. No toolchain needed, so it runs *before* the
+  nested cargo build and is what `doctor` shows.
+- `wasm_islands::unwired(..)` — the built module's export section, the only thing that can confirm what
+  shipped. The overlap with `preflight` is deduplicated by `(code, title)` at the call site.
+
+If you scan Rust source in this repo, use `wasm_islands::blank_noncode`: it blanks the *contents* of comments
+and string literals while keeping every byte offset, so structure is checked on the blanked copy and values
+read back out of the original. Without it the framework's own website — whose documentation pages are Rust
+files full of `r#"#[client(wasm = "AuthSwitch")]"#` — warned on every build about four islands that do not
+exist.
+
+`next-rust doctor`'s wasm section and `next-rust generate islands` live in `crates/next-rust-cli/src/wasm.rs`.
+The scaffolded manifest's empty `[workspace]` table and `crate-type = ["cdylib"]` are both load-bearing and
+both fail silently; `set_key` edits `next-rust.toml` as text on purpose, so the comments in it survive.
+
+Size, so nobody is surprised: the JavaScript runtime is 21,188 B minified / 6,808 B brotli; the wasm one is
+202,922 / 68,353 plus a 9,709 / 3,262 shim — about ten times over the wire. `"js"` is the default for that
+reason. Three things dominated and are already done, so do not redo them: `no_std` (with `std` the empty
+skeleton was 13 KB brotli), avoiding `str::parse::<f64>()` (`core::num::dec2flt` is ~10 KB of tables), and a
+size-tuned cargo profile set through `CARGO_PROFILE_RELEASE_*` in `regenerate.sh`, because a profile in a
+crate's own manifest is ignored — cargo reads them from the workspace root only. That last one alone was
+405 KB → 203 KB, and it is worth checking whether the islands build has the same problem.
 
 ## Documentation lives in Rust
 

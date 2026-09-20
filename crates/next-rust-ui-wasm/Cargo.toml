@@ -1,0 +1,18 @@
+[package]
+name = "next-rust-ui-wasm"
+description = "Browser behaviour of the Next Rust UI components, in Rust, for the shared WebAssembly module."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords = ["next-rust", "ui", "wasm", "components"]
+categories = ["wasm", "web-programming"]
+readme = "../../README.md"
+
+# `no_std`, no dependencies but the ABI: this crate is compiled into the
+# module a browser downloads, where `std` alone costs about 12 KB brotli.
+[dependencies]
+next-rust-wasm = { path = "../next-rust-wasm", version = "0.1.11" }

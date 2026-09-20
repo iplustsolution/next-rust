@@ -224,6 +224,8 @@ fn generated_code_shape() {
             renames: None,
             precompress: false,
             drop_classes: false,
+            inline_dir: None,
+            ..Default::default()
         },
     );
     assert!(minified.contains("body: __nr::PageBody::Html(\"<p>legacy</p>\")"), "{minified}");
@@ -269,6 +271,8 @@ fn release_code_embeds_config_and_static_files() {
             renames: None,
             precompress: false,
             drop_classes: false,
+            inline_dir: None,
+            ..Default::default()
         },
     );
     for needle in [
@@ -457,4 +461,169 @@ fn embedded_files_are_precompressed() {
     assert_eq!(restored, text.as_bytes());
     let big = report.files.iter().find(|f| f.path == "public/big.txt").unwrap();
     assert!(big.brotli.unwrap() < big.bytes / 5 && big.gzip.unwrap() < big.bytes / 5, "{big:?}");
+}
+
+#[test]
+fn actions_in_declared_function_modules_are_registered() {
+    let t = Tmp::new(&[
+        (
+            "app/(auth)/signup/page.rs",
+            "use next_rust::prelude::*;\n#[path = \"function.rs\"]\npub mod function;\npub fn Page() -> impl View { form![action!(function::create), p![\"x\"]] }\n",
+        ),
+        (
+            "app/(auth)/signup/function.rs",
+            "use next_rust::prelude::*;\n#[path = \"checks.rs\"]\npub mod checks;\n#[server_action]\npub async fn create(ctx: ActionContext) -> Result<()> { Ok(()) }\n",
+        ),
+        (
+            "app/(auth)/signup/checks.rs",
+            "use next_rust::prelude::*;\n#[path = \"function.rs\"]\npub mod back;\n#[server_action]\npub async fn resend() -> Result<()> { Ok(()) }\n",
+        ),
+    ]);
+    let project = analyze_project(&t.config(""));
+    assert!(!project.has_errors(), "{}", project.diagnostics);
+    let code = generate_code(&project);
+    assert!(code.contains("::function::__NR_ACTION_ID_create, handler: m"), "{code}");
+    assert!(code.contains("::function::checks::__nr_action_resend"), "{code}");
+    // The cycle back to function.rs is not followed a second time.
+    assert_eq!(code.matches("__nr_action_create").count(), 1, "{code}");
+    // The helper modules are not routes and not included twice.
+    assert!(!code.contains("signup/function.rs"), "{code}");
+}
+
+#[test]
+fn private_action_modules_are_reported() {
+    let t = Tmp::new(&[
+        (
+            "app/login/page.rs",
+            "use next_rust::prelude::*;\n#[path = \"function.rs\"]\nmod function;\npub fn Page() -> impl View { p![\"x\"] }\n",
+        ),
+        (
+            "app/login/function.rs",
+            "use next_rust::prelude::*;\n#[server_action]\npub async fn sign_in() -> Result<()> { Ok(()) }\n",
+        ),
+    ]);
+    let project = analyze_project(&t.config(""));
+    assert_eq!(codes(&project), vec!["NR0211"]);
+    assert!(project.diagnostics.to_string().contains("pub mod function;"));
+}
+
+#[test]
+fn pages_with_dynamic_holes_are_partial() {
+    const HOLE: &str = "dynamic(p![\"…\"], |ctx| async move { p![ctx.cookies.get(\"user\")] })";
+    let page = |head: &str, args: &str, body: &str| {
+        format!("use next_rust::prelude::*;\n{head}\npub fn Page({args}) -> impl View {{ main![{body}] }}\n")
+    };
+    let t = Tmp::new(&[
+        ("app/page.rs", PAGE),
+        ("app/found/page.rs", &page("", "", HOLE)),
+        ("app/declared/page.rs", &page("pub const RENDERING: Rendering = Rendering::Partial;", "", "h1![\"x\"]")),
+        ("app/static/page.rs", &page("pub const RENDERING: Rendering = Rendering::Static;", "", HOLE)),
+        ("app/forced/page.rs", &page("pub const RENDERING: Rendering = Rendering::Dynamic;", "", HOLE)),
+        ("app/reads/page.rs", &page("", "cookies: Cookies", HOLE)),
+        (
+            "app/shop/layout.rs",
+            &format!(
+                "use next_rust::prelude::*;\npub fn Layout(children: Children) -> impl View {{ div![{HOLE}, children] }}\n"
+            ),
+        ),
+        ("app/shop/page.rs", PAGE),
+    ]);
+    let project = analyze_project(&t.config(""));
+    assert!(!project.has_errors(), "{}", project.diagnostics);
+    let modes: Vec<(String, &str)> =
+        project.routes.iter().map(|r| (r.route.pattern.to_fs_string(), r.rendering)).collect();
+    for expected in [
+        ("/", "static"),
+        ("/found", "partial"),
+        ("/declared", "partial"),
+        ("/static", "partial"),
+        ("/forced", "dynamic"),
+        ("/reads", "dynamic"),
+        ("/shop", "partial"),
+    ] {
+        assert!(modes.contains(&(expected.0.to_owned(), expected.1)), "{expected:?} not in {modes:?}");
+    }
+    assert!(generate_code(&project).contains("rendering: __nr::Rendering::Partial"));
+    assert!(project.manifest().to_json().contains("\"rendering\": \"partial\""), "{}", project.manifest().to_json());
+}
+
+#[test]
+fn a_partial_page_cannot_read_the_request_outside_holes() {
+    let t = Tmp::new(&[(
+        "app/page.rs",
+        "use next_rust::prelude::*;\npub const RENDERING: Rendering = Rendering::Partial;\npub fn Page(cookies: Cookies) -> impl View { h1![\"x\"] }\n",
+    )]);
+    let project = analyze_project(&t.config(""));
+    assert_eq!(codes(&project), ["NR0212"], "{}", project.diagnostics);
+    let text = project.diagnostics.render(false);
+    assert!(text.contains("`Cookies` in app/page.rs::Page") && text.contains("dynamic(fallback"), "{text}");
+
+    // A layout above the page counts as well.
+    let t = Tmp::new(&[
+        (
+            "app/layout.rs",
+            "use next_rust::prelude::*;\npub fn Layout(children: Children, h: Headers) -> impl View { div![children] }\n",
+        ),
+        (
+            "app/page.rs",
+            "use next_rust::prelude::*;\npub const RENDERING: Rendering = Rendering::Partial;\npub fn Page() -> impl View { h1![\"x\"] }\n",
+        ),
+    ]);
+    assert_eq!(codes(&analyze_project(&t.config(""))), ["NR0212"]);
+}
+
+#[test]
+fn scripts_declared_in_rust_are_built_like_files() {
+    let t = Tmp::new(&[
+        ("next-rust.toml", "[build]\ninline_assets = true\n"),
+        (
+            "app/page.rs",
+            "use next_rust::prelude::*;\npub fn Page() -> impl View { script![r#type(\"module\"), src(asset!(\"js/site.js\"))] }\n",
+        ),
+        (
+            "src/client/chart.rs",
+            "next_rust::client_script!(\"chart.js\", r#\"\nimport { scale } from \"./scale.js\";\nexport function hydrate(el) { el.textContent = scale(2); import(\"./vendor/big.js\"); }\n\"#);\nnext_rust::client_script!(\"scale.js\", \"export const scale = (n) => n * 2;\");\nnext_rust::client_script!(\"vendor/big.js\", \"export const big = 1;\");\n",
+        ),
+        ("src/site.rs", "next_rust::asset_script!(\"js/site.js\", \"document.documentElement.dataset.ready = 1;\");\n"),
+    ]);
+    let out = t.0.join("out");
+    // Development: the declared scripts are compiled in for the dev server,
+    // and prepared for inline delivery as written.
+    let project = Generator::new().manifest_dir(&t.0).out_dir(&out).try_run().unwrap();
+    assert!(!project.has_errors(), "{}", project.diagnostics);
+    let src = out.join(next_rust_build::rust_sources::DIR);
+    assert!(std::fs::read_to_string(src.join("client/chart.js")).unwrap().contains("import { scale }"));
+    let code = std::fs::read_to_string(out.join("next_rust_routes.rs")).unwrap();
+    assert!(code.contains("declared_scripts: __NR_DECLARED") && code.contains("inline_scripts: __NR_INLINE"), "{code}");
+    assert!(code.contains(&format!(
+        "(\"client/chart.js\", include_str!({:?}))",
+        src.join("client/chart.js").to_string_lossy()
+    )));
+    if cfg!(feature = "minify-js") {
+        let inline = out.join(next_rust_build::codegen::INLINE_DIR);
+        let chart = std::fs::read_to_string(inline.join("client/chart.js.factory")).unwrap();
+        assert!(
+            chart.contains("await __nr_import(\"client/scale.js\")") && chart.contains("import(\"/_next-rust/m/"),
+            "{chart}"
+        );
+        assert!(code.contains("key: \"client/chart.js\"") && code.contains("deps: &[\"client/scale.js\"]"), "{code}");
+        // Only reached through `import()`: served on demand, never inline.
+        assert!(
+            inline.join("client/vendor/big.js.lazy").exists() && !inline.join("client/vendor/big.js.factory").exists()
+        );
+        assert!(inline.join("assets/js/site.js.plain").exists());
+    }
+
+    // Release: embedded with the files of `client/` and `assets/`.
+    let embedded = next_rust_build::generate_code_with(
+        &project,
+        next_rust_build::CodegenOptions { embed_files: true, ..Default::default() },
+    );
+    assert!(embedded.contains("declared_scripts: &[]"), "{embedded}");
+    for file in ["client/chart.js", "client/vendor/big.js", "assets/js/site.js"] {
+        assert!(
+            embedded.contains(&format!("include_bytes!({:?})", src.join(file).to_string_lossy())),
+            "{file}: {embedded}"
+        );
+    }
 }

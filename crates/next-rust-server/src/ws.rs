@@ -18,7 +18,7 @@ use hyper_util::rt::TokioIo;
 use tokio_tungstenite::WebSocketStream;
 pub use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::tungstenite::handshake::derive_accept_key;
-use tokio_tungstenite::tungstenite::protocol::Role;
+use tokio_tungstenite::tungstenite::protocol::{Role, WebSocketConfig};
 
 use crate::request::Request;
 use crate::response::Response;
@@ -48,7 +48,21 @@ impl WebSocket {
 /// A browser upgrade from another site is refused with 403 (WebSockets are
 /// not covered by the same-origin policy, and the connection would carry the
 /// visitor's cookies); see [`Request::same_origin`].
-pub fn upgrade<H, Fut>(mut req: Request, handler: H) -> Response
+pub fn upgrade<H, Fut>(req: Request, handler: H) -> Response
+where
+    H: FnOnce(WebSocket) -> Fut + Send + 'static,
+    Fut: Future<Output = ()> + Send + 'static,
+{
+    upgrade_with_limit(req, MAX_MESSAGE_SIZE, handler)
+}
+
+/// The largest message (and frame) [`upgrade`] accepts: 1 MiB. A larger one
+/// closes the connection. The WebSocket library's own default is 64 MiB,
+/// which every connected client could make the server buffer.
+pub const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
+
+/// [`upgrade`] with another limit on the size of one incoming message.
+pub fn upgrade_with_limit<H, Fut>(mut req: Request, max_message_size: usize, handler: H) -> Response
 where
     H: FnOnce(WebSocket) -> Fut + Send + 'static,
     Fut: Future<Output = ()> + Send + 'static,
@@ -70,7 +84,10 @@ where
     tokio::spawn(async move {
         match on_upgrade.await {
             Ok(upgraded) => {
-                let stream = WebSocketStream::from_raw_socket(TokioIo::new(upgraded), Role::Server, None).await;
+                let limits = WebSocketConfig::default()
+                    .max_message_size(Some(max_message_size))
+                    .max_frame_size(Some(max_message_size));
+                let stream = WebSocketStream::from_raw_socket(TokioIo::new(upgraded), Role::Server, Some(limits)).await;
                 handler(WebSocket { inner: stream }).await;
             }
             Err(e) => crate::log::warn(&format!("websocket upgrade failed: {e}")),

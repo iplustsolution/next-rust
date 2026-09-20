@@ -10,6 +10,7 @@ use std::future::Future;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use futures_util::FutureExt;
 use http::{Method, StatusCode};
 use next_rust_cache::{Cache, CacheStore, MemoryStore};
 use next_rust_core::{Config, Environment};
@@ -41,6 +42,16 @@ pub enum Rendering {
     Auto,
     Static,
     Dynamic,
+    /// Partial prerendering: a static shell, cached like a static page, with
+    /// [`dynamic`](crate::dynamic) holes rendered for every request.
+    Partial,
+}
+
+impl Rendering {
+    /// The page (or its shell) is rendered ahead of requests and cached.
+    pub fn is_prerendered(self) -> bool {
+        matches!(self, Rendering::Static | Rendering::Partial)
+    }
 }
 
 /// Information passed to `error.rs` / `global-error.rs`.
@@ -166,6 +177,24 @@ pub struct Routes {
     /// Classes the build knows a rule, script or static file for (sorted);
     /// empty means every class is kept (see `next_rust_view::class_names::set_known_classes`).
     pub known_classes: &'static [&'static str],
+    /// Scripts prepared for `[build] inline_assets` (see [`crate::inline`]);
+    /// empty when the switch is off.
+    pub inline_scripts: &'static [crate::inline::InlineScript],
+    /// Scripts declared in Rust (`client_script!`, `asset_script!`) as
+    /// `("client/chart.js", source)`, for development builds; release builds
+    /// embed them with the files of `client/` and `assets/`.
+    pub declared_scripts: &'static [(&'static str, &'static str)],
+    /// Generated files that are not scripts, for development builds: the
+    /// WebAssembly module of `[build] wasm_islands`. Release builds embed it
+    /// with the files of `client/` instead, so this is empty there.
+    pub declared_binaries: &'static [(&'static str, &'static [u8])],
+    /// Release builds (`[build] minify_names`): short names for `data-*`
+    /// attributes, custom properties, ids, keyframes and layers, sorted by
+    /// key. Every HTML response is written with them (see [`crate::markup`]).
+    pub names: crate::markup::NameTable,
+    /// Release builds (`[build] minify_html`, `svg_precision`): how HTML
+    /// responses are written.
+    pub markup: crate::markup::Markup,
 }
 
 pub(crate) type CustomHandlers = Vec<(Option<Method>, Arc<dyn Endpoint>)>;
@@ -189,6 +218,8 @@ pub(crate) struct Intercept {
     pub context: RoutePattern,
 }
 
+pub(crate) type LifecycleHook = Arc<dyn Fn() -> crate::middleware::BoxFuture<()> + Send + Sync>;
+
 pub(crate) struct AppInner {
     pub routes: Routes,
     pub matcher: Matcher<Target>,
@@ -210,8 +241,22 @@ pub(crate) struct AppInner {
     pub(crate) actions: HashMap<crate::action_token::ActionKey, usize>,
     pub revalidating: Mutex<HashSet<String>>,
     pub static_params: Mutex<HashMap<usize, Arc<Vec<Params>>>>,
+    /// Shells of partially prerendered pages (their HTML is in `page_store`).
+    pub(crate) shells: crate::partial::Shells,
     pub plugins: Vec<Arc<dyn crate::plugin::Plugin>>,
+    /// Run when the server starts listening / after it has drained (see `AppBuilder::on_serve`).
+    pub(crate) on_serve: Vec<LifecycleHook>,
+    pub(crate) on_shutdown: Vec<LifecycleHook>,
     pub public_env_json: Option<String>,
+    /// The motion stylesheet (`[animation]`) as `(id, css)`, first in every
+    /// `<head>`; `None` when animation is off.
+    pub motion: Option<(String, String)>,
+    /// The loading-bar stylesheet (`[loader]`) as `(id, css)`; `None` when off.
+    pub loader: Option<(String, String)>,
+    /// `[verification]` and `[analytics]`, ready to write.
+    pub(crate) tracking: crate::tracking::Tracking,
+    /// Rewrites HTML responses as they leave (release builds).
+    pub(crate) finisher: Option<crate::markup::Finisher>,
 }
 
 /// A configured application. Cheap to clone.
@@ -230,6 +275,8 @@ pub struct AppBuilder {
     page_store: Option<Arc<dyn CacheStore>>,
     customs: Vec<CustomRoute>,
     plugins: Vec<Arc<dyn crate::plugin::Plugin>>,
+    on_serve: Vec<LifecycleHook>,
+    on_shutdown: Vec<LifecycleHook>,
 }
 
 /// Convert `/users/:id`, `/files/*path` or `/users/[id]` into a pattern.
@@ -263,7 +310,8 @@ impl App {
     pub fn new(routes: Routes) -> AppBuilder {
         next_rust_view::class_names::set_class_names(routes.class_names);
         next_rust_view::class_names::set_known_classes(routes.known_classes);
-        crate::internal::install_short_component_names(routes.class_names);
+        crate::internal::install_short_component_names(routes.class_names, routes.names);
+        crate::internal::register_framework_scripts(routes.stylesheets);
         AppBuilder {
             routes,
             config: None,
@@ -273,6 +321,8 @@ impl App {
             page_store: None,
             customs: Vec::new(),
             plugins: Vec::new(),
+            on_serve: Vec::new(),
+            on_shutdown: Vec::new(),
         }
     }
 
@@ -290,7 +340,13 @@ impl App {
 
     /// Handle one request. This is the adapter surface: the built-in server,
     /// tests and serverless adapters all call it.
-    pub async fn handle(&self, mut req: Request) -> Response {
+    pub async fn handle(&self, req: Request) -> Response {
+        // Error verbosity follows the app that answers, not the last one
+        // built in this process (tests and embeddings build several).
+        crate::with_dev(self.inner.env.is_dev(), self.handle_request(req)).await
+    }
+
+    async fn handle_request(&self, mut req: Request) -> Response {
         let inner = self.inner.clone();
         let nonce = crate::random_hex(16);
         req.insert_extension(crate::CspNonce(nonce.clone()));
@@ -302,8 +358,26 @@ impl App {
         }
         let cookies = req.cookies().clone();
         let path = req.path().to_owned();
+        let inline = crate::inline::known(&inner, &req);
         let endpoint: Arc<dyn Endpoint> = Arc::new(RouteEndpoint { inner: inner.clone() });
-        let res = Next::new(inner.global_stack.clone(), endpoint).run(req).await;
+        // A panic in application code answers 500 here, not only in the
+        // built-in server: every adapter (serverless, tests, an embedding)
+        // goes through this method. Cookies set before the panic are
+        // dropped with the half-finished response they belong to.
+        let handled =
+            std::panic::AssertUnwindSafe(Next::new(inner.global_stack.clone(), endpoint).run(req)).catch_unwind().await;
+        let mut res = match handled {
+            Ok(res) => res,
+            Err(panic) => {
+                crate::log::error(&format!("request handler panicked: {}", panic_message(&panic)));
+                let res = Response::text("Internal Server Error").with_status(500);
+                return self.finish(res, &req_cookies_placeholder(), &nonce, "");
+            }
+        };
+        // `[build] inline_assets`: scripts go into the document.
+        crate::inline::apply(&inner, &mut res, &nonce, inline);
+        // Release builds: short names and compact markup, last of all.
+        crate::markup::apply(&inner, &mut res);
         self.finish(res, &cookies, &nonce, &path)
     }
 
@@ -335,6 +409,15 @@ impl App {
             return Some(res);
         }
 
+        // `[verification]` files: /google….html, /BingSiteAuth.xml, /ads.txt,
+        // /.well-known/assetlinks.json … (before the trailing-slash redirect:
+        // their URLs are fixed by whoever fetches them).
+        if (req.method() == Method::GET || req.method() == Method::HEAD)
+            && let Some(res) = inner.tracking.file(path)
+        {
+            return Some(res);
+        }
+
         for rule in &config.redirects {
             if let Some(dest) = crate::redirects::apply(&rule.source, &rule.destination, path) {
                 let query = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
@@ -352,7 +435,9 @@ impl App {
             let looks_like_file = path.rsplit('/').next().is_some_and(|last| last.contains('.'));
             if has_slash != config.app.trailing_slash && !looks_like_file {
                 let fixed = if has_slash { path.trim_end_matches('/').to_owned() } else { format!("{path}/") };
-                let fixed = if fixed.is_empty() { "/".to_owned() } else { fixed };
+                // One leading slash only: `//evil.example/` must not become a
+                // redirect to `//evil.example`, which browsers read as a host.
+                let fixed = format!("/{}", fixed.trim_start_matches(['/', '\\']));
                 let query = req.uri().query().map(|q| format!("?{q}")).unwrap_or_default();
                 return Some(Response::permanent_redirect(&format!("{base}{fixed}{query}")));
             }
@@ -363,6 +448,16 @@ impl App {
     fn finish(&self, mut res: Response, cookies: &crate::Cookies, nonce: &str, path: &str) -> Response {
         let config = &self.inner.config;
         crate::action_token::seal(&mut res, cookies, config.security.action_token_ttl, config.security.csrf);
+        // A complete body is marked `private, no-store` when it carried an
+        // action marker. A streamed one is read after the head is sent, so
+        // whether it holds a token is not known here: every streamed HTML
+        // response gets this visitor's binding cookie, so none of them may
+        // be kept by a shared cache.
+        if matches!(res.body, crate::response::Body::Stream(_))
+            && res.header("content-type").is_some_and(|c| c.starts_with("text/html"))
+        {
+            res.set_header("cache-control", crate::render::NO_STORE);
+        }
         for value in cookies.set_cookie_headers() {
             res.append_header("set-cookie", &value);
         }
@@ -378,9 +473,13 @@ impl App {
         if config.security.headers {
             crate::middleware::apply_security_headers(
                 &mut res,
-                config.security.csp.as_deref(),
+                // `strict` allows the origins of the configured `[analytics]`.
+                self.inner.tracking.csp(),
                 nonce,
                 config.security.hsts_max_age,
+                // Any of `[build] wasm_islands`, `[client] runtime = "wasm"`
+                // and `[ui] script = "wasm"` makes a page compile a module.
+                config.uses_wasm(),
             );
         }
         res
@@ -420,6 +519,15 @@ impl App {
         out.extend(r.apis.iter().map(|a| ("api", a.pattern, a.source)));
         out
     }
+}
+
+/// What a caught panic said, for the log.
+pub(crate) fn panic_message(panic: &Box<dyn std::any::Any + Send>) -> String {
+    panic
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| panic.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "unknown panic".to_owned())
 }
 
 fn req_cookies_placeholder() -> crate::Cookies {
@@ -494,6 +602,21 @@ impl AppBuilder {
         self
     }
 
+    /// Share one value with every page, layout, loader, API route and server
+    /// action: it is cloned into each request's extensions, so handlers take
+    /// it as `Extension<T>`. Wrap anything expensive to clone in an `Arc`:
+    ///
+    /// ```ignore
+    /// App::new(routes()).state(Arc::new(AppState { db, redis }))
+    /// // pub async fn Page(Extension(state): Extension<Arc<AppState>>) -> impl View
+    /// ```
+    pub fn state<T: Clone + Send + Sync + 'static>(self, value: T) -> Self {
+        self.middleware(move |mut req: Request, next: crate::middleware::Next| {
+            req.insert_extension(value.clone());
+            next.run(req)
+        })
+    }
+
     /// Data cache (default: in-memory).
     pub fn cache(mut self, cache: Cache) -> Self {
         self.cache = Some(cache);
@@ -509,6 +632,30 @@ impl AppBuilder {
 
     pub fn plugin(mut self, plugin: impl crate::plugin::Plugin) -> Self {
         self.plugins.push(Arc::new(plugin));
+        self
+    }
+
+    /// Run `hook` when the server starts serving (not for `--routes`,
+    /// `--export` or [`App::handle`] in tests): the place to start background
+    /// workers that should live exactly as long as the server.
+    pub fn on_serve<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.on_serve.push(Arc::new(move || Box::pin(hook())));
+        self
+    }
+
+    /// Run `hook` during graceful shutdown, after open connections have
+    /// drained and before the process exits. Hooks run in order and are
+    /// awaited, so they bound their own duration.
+    pub fn on_shutdown<F, Fut>(mut self, hook: F) -> Self
+    where
+        F: Fn() -> Fut + Send + Sync + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
+        self.on_shutdown.push(Arc::new(move || Box::pin(hook())));
         self
     }
 
@@ -585,6 +732,7 @@ impl AppBuilder {
         // Production prints only errors unless `[logging]` says otherwise.
         crate::log::configure(json, config.logging.level(env));
         crate::set_trust_proxy(config.server.trust_proxy);
+        crate::set_trusted_proxies(usize::from(config.server.trusted_proxies));
 
         let mut matcher = Matcher::new();
         let mut intercepts = Vec::new();
@@ -672,6 +820,8 @@ impl AppBuilder {
         let public_env_json = (!public_env.is_empty()).then(|| serde_json::to_string(&public_env).unwrap_or_default());
 
         let inner = AppInner {
+            finisher: crate::markup::Finisher::new(self.routes.names, self.routes.markup)
+                .map(crate::markup::Finisher::install),
             public_dir: config.public_dir(),
             client_dir: config.root.join("client"),
             dev_status_file: output_dir.join("dev/status.json"),
@@ -689,8 +839,14 @@ impl AppBuilder {
             actions,
             revalidating: Mutex::new(HashSet::new()),
             static_params: Mutex::new(HashMap::new()),
+            shells: Default::default(),
             plugins: self.plugins,
+            on_serve: self.on_serve,
+            on_shutdown: self.on_shutdown,
             public_env_json,
+            motion: crate::motion::stylesheet(&config.animation),
+            loader: crate::motion::loader(&config.loader),
+            tracking: crate::tracking::Tracking::new(&config, env),
             config: Arc::new(config),
         };
         for p in &inner.plugins {

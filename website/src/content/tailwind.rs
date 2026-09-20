@@ -2,12 +2,41 @@
 
 use next_rust::prelude::*;
 
+/// The box that opens the page: the feature without the jargon.
+fn plain_words(text: impl View) -> Node {
+    div![class("callout"), p![strong!["In plain words. "], text]].into_node()
+}
+
 pub fn content() -> Node {
     fragment![
+        plain_words(
+            "Tailwind is a way of styling a page with small, ready-made labels instead of writing a stylesheet. \
+             Rather than inventing a name like \"hero-box\" and describing it in a separate CSS file, you put the \
+             look directly on the element: \"padding 6, rounded corners, blue background\". Each label (a utility \
+             class) does exactly one thing, like LEGO bricks. Next Rust reads the labels you used and produces the \
+             matching CSS by itself, so there is no extra tool to install or run."
+        ),
         p![
             "Next Rust has Tailwind CSS built in. Write Tailwind classes in your views and the framework generates the CSS for exactly the classes you use. There is nothing to install and no CSS file to write: no Node.js, no npm, no ",
             code!["tailwind.config.js"],
             ".",
+        ],
+        p![
+            "A page styled this way, for example ",
+            code!["app/page.rs"],
+            ". Read the classes as plain instructions: ",
+            code!["mx-auto"],
+            " centers the block, ",
+            code!["max-w-2xl"],
+            " limits its width, ",
+            code!["px-6 py-24"],
+            " add padding left/right and top/bottom, ",
+            code!["text-4xl font-bold"],
+            " make a large bold heading, and a prefix such as ",
+            code!["hover:"],
+            " or ",
+            code!["dark:"],
+            " (a variant) applies the class only in that situation:",
         ],
         pre![code![
             class("language-rust"),
@@ -29,7 +58,19 @@ pub fn content() -> Node {
             " works as described there.",
         ],
         h2![id("turn-it-on"), a![class("anchor"), href("#turn-it-on"), "Turn it on"]],
-        p!["In an existing project, add this to ", code!["next-rust.toml"], ":"],
+        p![
+            "Tailwind is controlled from the ",
+            code!["[tailwind]"],
+            " section of ",
+            code!["next-rust.toml"],
+            ", the settings file in the project root. Without that section (or with ",
+            code!["enabled = false"],
+            ") Tailwind classes are just unknown words that style nothing, and you style with ",
+            a![href("/docs/styling-and-assets"), "your own CSS"],
+            " instead. In an existing project, add this to ",
+            code!["next-rust.toml"],
+            ":",
+        ],
         pre![code![class("language-toml"), "[tailwind]\nenabled = true"],],
         p!["That's all. Every page, layout and 404 page gets the stylesheet automatically."],
         h2![id("how-it-works"), a![class("anchor"), href("#how-it-works"), "How it works"]],
@@ -95,8 +136,13 @@ pub fn content() -> Node {
         ],
         h2![id("theme"), a![class("anchor"), href("#theme"), "Your theme"]],
         p![
-            "Theme variables go in ",
+            "A theme is your brand's vocabulary: your colors, fonts, corner radius. Define a value once and Tailwind \
+             creates classes for it, so ",
+            code!["bg-brand"],
+            " means your orange everywhere and changing the brand color is a one-line edit. Theme variables go in ",
             code!["[tailwind.theme]"],
+            " in ",
+            code!["next-rust.toml"],
             ". Each one becomes a Tailwind v4 ",
             code!["@theme"],
             " variable and creates the matching classes:",
@@ -146,7 +192,10 @@ animate-rise = "rise 500ms ease-out both"     # animate-rise"##,
         ],
         h2![id("custom-classes"), a![class("anchor"), href("#custom-classes"), "Your own classes"]],
         p![
+            "When the same long list of classes appears on every button, give the list a name. ",
             code!["[tailwind.utilities]"],
+            " in ",
+            code!["next-rust.toml"],
             " defines new classes, as Tailwind classes to combine or as CSS declarations. They work with every variant (",
             code!["hover:btn"],
             ", ",
@@ -161,11 +210,32 @@ card = "rounded-card border border-zinc-200 bg-white p-6 shadow-soft dark:border
 content-auto = { content-visibility = "auto" }"#,
         ],],
         h2![id("dark-mode"), a![class("anchor"), href("#dark-mode"), "Dark mode"]],
+        p![
+            "Classes prefixed with ",
+            code!["dark:"],
+            " apply only in dark mode. This setting in ",
+            code!["next-rust.toml"],
+            " decides what \"dark mode\" means: the visitor's system setting (the default), or a class or attribute \
+             your own theme switch puts on the page. For a switch, render the class on the server with ",
+            a![href("/docs/rendering#html-attributes"), code!["Metadata::html_attribute"]],
+            " so the page never flashes the wrong colors.",
+        ],
         pre![code![
             class("language-toml"),
             "[tailwind]\ndark_mode = \"media\"   # dark: follows the system setting (default)\n# dark_mode = \"class\"     # dark: applies inside an element with class=\"dark\"\n# dark_mode = \"attribute\" # dark: applies inside data-theme=\"dark\"",
         ],],
         h2![id("variants"), a![class("anchor"), href("#variants"), "Custom variants"]],
+        p![
+            "A variant is the prefix before the colon (",
+            code!["hover:"],
+            ", ",
+            code!["md:"],
+            ") that says when a class applies. ",
+            code!["[tailwind.variants]"],
+            " adds your own: the name on the left, and on the right a CSS selector in which ",
+            code!["&"],
+            " stands for the element.",
+        ],
         pre![code![
             class("language-toml"),
             r#"[tailwind.variants]
@@ -173,7 +243,12 @@ theme-midnight = "&:where([data-theme=midnight] *)"   # theme-midnight:bg-black
 hocus = "&:hover, &:focus"                            # hocus:underline"#,
         ],],
         h2![id("plugins"), a![class("anchor"), href("#plugins"), "Plugins"]],
-        p!["The official plugins are bundled with the engine:"],
+        p![
+            "The official plugins are bundled with the engine, so listing them in ",
+            code!["next-rust.toml"],
+            " is all it takes (no npm install). Typography styles long-form text; forms gives form controls a \
+             sensible base look:",
+        ],
         pre![code![
             class("language-toml"),
             "[tailwind]\nplugins = [\"@tailwindcss/typography\", \"@tailwindcss/forms\"]"
@@ -189,7 +264,9 @@ hocus = "&:hover, &:focus"                            # hocus:underline"#,
             code!["format!(\"bg-{color}-500\")"],
             ", never appears whole, so write the full names (",
             code!["if error { \"bg-red-500\" } else { \"bg-green-500\" }"],
-            ") or list them:",
+            ") or list them in ",
+            code!["safelist"],
+            ". A safelisted class is always generated, whether or not the build found it:",
         ],
         pre![code![
             class("language-toml"),
@@ -236,7 +313,15 @@ css = """
             code!["dark:"],
             " and your own) and ",
             code!["@keyframes"],
-            " all work:",
+            " all work. First tell ",
+            code!["next-rust.toml"],
+            " which files to compile. The folder name ",
+            code!["styles/"],
+            " is only an example; a Rust file with a ",
+            code!["stylesheet!"],
+            " works too (see ",
+            a![href("/docs/styling-and-assets#scripts-and-styles-in-rust"), "Scripts and styles in Rust"],
+            "):",
         ],
         pre![code![
             class("language-toml"),
@@ -245,6 +330,17 @@ enabled = true
 dark_mode = "class"
 stylesheets = ["styles/theme.css", "styles/components.css"]   # relative to next-rust.toml"#,
         ],],
+        p![
+            "Then the stylesheet itself, ",
+            code!["styles/theme.css"],
+            ". It defines two colors that change in dark mode, exposes them as Tailwind colors (",
+            code!["bg-primary"],
+            ", ",
+            code!["bg-bg"],
+            ") and builds a ",
+            code![".card"],
+            " class out of utilities:",
+        ],
         pre![code![
             class("language-css"),
             r#"/* styles/theme.css */
@@ -287,6 +383,7 @@ stylesheets = ["styles/theme.css", "styles/components.css"]   # relative to next
             code!["next-rust build"],
             ") rename every Tailwind class to a short name, in the CSS and in the HTML. What you write stays readable; what the browser downloads is small:",
         ],
+        p!["The same element in the HTML the browser receives, in development and in a production build:"],
         pre![code![
             class("language-html"),
             r#"<!-- next-rust dev -->
@@ -367,10 +464,35 @@ stylesheets = ["styles/theme.css", "styles/components.css"]   # relative to next
                 " renames in a development build too.",
             ],
         ],
+        p![
+            "The two settings, in ",
+            code!["next-rust.toml"],
+            ". ",
+            code!["keep_classes"],
+            " is the list of class names that must survive unchanged because something the build cannot read \
+             (a third-party script, HTML assembled in a string) refers to them by their original name:",
+        ],
         pre![code![
             class("language-toml"),
             "[tailwind]\nminify_classes = true          # default\nkeep_classes = [\"hidden\", \"is-open\"]",
         ],],
+        p![
+            "The same shortening is applied to ",
+            code!["data-*"],
+            " attributes, CSS custom properties, ",
+            code!["@keyframes"],
+            " and ",
+            code!["@layer"],
+            " names and the ids the UI components generate (",
+            code!["[build] minify_names"],
+            "). The matching escape hatch there is ",
+            code!["[build] keep_names"],
+            "; your own ids keep their names unless you list them in ",
+            code!["[build] rename_ids"],
+            ". See ",
+            a![href("/docs/configuration"), "Configuration"],
+            ".",
+        ],
         h2![id("unused-classes"), a![class("anchor"), href("#unused-classes"), "Classes that style nothing"]],
         p![
             "A class in your code that Tailwind never generated (a typo in a variant, an arbitrary value it rejects, ",
@@ -397,13 +519,25 @@ stylesheets = ["styles/theme.css", "styles/components.css"]   # relative to next
             code!["@layer components"],
             ", a ",
             code!["global_css!"],
-            " sheet. Write ten classes in a stylesheet and render one, and the page receives one rule. Theme variables, the base styles, element and attribute selectors and ",
+            " sheet. Write ten classes in a stylesheet and render one, and the page receives one rule. The rest is cut down the same way: a theme variable (",
+            code!["--color-primary"],
+            ", ",
+            code!["--spacing"],
+            ") is sent when something sent reads it, directly or through another variable; a base or element rule (",
+            code!["table"],
+            ", ",
+            code!["input[type=checkbox]"],
+            ", ",
+            code!["[data-theme=\"noir\"]"],
+            ") when the page has that element or attribute, or loads a script that adds it; ",
             code!["@font-face"],
-            " are always sent; ",
+            ", ",
             code!["@property"],
-            " registrations and ",
+            " and ",
             code!["@keyframes"],
-            " are sent once a rule that needs them is. On a client-side navigation the browser reports what it has, and the server sends only the missing rules (for cached static pages too). Content streamed in later brings its own rules along. The CSS is minified in development as well.",
+            " once something sent names them (",
+            a![href("/docs/styling-and-assets#per-page"), "the exact rules and the settings that override them"],
+            "). On a client-side navigation the browser reports what it has, and the server sends only the missing rules (for cached static pages too). Content streamed in later brings its own rules along. The CSS is minified in development as well.",
         ],
         p![
             "Tailwind utilities depend on their order (",
@@ -436,7 +570,14 @@ stylesheets = ["styles/theme.css", "styles/components.css"]   # relative to next
             code!["build.rs"],
             ", on top of ",
             code!["next-rust.toml"],
-            ". Useful when the theme comes from Rust data, or to keep one list of colors for light and dark mode:",
+            ". ",
+            code!["build.rs"],
+            " is the small program in the project root that Cargo runs before compiling your app; in a new \
+             project it is the single line ",
+            code!["next_rust_build::generate();"],
+            ". Replacing that line with a ",
+            code!["Generator"],
+            " lets you set options in code. Useful when the theme comes from Rust data, or to keep one list of colors for light and dark mode:",
         ],
         pre![code![
             class("language-rust"),
@@ -470,6 +611,85 @@ fn main() {
             " writes a Dockerfile that installs ",
             code!["curl"],
             " and caches the engine between image builds.",
+        ],
+        h2![id("check-it-worked"), a![class("anchor"), href("#check-it-worked"), "How to check it worked"]],
+        ul![
+            li![
+                "Run ",
+                code!["next-rust dev"],
+                ", add ",
+                code!["class(\"bg-red-500\")"],
+                " to any element and save. The element turns red; nothing else to do.",
+            ],
+            li![
+                "In the browser's developer tools the element shows the class names you wrote, and ",
+                code!["<head>"],
+                " contains a ",
+                code!["<style data-nr-css>"],
+                " block with their rules.",
+            ],
+            li![
+                "Before deploying, run ",
+                code!["next-rust build"],
+                " and ",
+                code!["next-rust start"],
+                " and click through the site once. Class names are now short and random; everything should look \
+                 the same as in development. The build output lists classes that style nothing.",
+            ],
+        ],
+        h2![id("common-mistakes"), a![class("anchor"), href("#common-mistakes"), "Common mistakes"]],
+        ul![
+            li![
+                strong!["It looks right in dev and wrong in production."],
+                " Almost always a class that reaches the page in a way the build cannot see: built with ",
+                code!["format!"],
+                ", stored in a database, written inside a JavaScript string in Rust, matched by a regular \
+                 expression, or expected by a third-party script. Add it to ",
+                code!["keep_classes"],
+                " (and ",
+                code!["safelist"],
+                " if Tailwind never saw it whole). Do not turn Tailwind or ",
+                code!["minify_classes"],
+                " off to fix one class.",
+            ],
+            li![
+                strong!["Classes assembled from pieces."],
+                " ",
+                code!["format!(\"text-{color}-600\")"],
+                " generates nothing. Write whole names in both branches of a condition.",
+            ],
+            li![
+                strong!["Selecting elements by Tailwind class from outside."],
+                " A browser test or analytics script looking for ",
+                code![".rounded-xl"],
+                " finds nothing in production. Select by ",
+                code!["id"],
+                " or a ",
+                code!["data-*"],
+                " attribute listed in ",
+                code!["[build] keep_names"],
+                ".",
+            ],
+            li![
+                strong!["Different class names on different servers."],
+                " Names are random per build. When several builds serve the same site behind one load balancer, set ",
+                code!["NEXT_RUST_CLASS_SEED"],
+                " to the same number for all of them.",
+            ],
+            li![
+                strong!["A build that cannot download the engine."],
+                " Offline or locked-down machines need ",
+                code!["NEXT_RUST_TAILWIND_BIN"],
+                " (see above).",
+            ],
+            li![
+                strong!["Adding transitions by hand."],
+                " Hover and state changes already ease by default (",
+                a![href("/docs/styling-and-assets#animation"), "Animation"],
+                "). Your own ",
+                code!["transition-*"],
+                " classes still win when you want something different.",
+            ],
         ],
     ]
 }

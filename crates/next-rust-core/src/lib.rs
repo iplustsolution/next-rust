@@ -2,6 +2,7 @@
 //!
 //! * [`config`] – `next-rust.toml` / `next-rust.json` discovery and parsing.
 //! * [`env`](mod@env) – `.env` file loading with a strict server/public split.
+//! * [`tracking`] – `[verification]` and `[analytics]`: site proofs and measurement tags.
 //! * [`diagnostic`] – structured, human friendly error reporting.
 //! * [`RenderingMode`] – static / dynamic / auto rendering.
 
@@ -12,6 +13,7 @@ pub mod config;
 pub mod diagnostic;
 pub mod env;
 mod mode;
+pub mod tracking;
 
 pub use config::{Config, ConfigError};
 pub use diagnostic::{Diagnostic, Diagnostics, Severity};

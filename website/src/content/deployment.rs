@@ -13,9 +13,64 @@ pub fn content() -> Node {
             code![".next-rust/<name>"],
             ". It needs no runtime, interpreter, Node.js or files next to it.",
         ],
+        div![
+            class("callout"),
+            p![
+                strong!["In plain words. "],
+                "Deploying means putting your site on a computer that is always on and reachable from the internet (a server). With most web frameworks that means installing a language runtime there, uploading hundreds of files and keeping them in step. Here the whole site — every page, image, stylesheet, script and setting — is packed into one program file, like an app you double-click. You copy that file to the server and start it. Updating the site is replacing the file and restarting it.",
+            ],
+        ],
+        div![
+            class("feature-list"),
+            div![
+                strong!["One file"],
+                span![
+                    "Pages, settings, ",
+                    code!["public/"],
+                    " files, CSS and the browser script are inside the binary. About 1.2 MB for a new project."
+                ],
+            ],
+            div![
+                strong!["Nothing to install on the server"],
+                span![
+                    "No Node.js, no ",
+                    code!["node_modules"],
+                    ", no bundler, no Rust toolchain. The server only runs the file."
+                ],
+            ],
+            div![
+                strong!["Copy and run"],
+                span![
+                    "One ",
+                    code!["scp"],
+                    " and one command, or one ",
+                    code!["docker run"],
+                    ". The file starts from any folder."
+                ],
+            ],
+            div![
+                strong!["Proven at build time"],
+                span![
+                    "The build runs the finished file from an empty folder and renders every static page, so a missing file fails the build, not the launch."
+                ],
+            ],
+        ],
         h2![id("what-to-ship"), a![class("anchor"), href("#what-to-ship"), "What to ship"]],
+        p![
+            code!["next-rust build"],
+            " writes the binary into the output folder ",
+            code![".next-rust/"],
+            " in the project root, named after your package. This is everything you upload:",
+        ],
         pre![code![class("language-text"), r".next-rust/my-app    # that's all"]],
-        p!["Release builds compile these into the binary:"],
+        p![
+            "A ",
+            em!["binary"],
+            " is a program in the form the processor runs directly. It is built for one operating system and processor type: a file built on a Mac does not run on a Linux server. Build on the same kind of machine as the server, which in practice means building on Linux in CI (the automated build of your repository) or with the generated ",
+            a![href("#docker"), "Dockerfile"],
+            ".",
+        ],
+        p!["What is inside the file. Release builds compile these into the binary:"],
         div![
             class("table-wrap"),
             table![
@@ -38,6 +93,15 @@ pub fn content() -> Node {
             ],
         ],
         p![
+            "What is ",
+            strong!["not"],
+            " inside: ",
+            code![".env"],
+            " files and secrets (they come from the server's environment), your database, the ",
+            code!["target/"],
+            " folder (the compiler's workspace, only needed to build) and the source code.",
+        ],
+        p![
             "Static pages are rendered into memory in the background when the binary starts, so the server never writes to disk. The build also runs the binary from an empty directory to prove it needs nothing else.",
         ],
         p![
@@ -46,7 +110,9 @@ pub fn content() -> Node {
             " (videos, archives) grow the binary by their size; serve those from a CDN or object storage instead.",
         ],
         h3![id("binary-size"), a![class("anchor"), href("#binary-size"), "Binary size"]],
-        p!["Only what the app uses goes into the binary:"],
+        p![
+            "The numbers below are small because only what the app uses goes into the binary (for comparison, a single phone photo is two to five megabytes):",
+        ],
         ul![
             li![
                 "Rust compiles only modules that are reachable from the app: special files in ",
@@ -101,6 +167,40 @@ pub fn content() -> Node {
             code!["abort"],
             ", one panic stops the process, so run it under something that restarts it (systemd, Docker, Kubernetes).",
         ],
+        h3![id("environment"), a![class("anchor"), href("#environment"), "What the server has to provide"]],
+        p![
+            "Settings that differ per server, and secrets, are environment variables: named values the operating system hands to the program when it starts. They are set in the systemd unit, the Docker or Kubernetes configuration, or the platform's dashboard, never in the binary.",
+        ],
+        div![
+            class("table-wrap"),
+            table![
+                thead![tr![th!["variable"], th!["what it is for"], th!["without it"]]],
+                tbody![
+                    tr![
+                        td![code!["NEXT_RUST_ENV=production"]],
+                        td!["production behaviour: generic error pages, quiet logs, ", code!["Secure"], " cookies"],
+                        td!["a release binary already defaults to production; setting it is explicit and harmless"],
+                    ],
+                    tr![
+                        td![code!["PORT"], ", ", code!["HOST"]],
+                        td!["where the server listens"],
+                        td![code!["[server]"], " from the embedded settings: ", code!["0.0.0.0:3000"], " by default"],
+                    ],
+                    tr![
+                        td![code!["NEXT_RUST_SECRET"]],
+                        td!["signs the URLs of server actions (forms)"],
+                        td![
+                            "a random secret per process: secure, but forms on already open pages stop working after a restart, and several instances do not accept each other's forms"
+                        ],
+                    ],
+                    tr![
+                        td!["your own (", code!["DATABASE_URL"], ", API keys)"],
+                        td!["whatever your code reads with ", code!["std::env::var"]],
+                        td!["your code decides"],
+                    ],
+                ],
+            ],
+        ],
         p![
             "Environment: ",
             code!["NEXT_RUST_ENV=production"],
@@ -115,8 +215,8 @@ pub fn content() -> Node {
             "; signs server-action URLs, and must be the same on every instance), and your secrets. ",
             code![".env"],
             " files are not embedded, so set secrets in the environment of the process. ",
-            code!["NEXT_RUST_CONFIG=/path/to/next-rust.toml"],
-            " replaces the embedded configuration.",
+            code!["NEXT_RUST_CONFIG=/path/to/next-rust.json"],
+            " replaces the embedded configuration (a binary with embedded settings reads JSON only; the keys are the same).",
         ],
         p![
             code!["cargo build --release"],
@@ -197,13 +297,26 @@ pub fn content() -> Node {
             " to hide the screen in a terminal too.",
         ],
         h2![id("bare-metal-vps"), a![class("anchor"), href("#bare-metal-vps"), "Bare metal / VPS"]],
+        p![
+            "A VPS (virtual private server) is a rented Linux machine you log into over SSH. Build, copy the file, start it. Run this on a Linux build machine, from the project folder; ",
+            code!["server"],
+            " is your server's address and ",
+            code!["my-app"],
+            " your package name:",
+        ],
         pre![code![
             class("language-sh"),
             r"next-rust build
 scp .next-rust/my-app server:/srv/my-app/
 ssh server 'NEXT_RUST_ENV=production PORT=8080 /srv/my-app/my-app'",
         ],],
-        p!["A systemd unit:"],
+        p![
+            "Started like that, the site stops when you close the SSH session. systemd, the service manager of most Linux distributions, keeps it running: it starts the program at boot and restarts it if it crashes. Save this unit as ",
+            code!["/etc/systemd/system/my-app.service"],
+            " on the server, then run ",
+            code!["systemctl enable --now my-app"],
+            ":",
+        ],
         pre![code![
             class("language-ini"),
             r"[Unit]
@@ -223,13 +336,37 @@ StateDirectory=my-app
 WantedBy=multi-user.target",
         ],],
         p![
+            "To release a new version, copy the new file over the old one and run ",
+            code!["systemctl restart my-app"],
+            ".",
+        ],
+        p![
             "The server shuts down gracefully on ",
             code!["SIGTERM"],
-            ". It stops accepting connections and waits up to ",
+            " (the signal systemd, Docker and Kubernetes send to ask a program to stop). It stops accepting connections and waits up to ",
             code!["[server] shutdown_timeout"],
             " seconds for in-flight requests.",
         ],
         h2![id("docker"), a![class("anchor"), href("#docker"), "Docker"]],
+        p![
+            "Docker packages a program into an image that runs the same on any machine, and it solves the \"build on Linux\" requirement: the build happens inside the image, so it works from a Mac or Windows too. ",
+            code!["next-rust docker"],
+            " writes a ",
+            code!["Dockerfile"],
+            " (the recipe for the image) and a ",
+            code![".dockerignore"],
+            " (what to leave out: ",
+            code!["target"],
+            ", ",
+            code![".next-rust"],
+            ", ",
+            code![".git"],
+            ", ",
+            code![".env*.local"],
+            ") into the project root. Without them, ",
+            code!["docker build"],
+            " has nothing to follow. Run from the project folder:",
+        ],
         pre![code![
             class("language-sh"),
             r"next-rust docker
@@ -250,6 +387,9 @@ docker run -p 3000:3000 my-app",
             ],
         ],
         h2![id("kubernetes"), a![class("anchor"), href("#kubernetes"), "Kubernetes"]],
+        p![
+            "Kubernetes runs several copies (replicas, in pods) of a container and replaces the ones that fail. Use the Docker image from above. What to know:",
+        ],
         ul![
             li![
                 "Liveness and readiness: add a lightweight route, e.g. ",
@@ -277,6 +417,7 @@ docker run -p 3000:3000 my-app",
             ],
         ],
         p![
+            "These are hosting services that build and run your repository for you: you push code, they give you a URL. ",
             "These platforms detect a Dockerfile. ",
             code!["PORT"],
             " is honoured automatically. Set ",
@@ -290,6 +431,11 @@ docker run -p 3000:3000 my-app",
             a![class("anchor"), href("#reverse-proxies-tls-and-http3"), "Reverse proxies, TLS and HTTP/3"],
         ],
         p![
+            "TLS is the encryption behind ",
+            code!["https://"],
+            " and the padlock in the browser; it needs a certificate for your domain. A reverse proxy is a program that stands between the internet and your app: it receives every request, handles the encryption and passes the request on to the app on a local port. HTTP/3 is the newest, fastest version of the web's protocol.",
+        ],
+        p![
             "The built-in server speaks HTTP/1.1, and HTTP/2 over plain TCP (h2c) when the ",
             code!["http2"],
             " feature is enabled and ",
@@ -299,6 +445,13 @@ docker run -p 3000:3000 my-app",
             " and ",
             strong!["HTTP/3"],
             " at a reverse proxy or load balancer (Caddy, nginx, Envoy, a cloud load balancer). This is the usual production setup and keeps certificate management out of the application.",
+        ],
+        p![
+            "With Caddy, this is the entire configuration (the file ",
+            code!["/etc/caddy/Caddyfile"],
+            " on the server). It obtains and renews the certificate for ",
+            code!["example.com"],
+            " by itself and forwards requests to the app on port 3000:",
         ],
         pre![code![
             class("language-caddyfile"),
@@ -333,9 +486,14 @@ docker run -p 3000:3000 my-app",
         ],
         h2![id("serverless-and-edge"), a![class("anchor"), href("#serverless-and-edge"), "Serverless and edge"],],
         p![
+            "Serverless platforms run your code only while a request is being answered instead of keeping a server on; edge platforms run it in many locations close to visitors. Both hand your code a request and expect a response, rather than letting it listen on a port.",
+        ],
+        p![
             "The framework core is independent of the listener. ",
             code!["App::handle(Request)"],
-            " takes a request and returns a response:",
+            " takes a request and returns a response. An adapter like this one goes in your crate (it replaces ",
+            code!["next_rust::app!()"],
+            " in the entry point):",
         ],
         pre![code![
             class("language-rust"),
@@ -373,6 +531,9 @@ pub async fn handle(req: http::Request<bytes::Bytes>) -> http::Response<Vec<u8>>
             ],
         ],
         h2![id("observability"), a![class("anchor"), href("#observability"), "Observability"]],
+        p![
+            "Observability is being able to see what the running app is doing: its logs, its errors, how long requests take."
+        ],
         ul![
             li![
                 strong!["Production is silent except for errors."],
@@ -402,6 +563,90 @@ pub async fn handle(req: http::Request<bytes::Bytes>) -> http::Response<Vec<u8>>
             ],
             li![
                 "Secrets aren't logged. The framework logs method, path, status and duration, never headers, cookies or bodies.",
+            ],
+        ],
+        h2![id("check-it-worked"), a![class("anchor"), href("#check-it-worked"), "How to check it worked"]],
+        p!["Before uploading, on the build machine, from the project folder:"],
+        pre![code![
+            class("language-sh"),
+            r"next-rust build        # ends with the route summary; a page that cannot render fails here
+next-rust analyze      # page counts and the size of the binary
+next-rust start        # runs the production file locally: open http://localhost:3000",
+        ]],
+        p!["After starting it on the server (replace the port with yours):"],
+        pre![code![
+            class("language-sh"),
+            r"curl -I http://127.0.0.1:8080/          # HTTP/1.1 200 OK, plus the security headers
+curl -I https://example.com/            # the same through the proxy, over TLS
+systemctl status my-app                 # active (running)
+journalctl -u my-app -e                 # production prints errors only, one JSON object per line",
+        ]],
+        h2![id("common-mistakes"), a![class("anchor"), href("#common-mistakes"), "Common mistakes"]],
+        ul![
+            li![
+                strong!["Building on a Mac, running on Linux. "],
+                "The server answers \"cannot execute binary file\" or \"exec format error\". Build on Linux, in CI or with the Dockerfile.",
+            ],
+            li![
+                strong!["Uploading the project instead of the binary. "],
+                "The server needs ",
+                code![".next-rust/<name>"],
+                " and nothing else: not ",
+                code!["app/"],
+                ", not ",
+                code!["public/"],
+                ", not ",
+                code!["target/"],
+                ".",
+            ],
+            li![
+                strong!["Expecting .env files to travel. "],
+                "They are not embedded. Set the variables in the unit file, the container or the platform.",
+            ],
+            li![
+                strong!["No NEXT_RUST_SECRET, or a different one per instance. "],
+                "Forms fail after every restart, or when the load balancer sends the submit to another instance.",
+            ],
+            li![
+                strong!["A proxy in front, but trust_proxy off. "],
+                "Every visitor appears to come from the proxy's address, so rate limits count everyone together, and ",
+                code!["Request::is_secure"],
+                " does not see HTTPS. Set ",
+                code!["[server] trust_proxy = true"],
+                ", and only then: without a proxy, the headers it trusts can be sent by anyone.",
+            ],
+            li![
+                strong!["Editing next-rust.toml on the server. "],
+                "The settings are inside the binary. Rebuild, or point ",
+                code!["NEXT_RUST_CONFIG"],
+                " at a ",
+                code!["next-rust.json"],
+                " file to override them.",
+            ],
+            li![
+                strong!["Tuning [profile.release] in Cargo.toml. "],
+                code!["next-rust build"],
+                " overrides it; use ",
+                code!["[build] optimize"],
+                " and ",
+                code!["[build] panic"],
+                ".",
+            ],
+            li![
+                strong!["Styles that break in production only. "],
+                "Release builds shorten class and ",
+                code!["data-*"],
+                " names; a name only a third-party script knows needs ",
+                code!["[tailwind] keep_classes"],
+                " or ",
+                code!["[build] keep_names"],
+                " (",
+                a![href("/docs/configuration#production-renaming"), "configuration"],
+                ").",
+            ],
+            li![
+                strong!["Videos and archives in public/. "],
+                "Every byte there is a byte in the binary and in memory. Serve large files from a CDN (a network of servers that delivers files from a location near the visitor) or object storage.",
             ],
         ],
     ]

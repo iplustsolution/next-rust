@@ -41,6 +41,9 @@ pub struct Metadata {
     pub html_attributes: Vec<(String, String)>,
     /// `theme-color` per media query: (media, color).
     pub theme_colors: Vec<(String, String)>,
+    /// `Some(false)`: leave the `[analytics]` tags of `next-rust.toml` off
+    /// this page. Writes nothing into `<head>` itself.
+    pub analytics: Option<bool>,
 }
 
 /// A `<link>` tag beyond the ones [`Metadata`] models directly.
@@ -196,6 +199,21 @@ impl Metadata {
         self
     }
 
+    /// `analytics(false)` leaves the `[analytics]` tags of `next-rust.toml`
+    /// off this page (and, set in a layout, off everything below it; a child
+    /// can turn them back on). Verification tags are not affected.
+    pub fn analytics(mut self, enabled: bool) -> Self {
+        self.analytics = Some(enabled);
+        self
+    }
+
+    /// The `robots` value asks search engines not to index the page.
+    pub fn is_noindex(&self) -> bool {
+        self.robots
+            .as_deref()
+            .is_some_and(|r| r.split(',').any(|d| matches!(d.trim().to_ascii_lowercase().as_str(), "noindex" | "none")))
+    }
+
     pub fn meta(mut self, name: impl Into<String>, content: impl Into<String>) -> Self {
         self.other.push((name.into(), content.into()));
         self
@@ -283,7 +301,8 @@ impl Metadata {
             icons,
             open_graph,
             twitter,
-            alternates
+            alternates,
+            analytics
         );
         for (k, v) in child.other {
             if let Some(slot) = self.other.iter_mut().find(|(n, _)| *n == k) {
@@ -435,11 +454,11 @@ impl Metadata {
             meta_name(&mut h, n, v);
         }
         for p in &self.preloads {
-            h.push_str(&format!(
-                "<link rel=\"preload\" href=\"{}\" as=\"{}\"",
-                escape_attr(&p.href),
-                escape_attr(&p.as_)
-            ));
+            // The same check every other `<link href>` gets: a preload never
+            // navigates, but one sanitiser for one attribute is easier to
+            // trust than two rules that differ by which branch wrote the tag.
+            let href = if crate::escape::is_safe_url(&p.href) { p.href.as_str() } else { "#" };
+            h.push_str(&format!("<link rel=\"preload\" href=\"{}\" as=\"{}\"", escape_attr(href), escape_attr(&p.as_)));
             if let Some(m) = &p.mime {
                 h.push_str(&format!(" type=\"{}\"", escape_attr(m)));
             }
@@ -489,6 +508,21 @@ fn link(h: &mut String, rel: &str, href: &str, extra: &[(&str, &str)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn analytics_opt_out_merges_and_writes_nothing() {
+        let layout = Metadata::new().analytics(false);
+        assert_eq!(Metadata::default().merge(layout.clone()).merge(Metadata::new().title("x")).analytics, Some(false));
+        assert_eq!(
+            Metadata::default().merge(layout.clone()).merge(Metadata::new().analytics(true)).analytics,
+            Some(true)
+        );
+        assert_eq!(layout.render_head(), Metadata::new().render_head());
+        assert!(Metadata::new().robots("NoIndex, follow").is_noindex());
+        assert!(Metadata::new().robots("none").is_noindex());
+        assert!(!Metadata::new().robots("index, follow").is_noindex());
+        assert!(!Metadata::new().is_noindex());
+    }
 
     #[test]
     fn merges_with_templates() {
@@ -558,5 +592,281 @@ mod tests {
         assert!(h.contains("<meta property=\"og:title\" content=\"&lt;script&gt;\">"));
         assert!(h.contains("og:image:width"));
         assert!(h.contains("as=\"font\" type=\"font/woff2\" crossorigin"));
+    }
+
+    /// xorshift64*: seeded, so a failure is reproducible.
+    struct Rng(u64);
+
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 >> 12;
+            self.0 ^= self.0 << 25;
+            self.0 ^= self.0 >> 27;
+            self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+        }
+
+        fn below(&mut self, n: usize) -> usize {
+            (self.next() % n as u64) as usize
+        }
+
+        fn text(&mut self) -> String {
+            const PIECES: &[&str] = &[
+                "\"",
+                "'",
+                "<",
+                ">",
+                "&",
+                "`",
+                "=",
+                "/",
+                " ",
+                "\t",
+                "\n",
+                "\r",
+                "\u{0}",
+                "\u{7f}",
+                "\u{feff}",
+                "onload=alert(1)",
+                "><script>alert(1)</script>",
+                "\" onmouseover=\"alert(1)",
+                "javascript:alert(1)",
+                "jAvAsCrIpT:alert(1)",
+                "java\u{0}script:alert(1)",
+                "jAvAsCrIpT&#58;alert(1)",
+                "&#106;avascript:alert(1)",
+                "vbscript:x",
+                "data:text/html,<script>alert(1)</script>",
+                "data:image/svg+xml,<svg onload=alert(1)>",
+                "data:image/png;base64,iVBOR",
+                "blob:https://example.com/u",
+                "filesystem:https://example.com/temporary/x",
+                "\\evil.example",
+                "//evil.example",
+                "/ok",
+                "https://example.com/ok",
+                "héllo",
+                "%s",
+                "-->",
+                "<!--",
+            ];
+            (0..self.below(5)).map(|_| PIECES[self.below(PIECES.len())]).collect()
+        }
+
+        fn maybe(&mut self) -> Option<String> {
+            (!self.next().is_multiple_of(4)).then(|| self.text())
+        }
+    }
+
+    /// Elements `render_head` is allowed to write, and the attributes they
+    /// may carry. Anything else in the output came from a value.
+    const HEAD_TAGS: &[&str] = &["meta", "title", "/title", "link"];
+    const HEAD_ATTRS: &[&str] = &[
+        "charset",
+        "name",
+        "content",
+        "property",
+        "rel",
+        "href",
+        "type",
+        "title",
+        "sizes",
+        "hreflang",
+        "media",
+        "as",
+        "crossorigin",
+    ];
+
+    /// Split `<head>` markup into (tag name, [(attribute, value)]) and the
+    /// text between tags, refusing anything that is not a well-formed tag.
+    type Tag = (String, Vec<(String, String)>);
+
+    fn parse_head(html: &str) -> Result<(Vec<Tag>, String), String> {
+        let b = html.as_bytes();
+        let mut i = 0usize;
+        let mut tags: Vec<Tag> = Vec::new();
+        let mut text = String::new();
+        while i < b.len() {
+            let Some(lt) = html[i..].find('<').map(|o| i + o) else {
+                text.push_str(&html[i..]);
+                break;
+            };
+            text.push_str(&html[i..lt]);
+            let mut j = lt + 1;
+            let mut quote: Option<u8> = None;
+            loop {
+                let c = *b.get(j).ok_or("unterminated tag")?;
+                match quote {
+                    Some(q) if c == q => quote = None,
+                    Some(_) => {}
+                    None if c == b'"' || c == b'\'' => quote = Some(c),
+                    None if c == b'>' => break,
+                    None if c == b'<' => return Err(format!("`<` inside a tag: {:?}", &html[lt..=j])),
+                    None => {}
+                }
+                j += 1;
+            }
+            let inner = &html[lt + 1..j];
+            let mut parts = inner.splitn(2, ' ');
+            let name = parts.next().unwrap_or("").to_owned();
+            let mut attrs = Vec::new();
+            let mut rest = parts.next().unwrap_or("");
+            while !rest.trim_start().is_empty() {
+                rest = rest.trim_start();
+                let end_name = rest.find(['=', ' ']).unwrap_or(rest.len());
+                let key = rest[..end_name].to_owned();
+                rest = &rest[end_name..];
+                match rest.strip_prefix('=') {
+                    Some(after) => {
+                        let quoted = after.strip_prefix('"').ok_or(format!("unquoted value for {key}"))?;
+                        let end = quoted.find('"').ok_or(format!("unterminated value for {key}"))?;
+                        attrs.push((key, quoted[..end].to_owned()));
+                        rest = &quoted[end + 1..];
+                    }
+                    // A bare attribute such as `crossorigin`.
+                    None => attrs.push((key, String::new())),
+                }
+            }
+            tags.push((name, attrs));
+            i = j + 1;
+        }
+        Ok((tags, text))
+    }
+
+    /// No metadata value can add a tag or an attribute to `<head>`, and no
+    /// value reaches a URL attribute as a scheme that runs script.
+    #[test]
+    fn no_metadata_value_escapes_its_attribute() {
+        let mut rng = Rng(0xC0FF_EE01_5EED);
+        for _ in 0..3_000 {
+            let mut m = Metadata::new();
+            m.title = rng.maybe();
+            m.title_template = rng.maybe();
+            m.description = rng.maybe();
+            m.keywords = Some((0..rng.below(3)).map(|_| rng.text()).collect());
+            m.authors = Some((0..rng.below(3)).map(|_| rng.text()).collect());
+            m.canonical = rng.maybe();
+            m.robots = rng.maybe();
+            m.viewport = rng.maybe();
+            m.theme_color = rng.maybe();
+            m.color_scheme = rng.maybe();
+            m.manifest = rng.maybe();
+            m.icons = Some(
+                (0..rng.below(3))
+                    .map(|_| Icon { rel: rng.text(), href: rng.text(), sizes: rng.maybe(), mime: rng.maybe() })
+                    .collect(),
+            );
+            m.open_graph = Some(OpenGraph {
+                title: rng.maybe(),
+                description: rng.maybe(),
+                url: rng.maybe(),
+                site_name: rng.maybe(),
+                kind: rng.maybe(),
+                locale: rng.maybe(),
+                images: (0..rng.below(3))
+                    .map(|_| OgImage {
+                        url: rng.text(),
+                        width: Some(rng.next() as u32),
+                        height: Some(rng.next() as u32),
+                        alt: rng.maybe(),
+                    })
+                    .collect(),
+            });
+            m.twitter = Some(Twitter {
+                card: rng.maybe(),
+                site: rng.maybe(),
+                creator: rng.maybe(),
+                title: rng.maybe(),
+                description: rng.maybe(),
+                images: (0..rng.below(3)).map(|_| rng.text()).collect(),
+            });
+            m.alternates = Some((0..rng.below(3)).map(|_| (rng.text(), rng.text())).collect());
+            m.other = (0..rng.below(3)).map(|_| (rng.text(), rng.text())).collect();
+            m.stylesheets = (0..rng.below(3)).map(|_| rng.text()).collect();
+            m.preloads = (0..rng.below(3))
+                .map(|_| Preload {
+                    href: rng.text(),
+                    as_: rng.text(),
+                    mime: rng.maybe(),
+                    crossorigin: rng.next().is_multiple_of(2),
+                })
+                .collect();
+            m.links = (0..rng.below(3))
+                .map(|_| LinkTag { rel: rng.text(), href: rng.text(), mime: rng.maybe(), title: rng.maybe() })
+                .collect();
+            m.theme_colors = (0..rng.below(3)).map(|_| (rng.text(), rng.text())).collect();
+
+            let head = m.render_head();
+            let (tags, text) = parse_head(&head).unwrap_or_else(|e| panic!("{e}\n{head}"));
+            for (name, attrs) in &tags {
+                assert!(HEAD_TAGS.contains(&name.as_str()), "injected <{name}>\n{head}");
+                for (key, value) in attrs {
+                    assert!(HEAD_ATTRS.contains(&key.as_str()), "injected attribute {key}=\n{head}");
+                    assert!(!key.starts_with("on"), "event handler {key}\n{head}");
+                    assert!(!value.contains('"') && !value.contains('<'), "{key}={value:?}\n{head}");
+                    if key == "href" {
+                        assert!(crate::escape::is_safe_url(value), "script URL in href: {value:?}\n{head}");
+                    }
+                }
+            }
+            // Text between tags is only ever the title, and it is escaped.
+            assert!(!text.contains('<') && !text.contains("&&"), "{text:?}\n{head}");
+        }
+    }
+
+    /// Two things worth stating plainly rather than assuming.
+    #[test]
+    fn what_a_url_in_metadata_is_and_is_not_checked_for() {
+        // `<link href>` is sanitised: a script URL becomes `#`.
+        for bad in ["javascript:alert(1)", "java\u{0}script:alert(1)", "vbscript:x", "data:text/html,<b>"] {
+            let h = Metadata::new().canonical(bad).render_head();
+            assert!(h.contains(r##"<link rel="canonical" href="#">"##), "{bad}: {h}");
+        }
+        // An HTML entity is not a scheme once the attribute is escaped: the
+        // browser reads `javascript&#38;#58;alert(1)`, a relative URL.
+        let h = Metadata::new().canonical("jAvAsCrIpT&#58;alert(1)").render_head();
+        assert!(h.contains(r#"href="jAvAsCrIpT&amp;#58;alert(1)""#), "{h}");
+        // `og:image` and `twitter:image` are `content=` on a `<meta>`, not a
+        // URL the browser will follow from the page, so they are escaped but
+        // not scheme-checked. Nothing executes; it is worth knowing.
+        let h = Metadata::new()
+            .open_graph(OpenGraph {
+                images: vec![OgImage { url: "javascript:alert(1)".into(), ..Default::default() }],
+                ..Default::default()
+            })
+            .render_head();
+        assert!(h.contains(r#"<meta property="og:image" content="javascript:alert(1)">"#), "{h}");
+        // Red before the fix: a preload wrote its `href` with escaping but
+        // without the scheme check that every other `<link>` gets.
+        let h = Metadata::new().preload_image("javascript:alert(1)").render_head();
+        assert!(h.contains(r##"<link rel="preload" href="#" as="image">"##), "{h}");
+        // A URL that starts with `\` or `//` is a *relative* URL, not script,
+        // so `is_safe_url` allows it and `<link>` keeps it. A canonical or
+        // manifest built from request data can therefore point at another
+        // origin — that is the caller's check to make, not this one's.
+        let h = Metadata::new().canonical("\\evil.example").manifest("//evil.example/m").render_head();
+        assert!(h.contains(r#"<link rel="canonical" href="\evil.example">"#), "{h}");
+        assert!(h.contains(r#"<link rel="manifest" href="//evil.example/m">"#), "{h}");
+    }
+
+    #[test]
+    fn merging_generated_metadata_terminates_and_keeps_the_head_safe() {
+        let mut rng = Rng(0xBEEF_1234_0009);
+        let start = std::time::Instant::now();
+        let mut merged = Metadata::new();
+        for _ in 0..2_000 {
+            let child = Metadata::new()
+                .title(rng.text())
+                .title_template(rng.text())
+                .meta(rng.text(), rng.text())
+                .html_attribute(rng.text(), rng.text())
+                .link(rng.text(), rng.text())
+                .stylesheet(rng.text());
+            merged = merged.merge(child);
+        }
+        // `%s` in a title is substituted into the *template*, never the other
+        // way round, so a title full of `%s` cannot grow without bound.
+        assert!(merged.title.as_deref().unwrap_or("").len() < 10_000, "{:?}", merged.title);
+        assert!(parse_head(&merged.render_head()).is_ok());
+        assert!(start.elapsed() < std::time::Duration::from_secs(10), "took {:?}", start.elapsed());
     }
 }

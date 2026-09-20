@@ -13,6 +13,7 @@ Verified against Next Rust 0.1.7. Signatures are copy-paste accurate. Search for
 - [Errors and control flow](#errors-and-control-flow)
 - [API routes: Request and Response](#api-routes-request-and-response)
 - [Cookies, sessions, CSRF](#cookies-sessions-csrf)
+- [The auth kit: next_rust::auth](#the-auth-kit-next_rustauth)
 - [Server actions and forms](#server-actions-and-forms)
 - [UI components](#ui-components)
 - [Client interactivity](#client-interactivity)
@@ -79,7 +80,9 @@ pub const TAGS: &[&str] = &["products"];
 
 Files under `app/` are compiled as modules of your crate (absolute `#[path]` includes), so refer to your own
 code as `crate::db::posts()` — the crate's own name does not resolve inside them.
-Other `.rs` files in `app/` are ignored, so helper modules are fine. Directories starting with `_` or `.` are
+Other `.rs` files in `app/` are ignored, so helper modules are fine. A special file may declare one
+(`#[path = "function.rs"] pub mod function;`): the build follows `#[path]` module declarations and registers
+their `#[server_action]`s (`action!(function::save)`); a private one holding actions is `NR0211`. Directories starting with `_` or `.` are
 never routed. Argument placement is checked at build time (`NR0206`): `Children` only in `Layout`/`Template`,
 `Slots` only in `Layout`, `ErrorInfo` only in the error boundaries, `Data<T>` only where a `load` exists in
 the same file.
@@ -184,7 +187,7 @@ pub async fn generate_params() -> Vec<Params>      // no arguments; Result<Vec<P
 | `Headers` | `.get(name)` | no |
 | `Cookies` | read/write cookies | no |
 | `RequestInfo` | method, uri, remote address | no |
-| `ClientIp` | the client's IP (`X-Forwarded-For` only with `[server] trust_proxy`), `Option<IpAddr>` | no |
+| `ClientIp` | the client's IP (with `[server] trust_proxy`: the `X-Forwarded-For` entry your proxy added, counted from the right by `trusted_proxies`; never the client's own entries), `Option<IpAddr>` | no |
 | `Extension<T>` | value inserted by middleware | no |
 | `Auth<T>` | `.user()`, `.is_authenticated()`, `.require("/login")?` | no |
 | `ResponseHeaders` | `.set(name, value)` on the response | no |
@@ -209,6 +212,11 @@ Error::msg("something went wrong")            // 500
 option.or_not_found()?                        // Option<T> → Result<T>
 ```
 
+Redirecting to a value from the request (`?next=`)? Check it first: `if is_local_path(&next) { redirect(next) }`.
+`is_local_path` accepts one leading `/` and refuses `//host`, `/\host`, whitespace and control characters
+(browsers strip tabs and newlines, so `/<tab>/host` is another site). The framework applies it to `_redirect`,
+the referrer and the `next` written by `protected`.
+
 `Error` implements `From<E>` for any `std::error::Error`, so `?` works on database and IO errors. Status
 mapping: not found → 404, validation → 422, redirect → 307/308, internal → 500. Inspect with `kind()`,
 `status()`, `is_not_found()`, `is_redirect()`, `public_message()`.
@@ -220,6 +228,7 @@ mapping: not found → 404, validation → 422, redirect → 307/308, internal �
 req.method() req.uri() req.path() req.query_string() req.query::<T>()? req.query_param("q")
 req.headers() req.header("x-api-key") req.params() req.param("id")
 req.cookies() req.remote_addr() req.client_ip() req.is_secure() req.is_websocket_upgrade()
+// is_secure(): https, or X-Forwarded-Proto: https only with [server] trust_proxy
 req.same_origin()   // false when the browser says another site sent it; call it in state-changing API routes
 req.extension::<T>() req.insert_extension(value) req.set_path("/rewritten")?  // middleware rewrite
 req.bytes().await? req.text().await? req.json::<T>().await? req.form::<T>().await?
@@ -254,6 +263,79 @@ cookies.get("theme");  cookies.get_decoded("name");  cookies.delete("theme");
 Sessions are middleware plus an extension: `App::new(routes()).middleware(sessions(MemorySessionStore::new()))`
 then `Extension<Session>` with `get`, `insert`, `remove`, `regenerate`, `destroy`. CSRF: `[security] csrf`
 (`origin` by default), the `csrf()` middleware, and `CsrfToken.field()` for the hidden input.
+
+## The auth kit: next_rust::auth
+
+Optional: `next-rust = { features = ["auth"] }` (`"auth-redis"` adds `RedisLimiter` and `RedisGrace`). Crate
+`next-rust-auth`. Database-agnostic; you supply the accounts table and a `SessionStore`. Its `SessionStore` and
+`MemorySessionStore` are **not** the key-value ones above (`next_rust::SessionStore`): import from
+`next_rust::auth::`.
+
+```rust
+use next_rust::auth::{AuthKeys, Purpose, SecureCookies, Sessions, Visitor, CurrentSession, RateLimiter,
+                      Passwords, PasswordPolicy, Codes, CodeCheck, limits::{key, Quota}};
+
+// Sealed tokens: AES-256-GCM, HKDF key per purpose, expiry inside. Secret >= 32 bytes.
+const INVITE: Purpose = Purpose::new("invite/v1");                       // built in: ACCESS, GRACE, CHALLENGE
+let keys = AuthKeys::from_secret(secret)?.with_previous(old_secret)?;    // or from_env("AUTH_SECRET", Some("..._PREVIOUS"))
+let token = keys.seal(INVITE, &data, Duration::from_secs(3600))?;        // "v1.<base64url>"
+let data: T = keys.open(INVITE, &token)?;                                // OpenError::{Malformed, Invalid, Expired, Shape}
+
+// Cookies: `__Host-<base>` + Secure in production, bare name on http://localhost; always HttpOnly, Path=/, Lax.
+let c = SecureCookies::new(&jar);  c.set("flow", v, ttl);  c.get("flow");  c.clear("flow");
+c.set_sealed(&keys, Purpose::CHALLENGE, "ch", &pending, ttl);  c.get_sealed::<Pending>(&keys, Purpose::CHALLENGE, "ch");
+
+// Sessions: one engine per process (static LazyLock). Builder calls only before it is cloned.
+let sessions = Sessions::new(store, keys)            // store: impl SessionStore (User, Lock associated types)
+    .config(SessionConfig { ..Default::default() })  // access 15 min, refresh 30 d, absolute 365 d, grace 15 s; cookies at/rt/did
+    .limit_refresh(limiter.clone(), Quota::new(600, 900))
+    .shared_grace(RedisGrace::new(conn, "app:grace:"))
+    .on_theft(|event: &TheftEvent| { /* audit, mail */ });
+sessions.establish(&Visitor::from_action(&ctx), &user_id, mfa_verified).await?;   // after every factor checked out
+sessions.current(&visitor).await?;          // Option<CurrentSession<U>>; verifies against the store, rotates when needed
+sessions.sign_out(&visitor).await;          sessions.revoke_all(&user_id, "password_changed", Some(&keep_sid)).await?;
+// Visitor::from_request(&req) | from_context(&ctx) | from_action(&action_ctx)
+
+// app/(account)/middleware.rs
+pub async fn middleware(req: Request, next: Next) -> Response { SESSIONS.require("/login").handle(req, next).await }
+// page below it:  pub fn Page(session: CurrentSession<User>) -> impl View      (Auth<User> works too)
+// SESSIONS.load() = same without the redirect, for pages guests may see.
+```
+
+`SessionStore`: `create`, `find_by_refresh_hash` (returns the record, revoked or not, plus a `Lock`: the
+transaction holding `FOR UPDATE`), `rotate(lock, old, new)` (insert new, mark old `rotated`, commit),
+`revoke`, `revoke_family`, `revoke_user(user, reason, keep)`, `is_live(session_id, user_id, now) -> Option<User>`
+(one join, every request). Write them as plain `async fn`. Ids are UUID strings, times are unix seconds,
+errors go through `StoreError::new(e)`. The docs site ("Auth & rate limits") has a full sqlx/Postgres store.
+A rotated refresh token that comes back after the grace window ends its whole family (`reuse_detected`); inside
+the window it needs the family's device cookie too. `sign_out` ends the whole family (`revoke_family`), and
+`establish` revokes the session it replaces (`superseded`). `AuthKeys::from_secret` refuses secrets under 32 bytes
+or with fewer than 8 distinct bytes (`KeyError::Weak`). Limiter keys over 256 bytes are hashed.
+
+```rust
+// Passwords (argon2id on the blocking pool)
+let passwords = Passwords::new();                                   // with_params(memory_kib, passes, lanes)
+PasswordPolicy::default().min_length(12).check(plain, &[email, phone])?;   // Err(PolicyViolation), Display = form message
+let hash = passwords.hash(plain).await?;
+let ok = match account { Some(a) => passwords.verify(plain, &a.hash).await, None => passwords.verify_dummy(plain).await };
+passwords.needs_rehash(&hash);  passwords.matches_any(plain, history).await;
+// Limits: input over 1024 bytes is refused before hashing (`.max_bytes(n)`; `hash` errs, `verify` is false), at most
+// one hash per CPU runs at a time (`.max_concurrent(n)`), a stored hash over 256 MiB / 16 passes is refused, and a
+// missing or malformed stored hash costs a dummy verification. No Unicode normalisation; length counts chars.
+
+// Rate limits: per action and subject; shared across instances with Redis
+let limiter = RateLimiter::memory();                                // RateLimiter::new(RedisLimiter::connect(url, "app:rl:").await?)
+limiter.check(&key::scoped("login:net", &key::network(ip)), Quota::new(200, 900)).await?;          // Err(Throttled) -> 429 via `?`
+limiter.check(&key::scoped("login:acct", &key::identifier(email)), Quota::new(10, 900).sliding()).await?;
+limiter.reset(&k).await;          Quota::cooldown(45)  Quota::per_minute(n)  Quota::per(n, duration)
+limiter.requests(Quota::per_minute(120)).scope("api")               // impl Middleware; .key(|req| ..) overrides the network key
+// Fails open when the backend is down; `.fail_closed()` to refuse instead.
+
+// One-time codes: stored as sha256("{user}.{purpose}.{code}"), 6 digits, 10 min, 5 tries
+let codes = Codes::new(store);                                      // impl CodeStore { put, check }; MemoryCodeStore for tests
+let code = codes.issue(user_id, "email_verification").await?;
+match codes.verify(user_id, "email_verification", input).await? { CodeCheck::Valid | Wrong { remaining } | Locked | Expired => .. }
+```
 
 ## Server actions and forms
 
@@ -299,6 +381,23 @@ the form, `action_result("")` (whole return value) or `action_result("key")` (on
 display it as text, `reset_on_success(true)` to clear the fields. `_redirect` then only applies without
 JavaScript, so point it at a confirmation page.
 
+**Every other same-origin form is enhanced too, with no code** (`[client] enhance_forms`, default on): Enter in a
+search box never reloads the page. Don't write JS that intercepts submits.
+
+| Form | With JavaScript |
+| --- | --- |
+| GET (or no method), same origin | client navigation to the built URL (native serialization incl. submitter `name`/`value`, `formaction`/`formmethod`); pushes history (same URL → replace), keeps layouts, always fresh, focused field keeps focus + typed text + caret |
+| POST to a `route.rs` | `fetch` (urlencoded, or multipart with files when `enctype` says so; `x-csrf-token` sent). Redirect → followed as a navigation; HTML (any status) → shown as the page; `Content-Disposition: attachment` → saved; JSON/text/204 → like an action result: `data-nr-state`, `nr:success`/`nr:error` (`detail.status`), `data-nr-error` filled from `{"errors":{…}}`/`{"error":"…"}`, `stay_on_success`/`action_result` show it in place, otherwise the page refreshes. Network failure → native submit |
+| other origin, `target` ≠ `_self`, `method="dialog"`, `enctype="text/plain"`, `reload(true)` (`data-nr-reload`/`data-nr-native`, on the form or a submit button) | native |
+
+All enhanced forms (actions included): `aria-busy` + disabled submitter while sending, re-submits ignored meanwhile;
+native validation runs first unless `novalidate`; `form.submit()`/`requestSubmit()` from scripts take the same
+path; `replace(true)` / `scroll(false)` as on links. `live_search(250)` (`data-nr-live`, optional
+`data-nr-debounce`, GET only, on the form or one field) submits while typing: debounced, previous request
+aborted, history replaced, focus kept. `swap_target("#results")` (`data-nr-target`) updates only that element in
+place (paired by tag, `id`, `key(..)`; focus/caret/scroll survive), falling back to a page swap when either side
+lacks it. HTML semantics are untouched: a `button![..]` in a form still submits unless `r#type("button")`.
+
 ## UI components
 
 `use next_rust::ui::*;` (crate `next-rust-ui`). Every component is a builder with a same-named macro:
@@ -340,12 +439,82 @@ Button![on_press = Press::open_modal("confirm"), "Delete…"]                   
 Table![columns = ["Name", "Score"], striped = true, hoverable = true, sticky_header = true, empty = EmptyState![..],
        each(rows, |r| tr![td![..], td![..]])]
 Tooltip![content = "Copy", side = Side::Bottom, Button![..]]   EmptyState![title = "Nothing yet", description = "…", Button![..]]
+Avatar![name = "Ada", status = AvatarStatus::Online]             // Online | Away | Busy | Offline
+
+// Overlays and menus (native popover / <dialog>; the script adds keys)
+Dropdown![trigger = Button!["Options"], align = MenuAlign::End, side = Side::Bottom,
+          DropdownSection![title = "Project", DropdownItem![href = "/edit", start_content = icon, shortcut = "⌘E", "Edit"]],
+          DropdownItem![color = Color::Danger, on_press = action!(delete), "Delete"]]   // also `submit = true` inside a form!
+Popover![trigger = Button!["Share"], title = "Share", side = Side::Top, p!["…"]]   ContextMenu![target = Card![..], DropdownItem![..]]
+Drawer![id = "filters", title = "Filters", side = DrawerSide::Right, size = Width::Md, ModalBody![..], ModalFooter![..]]  // open_modal("filters")
+ConfirmDialog![id = "del", title = "Delete?", confirm_label = "Delete", on_confirm = action!(delete), "Cannot be undone."]  // or confirm = form![..]
+Toaster![placement = ToastPlacement::BottomRight, flash.map(|m| Toast![color = Color::Success, title = "Saved", duration = 5000, m])]  // once, in the layout
+Button![on_press = Press::toast("Copied"), ..]      // JS: nextRust.toast("Saved") / ({ title, message, color, duration }); `nr:toast` window event
+CommandPalette![id = "commands", hotkey = "k", CommandGroup![title = "Pages", CommandItem![href = "/docs", keywords = "guide", "Docs"]]]
+LoadingOverlay![visible = true, blur = true, label = "Saving…", children]
+
+// Forms (all submit natively; error slots wired to `data-nr-error`)
+SearchInput![action = "/search", value = q, shortcut = "⌘K"]        // a GET form, name="q"
+Combobox![label = "Country", name = "country", options = ["India", "Germany"]]   // <input list> + datalist; styled list with the script
+TagsInput![label = "Topics", name = "topics", values = ["rust"], options = ["web"], max = 5]   // submits "rust, web"
+NumberInput![label = "Seats", name = "seats", value = "3", min = 1.0, max = 10.0, step = 1.0]
+Slider![label = "Volume", name = "volume", value = 40.0, min = 0.0, max = 100.0, step = 5.0, unit = "%"]
+PinInput![label = "Code", name = "code", length = 6, alphanumeric = false, masked = false]   // one input, autocomplete=one-time-code
+Rating![name = "stars", label = "Rating", value = 4.0]   Rating![value = 4.5, readonly = true, size = Size::Sm]   // radios / role=img
+SegmentedControl![name = "view", value = "week", label = "View", [("day", "Day"), ("week", "Week")]]   // or Segment![value = .., start_content = .., "Label"]
+FileUpload![name = "photo", label = "Photo", accept = "image/*", multiple = true, hint = "Up to 5 MB"]
+TimePicker![label = "Starts", name = "start", value = "09:30", step = 900]   ColorPicker![label = "Brand", name = "brand", value = "#7828c8"]
+DateRangePicker![label = "Stay", name = "stay", start = "2026-09-01", end = "2026-09-05", min = .., max = ..]   // stay_start / stay_end
+FormField![label = "Avatar", name = "avatar", control_id = "avatar", required = true, horizontal = true, any_control]
+FormSection![title = "Profile", description = "…", fields…]   FormActions![justify = Justify::Between, bordered = true, buttons…]
+
+// Page sections and layout (HTML + CSS only)
+Hero![eyebrow = "New", title = "…", subtitle = "…", glow = true, split = true, align = Align::Start, actions = .., media = ..]
+Section![id = "pricing", eyebrow = "Pricing", title = "…", subtitle = "…", muted = true, compact = true, width = Width::Lg, ..]
+FeatureGrid![cols = 3, Feature![icon = icons::Zap(), title = "Fast", color = Color::Primary, card = true, href = "/x", "text"]]
+PricingTable![PricingCard![name = "Pro", price = "$19", period = "/month", description = "…", badge = "Popular", featured = true,
+              cta = Button![..], PricingFeature!["Unlimited"], PricingFeature![included = false, "SSO"]]]
+Testimonial![name = "Ada", role = "CTO", avatar = url, rating = 5.0, logo = .., "Quote"]   LogoCloud![title = "Trusted by", img![..], ..]
+Cta![title = "Ready?", description = "…", color = Color::Primary, soft = false, split = true, Button![..]]
+Faq![structured_data = true, [("Question?", "Answer.")]]          // Accordion preset + FAQPage JSON-LD
+Timeline![TimelineItem![title = "Shipped", time = "09:12", datetime = "2026-09-12T09:12", color = Color::Success, icon = .., "text"]]
+Carousel![label = "Stories", per_view = 3, gap = 4, peek = true, controls = true, CarouselItem![..]]   // scroll-snap; buttons need the script
+Marquee![speed = 30, reverse = false, fade = true, gap = 12, items…]   Bento![cols = 3, BentoItem![col_span = 2, row_span = 2, title = "…", description = "…", href = "/x", ..]]
+Footer![brand = .., description = "…", social = .., bottom = "© 2026", bottom_end = .., FooterColumn![title = "Product", FooterLink![href = "/pricing", "Pricing"], FooterLink![href = "https://…", external = true, "X"]]]
+Pagination![page = 3, total = 20, href = "/posts?page={page}", siblings = 1, compact = false]   // plain links, rel=prev/next
+AspectRatio![ratio = "16 / 9", img![..]]   ScrollArea![max_height = "20rem", label = "Log", ..]   Spacer![]   Spacer![size = 8]
+Show![above = Breakpoint::Md, ..]   Hide![above = Breakpoint::Md, ..]   Sticky![top = "0", blurred = true, bordered = true, Navbar![..]]
+
+// Data display
+Table![header = fragment![TableSelectAll![], SortHeader![href = "/?sort=name&dir=desc", direction = SortDirection::Asc, "Name"], th!["Score"]],
+       each(rows, |r| tr![TableSelect![name = "ids", value = r.id], td![..], td![..]])]
+List![divided = true, bordered = true, ListItem![title = "Ada", description = "Admin", href = "/u/ada", start_content = Avatar![..], end_content = ..]]
+DescriptionList![horizontal = true, DescriptionItem![term = "Plan", "Pro"]]   DescriptionList![cols = 3, ..]   ChipGroup![label = "Tags", Chip![..]]
+Code!["cargo run"]   CodeBlock![language = "rust", title = "main.rs", copy = true, wrap = false, "fn main() {}"]   // children: text or highlighted markup
+Callout![kind = CalloutKind::Warning, title = "Heads up", "text"]   // Note | Tip | Important | Warning | Danger
+Banner![color = Color::Primary, soft = false, href = "/blog", link_label = "Read more", persist = "launch-2026", "Text"]   // CSS-only dismiss
+Meter![label = "Storage", value = 92.0, max = 100.0, low = 60.0, high = 85.0, high_is_bad = true, segments = 4, value_label = "92 GB"]
+Sparkline![values = [3.0, 5.0, 8.0], color = Color::Success, width = 120, height = 32, area = true, label = "Signups"]
+BarChart![title = "Signups", data = [("Mon", 12.0), ("Tue", 30.0)], unit = "%", height = 192, show_values = false, max = 50.0]
+LineChart![title = "Revenue", labels = ["Jan", "Feb"], series = [("2025", vec![1.0, 2.0]), ("2026", vec![2.0, 3.0])]]   // or values = [..]
+Donut![title = "Traffic", center_label = "visits", data = [("Direct", 60.0), ("Search", 40.0)], size = 160]
+Figure![src = "/a.jpg", alt = "…", caption = "…", ratio = "3 / 2", width = 1200, height = 800, eager = false, bordered = true]
+VideoEmbed![youtube = "VIDEO_ID", title = "Launch"]   VideoEmbed![src = "https://player.vimeo.com/video/1", poster = "/p.jpg", title = ".."]
+ResultBlock![status = ResultStatus::Error, title = "Payment failed", description = "…", Button![..]]   ResultBlock![code = "404", title = ".."]
 ```
 
 Modal, tabs with panels and closable alerts need the component script (`data-nr-ui`); without it the modal's
 close button (a `method="dialog"` form) and `Escape` still work, the selected tab panel shows, and accordions
-(`<details>`) open natively. Events: `nr:change` (tabs, `detail.key`), `nr:open`/`nr:close` (modal),
-`nr:dismiss` (alert).
+(`<details>`) open natively. `Press::open_modal` also renders `commandfor`/`command="show-modal"`, so browsers
+with invoker commands open modals and drawers without the script. Script-free: dropdown/popover open, close and
+focus return (native `popover`, CSS anchor positioning), rating, segmented control, pin input, banner dismiss,
+carousel swipe and arrow keys, marquee, charts (hover values), toasts rendered by the server (they fade out with
+CSS). Script only: menu arrow keys and type-ahead, context menu, command palette filter and hotkey,
+`nextRust.toast`, combobox list (a `<datalist>` otherwise), tag chips (comma separated text otherwise), slider
+fill and value, stepper buttons, file names and drag highlight, carousel buttons, copy button, select-all,
+banner persistence. Events: `nr:change` (tabs `detail.key`, tags `detail.values`, table selection
+`detail.selected`), `nr:open`/`nr:close` (modal, drawer, dropdown, popover), `nr:dismiss` (alert, banner),
+`nr:copy` (code block). Charts take their series colors from `--nr-chart-1` … `--nr-chart-8`.
 
 Icons: every Lucide icon as `next_rust::icons::PascalName()` (`icons::ArrowRight()`, former names like
 `icons::Home()` too), returning an `Icon` with `.size(24 | "1.25em")`, `.color(..)`, `.stroke_width(2.0)`,
@@ -365,15 +534,92 @@ render `data-nr-error=name`, so server-action validation errors appear under the
 `/_next-rust/ui.js` only on pages that use them and fall back to native controls without it. Select and date-picker
 popovers render in the browser's top layer (never clipped by `overflow: hidden`).
 
+`[ui] script` chooses where that behaviour comes from: `"js"` (the default) serves the script, `"wasm"` serves the
+same behaviour compiled into the site's shared WebAssembly module and leaves a two-line loader in the page. The
+markup, the stylesheet, the ARIA and the keyboard contract are identical either way, and every component still
+works with no script at all — it is a delivery choice, not a behaviour one. `"wasm"` needs `[build] wasm_islands =
+true` and an `islands/` crate whose `islands!` names `start: next_rust_ui_wasm::boot` (see `examples/ui`). It costs
+bytes rather than saving them: ~31 KB brotli of module against 7.6 KB of minified script, plus the shim. Two
+differences to know: `nextRust.toast(…)` is a shim forwarder, so it raises the toast but returns nothing; and
+release builds cannot shorten names a wasm module knows, so the components' classes and `data-` attributes keep
+their full names in the HTML and CSS.
+
 ## Client interactivity
 
 ```rust
 #[client] pub fn Counter(count: i32) -> impl View { … }
 #[client(module = "/_next-rust/client/chart.js")] pub fn Chart(points: Vec<f32>) -> impl View { … }
+#[client(script = "chart.js")] pub fn Chart2(points: Vec<f32>) -> impl View { … }   // same module, short form
+#[client(wasm = "Chart3")] pub fn Chart3(points: Vec<f32>) -> impl View { … }       // Rust island, one wasm module
 ```
 
 Not async, not generic, no methods, plain identifier arguments implementing `Serialize`. Props are visible in
 the HTML. Files in `client/` are served from `/_next-rust/client/`; a module exports `hydrate(element, props)`.
+
+**WASM islands.** `wasm = "Name"` (an identifier) binds the island to the `hydrate_Name` export of the project's
+`islands/` crate: a separate crate at the project root, `crate-type = ["cdylib"]`, `no_std`, `panic = "abort"`,
+`opt-level = "z"`, whose one dependency is **`next-rust-wasm`** — the browser API. Turned on by
+`[build] wasm_islands = true`; needs `rustup target add wasm32-unknown-unknown`, and emits one module shared by
+every island on the site plus a one-line glue module each.
+
+The whole of an island crate's boilerplate is one macro. It emits the allocator, the panic handler and every
+export the shim calls, so an island file holds island behaviour and nothing else:
+
+```rust
+#![no_std]
+extern crate alloc;
+mod auth_switch;
+
+next_rust_wasm::islands! {
+    start: crate::site::boot,                         // optional: runs once per page load, no root
+    hydrate_AuthSwitch => crate::auth_switch::hydrate,
+}
+```
+
+The export name is written out in full because a macro cannot build an identifier out of a string. An island
+is `pub fn hydrate(cx: Ctx)`, where `Ctx` is `{ root: El, inst: Inst, props: Props }`.
+
+What `next_rust_wasm` gives it: `El`/`ElList` (queries, the tree, attributes, classes, styles, dataset, IDL
+properties, geometry, the top layer), `Str` for strings read *out* of the DOM, events as Rust closures
+(`el.on("click", move |ev| …)`, `on_delegate`, `on_window`, capture/passive/once) so two instances of one
+island never share state, `async` (`spawn`, `timeout`, `raf`, `fetch`, `action`, `sse`) on a small in-crate
+executor, timers and the three observers, storage/history/location/cookies, `Intl` number and date formatting
+done by the browser rather than by linking ICU, and `Val` — a handle to *any* JavaScript value, which is how
+files, `FormData`, `URL`, a `Response` and a vendored SDK are reached without an opcode each. `num` has the
+`f64` helpers `core` lacks, plus JavaScript's `Number()`/`String(n)` semantics, which differ from Rust's in
+both directions.
+
+Props are a compact binary blob, not JSON: field names are FNV-1a hashes resolved at compile time by `k!`, so
+**no field name appears in the module** and nothing parses JSON in the browser (`serde_json` in an island cost
+38 KB raw / 18.5 KB gzip and leaked every field name). Read them with `cx.props.i64(k!("count"))`, or declare a
+struct with `props!`. An action's reply arrives the same way: `action(url, json).await` resolves to `Props` and
+fails with `ActionError` carrying `status()`, `code()`, `message()` and the per-field messages.
+
+The module imports one function, `e.h(op, …)`, and exports `memory`, `alloc`, `dealloc`,
+`hydrate_<Name>(root, props_ptr, props_len) -> instance`, `on_event(cb, event)`, `on_resume(token, ptr, len)`
+and optionally `start()`. The opcode table is append-only: a module compiled against one numbering may run
+against a shim a browser cached from an earlier deploy.
+
+Two more switches put the *framework's* browser logic in the same module: `[client] runtime = "wasm"` (client
+navigation, prefetching, the loading bar, form enhancement, hydration) and `[ui] script = "wasm"` (the shipped
+components' behaviour). Both default to `"js"`. Everything that is on compiles into **one** module,
+`/_next-rust/client/__nrw/islands.wasm`, not one per crate. Also `[build] wasm_opt` (default `true`, runs
+`wasm-opt -Oz` when on `PATH`) and `[build] wasm_keep_names` (default `false`, keeps the wasm name section —
+not the same key as `[build] keep_names`).
+
+**Any** of the three switches makes the CSP gain `'wasm-unsafe-eval'`, automatically and only then; without it
+the browser raises `CompileError`. It composes with `[analytics]`, which widens the same directive. Delivery:
+`application/wasm`, brotli/gzip precompressed, a content-hashed `?v=` URL served `immutable`, and a `<link
+rel="preload" as="fetch" crossorigin>`. With `[build] inline_assets` the shim is inlined and the `.wasm` stays
+a fetch. **Nothing here can fail a build except your own code**: a missing `wasm32-unknown-unknown` target, a
+missing `wasm-opt` or a missing `islands/` crate is a `cargo:warning=` naming the fix, and the binary still
+builds with the behaviour left out. A missing export, no WebAssembly, or a rejected compile leaves the
+server-rendered markup in place; a visitor with JavaScript off gets the server-rendered HTML and the no-JS
+form path. Additive: `#[client(script = …)]` islands are unaffected. Limits: this is obfuscation and one
+language, **not a security boundary** — the shim is readable JavaScript, the `.wasm` is downloadable and
+`wasm2wat`-able, its string literals are plain text, props stay public and secrets stay on the server; and one
+small island costs more than the JS it replaces (~1585 B vs 1202 B brotli). Sizes and the full treatment:
+`/docs/wasm-islands`.
 
 Declarative bindings: `data-nr-text`, `data-nr-show` (`"!path"` negates), `data-nr-bind`,
 `data-nr-class-<name>`, `data-nr-on-<event>` via `on("click", "…")`, `data-nr-key`, `data-nr-error`.
@@ -382,14 +628,14 @@ Operations: `increment:path[,n]`, `decrement:path[,n]`, `toggle:path`, `set:path
 
 ```js
 window.nextRust.navigate(href) / .replace(href) / .back() / .forward() / .refresh() / .prefetch(href)
-await window.nextRust.action(url, input)     // throws with .errors and .status
+await window.nextRust.action(url, input)     // throws with .errors, .status, .code and .data
 await window.nextRust.request(url, { method, body, headers, signal, timeout, as })  // same-origin JSON (as: "blob"|"text"|"response"); throws .status/.data
 for await (const { event, data, id } of window.nextRust.stream(url, { method: "POST", body })) …  // SSE
 window.nextRust.env                          // NEXT_RUST_PUBLIC_* variables
 window.addEventListener("nr:navigate", e => e.detail.url)
 ```
 
-The runtime (`/_next-rust/runtime.js`) is added only to pages with an internal link or an island. It prefetches after
+The runtime (`/_next-rust/runtime.js`) is added only to pages with an internal link, a form or an island. It prefetches after
 400 ms of mouse hover, caches pages for 30 s, and swaps only the part of the page below shared layouts.
 
 ## Metadata, sitemap, robots
@@ -414,6 +660,7 @@ pub fn metadata() -> Metadata {
         .meta("x-custom", "1").stylesheet("/styles.css")
         .preload_font("/fonts/inter.woff2").preload_image("/hero.avif")
         .html_attribute("data-theme", "ocean")   // on <html>; also "class", and "lang" overrides [app] lang
+        .analytics(false)                // no [analytics] tags on this page / below this layout
 }
 ```
 
@@ -422,6 +669,11 @@ Layouts and pages merge outside-in; the child wins. `metadata` may be async, tak
 `not_found()` from it renders the 404 page — but note it renders the **app-root**
 `not-found.rs`, not a per-segment one, because metadata is resolved before the page tree. If you want a
 segment's own 404 page, raise `not_found()` from `load` or `Page` and keep `metadata` infallible.
+
+Site verification tags, analytics scripts, `ads.txt` and app-link files are **configuration, not metadata**:
+set `[verification]` / `[analytics]` in `next-rust.toml` (see cli-and-config.md) and never write those tags,
+snippets or routes by hand. `.analytics(false)` is the only per-page switch; `Metadata::is_noindex()` tells
+whether `robots` says `noindex`/`none` (what `[analytics] skip_noindex` looks at).
 
 `html_attribute(name, value)` puts server-rendered attributes on `<html>` (per name, child wins; `lang` overrides
 `[app] lang`). Invalid names and `on*` are dropped, values escaped, `class` shortened/styled like any class.
@@ -461,8 +713,8 @@ Advertise it with `Metadata::feed(title, href, mime)`; `Metadata::link(rel, href
 
 ## Rendering modes, ISR and caching
 
-`static` renders at build time (or first request) and caches; `dynamic` renders per request; `auto` (default)
-decides at build time. `auto` picks dynamic when the page, any layout or template above it, a slot page, or a
+`static` renders at build time (or first request) and caches; `dynamic` renders per request; `partial` is a
+static page with per-request holes (below); `auto` (default) decides at build time. `auto` picks dynamic when the page, any layout or template above it, a slot page, or a
 `load`/`metadata` on the path takes a request-bound extractor; when a dynamic segment has no
 `generate_params`; or for intercepting routes.
 
@@ -476,6 +728,49 @@ next_rust::revalidate_tag("products").await;
 let posts = cache("posts", CacheOptions::revalidate(60).tag("posts"), || async { fetch().await }).await?;
 invalidate("posts").await;
 ```
+
+### Partial prerendering: `dynamic` holes and `cached` fragments
+
+```rust
+pub const RENDERING: Rendering = Rendering::Partial;   // optional: any static page with a hole is served this way
+pub const REVALIDATE: u64 = 3600;                      // the shell follows the static/ISR rules (TAGS too)
+
+pub async fn Page() -> Result<impl View> {             // no request extractors here (NR0212 / render error)
+    let product = db::product().await?;                // runs once, for the cached shell
+    Ok(article![
+        h1![product.name.clone()],
+        dynamic(p!["Loading cart…"], move |ctx| {      // Fn(Ctx): runs per request, streamed after the shell
+            let sku = product.sku.clone();             // captures come from the static render (shared)
+            async move {
+                let q = ctx.extract::<Query>()?;       // any extractor; or ctx.cookies / ctx.headers / ctx.uri
+                let cart = cart::load(ctx.cookies.get("session")).await?;
+                Ok::<_, Error>(p![format!("{} in cart", cart.count(&sku))])
+            }
+        }),
+    ])
+}
+
+Dynamic::new(fallback).on_error(|info: ErrorInfo| p![info.message]).render(|ctx| async move { .. })
+
+let list = cached("sidebar", CacheOptions::revalidate(300).tag("posts"), || async { ul![..] }).await?;  // -> Node
+invalidate_fragment("sidebar").await;
+```
+
+- The closure returns a view or `Result<view, E>`; it must be `Fn + Send + Sync + 'static` (clone captured
+  values inside, as above) and is in the prelude with `cached`. `CacheOptions` is `next_rust::CacheOptions`.
+- Shell = everything outside holes + fallbacks, rendered without a request and cached; each request gets the
+  shell bytes first, then every hole concurrently via the suspense `<template>` swap. Response:
+  `cache-control: private, no-store`, `x-nr-prerender: partial`, `x-nr-cache` = state of the shell.
+- Holes work in layouts and components too. A static page with a hole from anywhere is detected when rendered;
+  the build (`next-rust routes`: `◐ partial`) sees holes written in the route's own page/layout/template files.
+  On dynamic pages and in `next-rust dev` a hole behaves like `suspense`.
+- Holes run after the response head: no `cookies.set`, `ResponseHeaders`, `set_status` (a warning is logged);
+  errors/panics render the page's nearest `error.rs` (or `on_error`), redirects become `location.replace`.
+- Crawlers and `[rendering] streaming = false` get holes rendered in place (no JS needed); otherwise the
+  fallback stays without JavaScript.
+- `cached` stores rendered HTML plus the stylesheets/classes/flags it needs. Inside a static page or shell the
+  page inherits the fragment's tags and shortest lifetime. Don't put a hole inside `cached`; don't cache
+  per-user markup under a shared key.
 
 Cached values are JSON, so they need `Serialize + Deserialize`; errors are never cached. Stores:
 `MemoryStore::new(max_entries)` (bounded LRU) and `FileStore::new(dir)`, wired with
@@ -496,7 +791,8 @@ pub async fn middleware(mut req: Request, next: Next) -> Response {
 Order: `App::middleware(..)` globals, then the app-root `middleware.rs`, then nested ones outermost-first,
 then the page/API/action. Built-ins: `request_id()`, `cors(Cors::default().allow_origin(..))`,
 `rate_limit(RateLimit::per_minute(60))`, `protected(check, "/login")`, `csrf()`, `security_headers()`,
-`sessions(store)`, `sessions_with_ttl(store, ttl)`.
+`sessions(store)`, `sessions_with_ttl(store, ttl)`. `rate_limit` keys by `client_ip()` (IPv6 by /64 network);
+`protected` redirects to `login?next=<path and query, fully percent-encoded>`.
 
 ## Styling, assets and fonts
 
@@ -508,10 +804,20 @@ asset!("fonts/inter.woff2")      // "/_next-rust/assets/fonts/inter.<hash>.woff2
 
 Paths resolve relative to the source file, then the app directory, then the crate root. Each stylesheet is
 emitted once per document as `<style data-nr-css="<hash>">` in `<head>`; client navigations only send new
-ones. Every sheet is sent **per page**: a document gets only the rules whose selector classes it renders
-(rules without a class owner always go), plus the classes of the scripts the page loads (`client/` modules
-of its islands, `assets/`/`public/` scripts it includes, and their relative imports) and `[tailwind]
-keep_classes` / `[assets] css_safelist` everywhere. Release builds also prune unused rules project-wide,
+ones. Every sheet is sent **per page**, cut down to what the renderer wrote: a rule goes when the page has
+what one of its selectors needs (the class it starts with; every element, id and attribute outside
+`:not()/:is()/:where()/:has()`; values compared for `data-*`, `type`, `role`, `dir`, `lang`, `rel`, `target`);
+a custom property (`:root`, `.dark`, theme blocks, `@layer theme`) when something sent reads it, also through
+another variable, a fallback, `calc()`, an inline `style`, an SVG presentation attribute
+(`font-family="var(--mono)"`), an inline script or another stylesheet of the page; `@font-face`/`@keyframes`/
+`@property` when a `font-family`/`animation`/variable that is sent names them; empty blocks and at-rules are
+not written. Names of the scripts the page loads count as present (`client/` modules of its islands,
+`assets/`/`public/` scripts and their relative imports: classes, `setAttribute`/`dataset.x`/`el.hidden`
+attributes, ids, `--vars`, `createElement("x")`/`"<x"` elements), as do `aria-*`, `open`, `data-nr-*` and what
+the runtime and `ui.js` set. Client navigations stay correct: the `<style>` ids carry what the document had.
+Escape hatches: `[tailwind] keep_classes` / `[assets] css_safelist` (classes, ids, attributes, `"<dialog"`),
+`[assets] css_keep_vars = ["--brand"]`, and `[assets] css_static_attributes = ["data-theme"]` when a script
+names an attribute that only ever has the server-rendered value (drops unused theme blocks). Release builds also prune unused rules project-wide,
 rename classes (Tailwind and `nr-*` ones; 1–2 characters, 3 beyond ~1,000 classes) and rewrite the class
 lists in `client/`/`assets/` scripts to match (`js_classes.rs`: whole-class-list strings, `classList.*`,
 `className =`, `class:`, `class="…"`, `.x` selectors; a lone keyword-like word such as `"block"` pins the
@@ -521,6 +827,31 @@ static file names (`[build] drop_unused_classes`; `next-rust build` lists them),
 Brotli and gzip at build time and serve them precompressed, and compress pages with Brotli when accepted.
 Every document starts with `<meta name="generator" content="Next Rust x.y.z">` and the framework scripts carry
 a `/*! Next Rust x.y.z */` banner unless `[build] signature = false` (`next_rust::VERSION`, `next_rust::signature()`).
+
+**Scripts and styles in Rust (a project without `.js`/`.css` files).** At module level, in any file under
+`src/` or the app directory (the macros expand to nothing; the build script reads the sources and treats them
+exactly like files: class scanning, short class names, minification, `asset!` hashing, embedding, same URLs):
+
+```rust
+next_rust::client_script!("chart.js", r#"import { scale } from "./scale.js"; export function hydrate(el, props) { … }"#);
+next_rust::asset_script!("js/site.js", r#"…"#);      // then script![r#type("module"), src(asset!("js/site.js")), nonce(n.0)]
+next_rust::stylesheet!(r#".hero { @apply mx-auto; }"#); // file listed in [tailwind] stylesheets = ["src/styles/theme.rs"]
+```
+
+Modules import each other by relative path (`./scale.js`), file or declaration alike; a file in `client/` or
+`assets/` with the same path wins. `NR0213`: a path declared twice. `NR0009`: a `.rs` stylesheet entry without
+`stylesheet!`. Pick enough `#`s for the raw string (`r##"…"##` when the source contains `"#`).
+
+**Inline delivery: `[build] inline_assets = true`.** No `.js` request at all: the runtime and `ui.js` become
+inline `<script type="module" data-nr-js="…" nonce="…">`; `<script src>` of an `assets/`/`client/` script
+becomes an inline script with the same attributes; island modules and their static imports are registered in
+`window.__nrm` by inline scripts in `<head>` (modules are turned into factories at build time, so they need
+no URL) and the runtime hydrates islands from that registry. Works with the strict CSP preset (every inline
+script carries the request's nonce) and with client navigation (`x-nr-scripts` lists the `data-nr-js` ids the
+document has; they are not sent or run again). A module reached only by a dynamic `import("./vendor/big.js")`
+(literal, relative) is **lazy**: never inlined, served at `/_next-rust/m/<hash>` (immutable) and fetched on
+demand; put large vendor bundles there. Limits: no import cycles, no `import.meta`, classic scripts with
+`defer`/`async` stay linked.
 
 ```rust
 static INTER: LazyLock<LocalFont> = LazyLock::new(||
@@ -563,17 +894,92 @@ fn main() {
 }
 ```
 
+Shared state built once at startup (database pool, Redis, HTTP client): `run_with_setup` runs an async closure
+before the server starts — after the `.env` files are loaded, on the runtime that serves requests, so
+connections opened there stay valid — and `AppBuilder::state(value)` clones the value into every request:
+
+```rust
+fn main() {
+    next_rust::run_with_setup(routes(), |app| async move {
+        let state = Arc::new(AppState::init().await);   // connect, ping, fail fast
+        app.state(state)
+    });
+}
+// page / layout / load / action:  Extension(state): Extension<Arc<AppState>>
+// route.rs:                        req.extensions().get::<Arc<AppState>>()
+```
+
+`state` takes any `Clone + Send + Sync + 'static`; wrap it in an `Arc`. A handler asking for state that was
+never registered gets a 500, not a panic. The setup closure also runs for `--routes` and `--export` (what
+`next-rust build` invokes): check `std::env::args()` there and skip connecting.
+
 `App` also has `handle(req)` (useful in tests), `revalidate_path`, `revalidate_tag`, `export()`,
 `prerender()`, `route_table()`, `serve()` and `serve_listener(listener)`.
 
-Jobs: `Scheduler::new().every("cleanup", Duration::from_secs(3600), job).daily_at("digest", 6, 0, job).start()`,
-and `Queue::start(concurrency, worker)` with `queue.push(item)`.
+`AppBuilder::on_serve(|| async { … })` runs when the server starts listening (not for `--routes`, `--export`
+or `App::handle`); `on_shutdown(|| async { … })` runs after connections have drained on SIGINT/SIGTERM.
+
+### Background jobs (`next_rust::jobs`)
+
+```rust
+use next_rust::jobs::*;
+
+#[job(queue = "mail", max_attempts = 5, timeout = "30s")]            // all arguments optional
+pub async fn send_welcome(input: Welcome) -> Result<(), JobError> { … }  // input: Serialize + Deserialize
+
+#[cron("0 0 3 * * *")]                                                // UTC; 5 fields, or 6 with seconds first
+pub async fn nightly_cleanup() { … }
+
+fn main() {
+    next_rust::run_with_setup(routes(), |app| async move {
+        let runner = JobRunner::new()                     // or JobRunner::with_backend(RedisBackend::connect(url, "app:jobs").await?)
+            .queue("mail", 4)                             // concurrency per queue, per process (default 10)
+            .register(send_welcome)                       // explicit: a process runs only what it registers
+            .cron(nightly_cleanup)
+            .schedule("digest", "0 7 * * MON-FRI", || async { … })
+            .on_failure(|job, f| eprintln!("{} failed: {}", job.name, f.error));
+        let status = status_handler(runner.client());     // read-only JSON; protect the path
+        app.jobs(runner).get("/internal/jobs", status)    // AppJobsExt: start on serve, drain on shutdown
+    });
+}
+
+enqueue(send_welcome, input).await?;                      // also enqueue_in(duration, job, input), enqueue_at(time, job, input)
+jobs.job(charge, order).unique("charge:42").priority(50).send().await?;   // jobs: Extension<JobClient> or JobClient::global()
+```
+
+- `#[job]` signatures: `()`, `(input)`, `(JobContext)`, `(input, JobContext)`; returns `()` or `Result<(), E>` where
+  `E: Into<JobError>` (every `std::error::Error`; a `String` needs `JobError::msg`). The macro replaces the
+  function with a unit struct of the same name implementing `Job`; call the body as `send_welcome::perform(input)`.
+  Arguments: `name` (stored name — keep stable), `queue`, `max_attempts` (5), `timeout` (`"5m"`), `backoff`
+  (`"5s"`), `max_backoff` (`"1h"`), `priority` (-100..=100), `path = "next_rust_jobs"` for crates without `next-rust`.
+- Failures retry with exponential backoff ±20 % jitter; `JobError::fatal(..)` dead-letters at once,
+  `JobError::retry_in(delay, ..)` overrides the delay; panics and timeouts count as failed attempts.
+  Dead letters: `jobs.dead_jobs(queue, n)`, `retry_dead`, `purge_dead`; `jobs.cancel(queue, id)` for jobs not started.
+- `.unique(key)` = one job per key until it finishes; `.unique_for(key, window)` = idempotency key that outlives the job.
+  `Enqueued { id, duplicate }` tells which happened.
+- Delivery is **at least once** (visibility timeout 60 s + heartbeat + reaper): jobs must be idempotent.
+- Limits: a serialised input over 1 MiB is refused with `Error::Invalid` (`JobClient::max_payload_bytes(n)`; queue a
+  reference, not the data); job, queue and id names are 1..=128 bytes, unique keys up to 512, no control characters;
+  stored error messages are cut to 4 KB; cron expressions up to 256 bytes; `MemoryBackend::max_jobs(n)` caps the
+  in-memory store. Custom backends call `JobRecord::validate()`. `status_handler` shows names, counts and last
+  errors (never payloads): keep it behind auth.
+- Cron: `* , - /`, names (`JAN`, `MON-FRI`), `@hourly|@daily|@weekly|@monthly|@yearly`, `@every 90s`. One instance
+  runs each tick (a per-tick lock in the backend — across instances only with Redis); failed ticks are not
+  retried, so enqueue a job from the task when the work must not be lost.
+- Redis backend: feature `jobs-redis` on `next-rust` (crate feature `redis` on `next-rust-jobs`), Redis ≥ 5; on
+  Cluster use a hash-tagged prefix (`"{app}:jobs"`). Enqueue-only process: `JobClient::new(backend).install_global()`.
+- Without the app builder: `let handle = runner.start()?; … handle.shutdown().await;` (waits `shutdown_timeout`, 30 s).
+
+The older fire-and-forget helpers are still in the same module:
+`Scheduler::new().every("cleanup", Duration::from_secs(3600), job).daily_at("digest", 6, 0, job).start()`,
+and `Queue::start(concurrency, worker)` with `queue.push(item)` — no retries, nothing survives a restart.
 
 SSE: `Response::sse(stream_of_sse_events)`; build events with `SseEvent::data("x")` or
 `SseEvent::json(&value).event("update").id("7")`.
 
 WebSockets (feature `websocket`): `next_rust::ws::upgrade(req, |socket| async move { … })` or
-`App::ws(pattern, handler)`. Upgrades from another site are refused with 403 (`req.same_origin()`).
+`App::ws(pattern, handler)`. Upgrades from another site are refused with 403 (`req.same_origin()`). Incoming
+messages are limited to 1 MiB (`ws::MAX_MESSAGE_SIZE`); `ws::upgrade_with_limit(req, bytes, handler)` sets another limit.
 
 ## Name traps
 

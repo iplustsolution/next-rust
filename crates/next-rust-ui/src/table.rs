@@ -22,6 +22,7 @@ use crate::{Extra, Radius, apply, attr, root, styled};
 #[derive(Default)]
 pub struct Table {
     columns: Vec<String>,
+    header: Option<Node>,
     caption: Option<String>,
     striped: bool,
     compact: bool,
@@ -48,6 +49,12 @@ impl Table {
         S: Into<String>,
     {
         self.columns = v.into_iter().map(Into::into).collect();
+        self
+    }
+    /// Your own header cells instead of `columns`: `th!`, [`SortHeader`](struct@crate::SortHeader),
+    /// [`TableSelectAll`](struct@crate::TableSelectAll), in a `fragment!`.
+    pub fn header(mut self, v: impl View) -> Self {
+        self.header = Some(v.into_node());
         self
     }
     /// A visible `<caption>` (also the table's accessible name).
@@ -113,8 +120,12 @@ impl View for Table {
                 .children
                 .push(Element::new("caption").with(attr("class", "nr-table-caption")).with(caption).into_node());
         }
-        let width = self.columns.len();
-        if width > 0 {
+        let mut width = self.columns.len();
+        if let Some(header) = self.header {
+            // The number of cells is not known: the empty row spans "all".
+            width = 100;
+            table.children.push(Element::new("thead").with(Element::new("tr").with(header)).into_node());
+        } else if width > 0 {
             let mut tr = Element::new("tr");
             for column in self.columns {
                 tr.children.push(Element::new("th").with(attr("scope", "col")).with(column).into_node());

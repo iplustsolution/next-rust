@@ -128,7 +128,9 @@ impl<T> Matcher<T> {
                 if raw.is_empty() {
                     return None;
                 }
-                segs.push(crate::decode_segment(raw)?);
+                // A NUL byte is never part of a legitimate parameter, and it
+                // truncates paths and strings in code below the application.
+                segs.push(crate::decode_segment(raw).filter(|s| !s.contains('\0'))?);
             }
         }
         let refs: Vec<&str> = segs.iter().map(String::as_str).collect();

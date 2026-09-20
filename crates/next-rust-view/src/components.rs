@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 
 use crate::attrs::{self, AttrText};
-use crate::node::{Element, Node, Suspense, View};
+use crate::node::{BoxNodeFuture, Element, Hole, HoleContext, Node, Suspense, View};
 
 /// Content passed to a layout or template.
 #[derive(Debug, Default)]
@@ -93,6 +93,17 @@ where
         fallback: fallback.into_node(),
         content: Box::pin(async move { content.await.into_node() }),
     }))
+}
+
+/// A per-request region of an otherwise static document. `fallback` is part
+/// of the static shell; `content` is called for every request with the
+/// renderer's [`HoleContext`] and streamed into place.
+///
+/// This is the building block under `next_rust::dynamic`, which passes the
+/// request context. Rendered without a context ([`render_static`](crate::render_static),
+/// [`render_to_string`](crate::render_to_string)) a hole shows its fallback.
+pub fn hole(fallback: impl View, content: impl Fn(HoleContext) -> BoxNodeFuture + Send + Sync + 'static) -> Node {
+    Node::Hole(Box::new(Hole { fallback: fallback.into_node(), content: std::sync::Arc::new(content) }))
 }
 
 /// Wrap server-rendered markup in an island marker so the client runtime can

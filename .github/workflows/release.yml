@@ -10,8 +10,12 @@ name: Release
 # hand in the root Cargo.toml is used as-is when it is higher than the one on
 # crates.io, e.g. to move to 0.1.0.
 #
-# Requires the repository secret CARGO_REGISTRY_TOKEN (a crates.io API token
-# with the "publish-new" and "publish-update" scopes).
+# Requires two repository secrets (see CONTRIBUTING.md):
+#   CARGO_REGISTRY_TOKEN  a crates.io API token with the "publish-new" and
+#                         "publish-update" scopes.
+#   RELEASE_TOKEN         a repository admin's token with Contents: write. It
+#                         pushes the version commit and the tag past the
+#                         ruleset on main, so checkout keeps its credentials.
 
 on:
   workflow_run:
@@ -19,8 +23,8 @@ on:
     types: [completed]
     branches: [main]
 
-permissions:
-  contents: write
+# Each job asks for what it needs.
+permissions: {}
 
 concurrency:
   group: release
@@ -29,6 +33,8 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
 
 jobs:
   publish:
@@ -36,8 +42,29 @@ jobs:
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    permissions:
+      # For `gh release create`. The version commit and the tag are pushed with
+      # RELEASE_TOKEN instead: main is protected by a ruleset that only a
+      # repository admin may bypass.
+      contents: write
+    outputs:
+      published: ${{ steps.publish.outputs.published }}
+      version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@v5
+      - name: Check the release secrets
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          RELEASE_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+        run: |
+          missing=
+          [ -n "$CARGO_REGISTRY_TOKEN" ] || missing="$missing CARGO_REGISTRY_TOKEN"
+          [ -n "$RELEASE_TOKEN" ] || missing="$missing RELEASE_TOKEN"
+          if [ -n "$missing" ]; then
+            echo "::error::Missing repository secret(s):$missing. See the Releasing section of CONTRIBUTING.md."
+            exit 1
+          fi
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           # Publish exactly the commit that passed CI.
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -46,44 +73,35 @@ jobs:
           # bypass the ruleset on main (see CONTRIBUTING.md).
           token: ${{ secrets.RELEASE_TOKEN }}
 
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Check the crates.io token
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: |
-          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
-            echo "::error::The CARGO_REGISTRY_TOKEN secret is not set. Create a token at https://crates.io/settings/tokens and add it under Settings → Secrets and variables → Actions."
-            exit 1
-          fi
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Pick the version
         id: version
+        env:
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          # Every published crate is released with the same version.
-          crates="next-rust-assets next-rust-core next-rust-router next-rust-view next-rust-icons next-rust-ui next-rust-cache next-rust-server next-rust-macros next-rust-build next-rust next-rust-cli"
-
-          metadata=$(cargo metadata --no-deps --format-version 1)
-          publishable=$(echo "$metadata" | jq -r '.packages[] | select(.publish != []) | .name' | sort | xargs)
-          if [ "$publishable" != "$(echo $crates | tr ' ' '\n' | sort | xargs)" ]; then
-            echo "::error::The crates to publish ($publishable) don't match the release list in release.yml"
-            exit 1
-          fi
-          versions=$(echo "$metadata" | jq -r '.packages[] | select(.publish != []) | .version' | sort -u)
-          if [ "$(echo "$versions" | wc -l)" -ne 1 ]; then
-            echo "::error::All crates must share one version (use version.workspace = true); found: $(echo $versions)"
-            exit 1
-          fi
-          current=$versions
+          # Every published crate is released with the same version. The list,
+          # its order and the shared version are checked by the script (CI's
+          # Package job runs the same check on every pull request).
+          bash .github/scripts/release-crates.sh check
+          crates=$(bash .github/scripts/release-crates.sh list | xargs)
+          [ -n "$crates" ] || { echo "::error::empty release list"; exit 1; }
+          current=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "next-rust") | .version')
 
           # Latest version of each crate on crates.io.
           highest=""
           complete=true
           for crate in $crates; do
-            v=$(curl -s -A "next-rust release workflow (https://github.com/${{ github.repository }})" \
-              "https://crates.io/api/v1/crates/$crate" | jq -r '.crate.max_version // empty')
+            # A crates.io hiccup must not abort a release: an unreadable reply
+            # is retried, and then treated as "not published" (which at worst
+            # publishes a crate that is already there, and that is skipped below).
+            v=$(curl -sS --retry 5 --retry-all-errors --max-time 30 \
+              -A "next-rust release workflow (https://github.com/$REPO)" \
+              "https://crates.io/api/v1/crates/$crate" | jq -r '.crate.max_version // empty' || true)
             echo "crates.io: $crate ${v:-(not published)}"
             if [ -n "$v" ] && { [ -z "$highest" ] || [ "$(printf '%s\n%s\n' "$highest" "$v" | sort -V | tail -n1)" = "$v" ]; }; then
               highest=$v
@@ -113,7 +131,7 @@ jobs:
             echo "Release $highest is incomplete on crates.io: publishing the missing crates"
           else
             IFS=. read -r major minor patch <<< "${highest%%[-+]*}"
-            version="$major.$minor.$((patch + 1))"
+            version="${major:-0}.${minor:-0}.$(( ${patch:-0} + 1 ))"
             echo "Bumping $highest -> $version"
           fi
           echo "current=$current" >> "$GITHUB_OUTPUT"
@@ -134,6 +152,8 @@ jobs:
           cargo update --workspace
           git diff --stat
           test "$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "next-rust") | .version')" = "$VERSION"
+          # Every `version = "…"` of a workspace crate moved with it: the lockfile is whole.
+          cargo metadata --locked --format-version 1 > /dev/null
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git commit -am "release: v$VERSION [skip ci]"
@@ -142,27 +162,18 @@ jobs:
         id: publish
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
 
           # Dependency order: every crate is published after the crates it uses.
-          crates=(
-            next-rust-assets
-            next-rust-core
-            next-rust-router
-            next-rust-view
-            next-rust-icons
-            next-rust-ui
-            next-rust-cache
-            next-rust-server
-            next-rust-macros
-            next-rust-build
-            next-rust
-            next-rust-cli
-          )
+          mapfile -t crates < <(bash .github/scripts/release-crates.sh list)
+          # `mapfile` cannot fail the step, and an empty list would quietly
+          # "release" nothing at all.
+          [ "${#crates[@]}" -gt 0 ] || { echo "::error::empty release list"; exit 1; }
 
           metadata=$(cargo metadata --no-deps --format-version 1)
-          version=${{ steps.version.outputs.version }}
+          version=$VERSION
           published=false
 
           for crate in "${crates[@]}"; do
@@ -179,6 +190,9 @@ jobs:
               continue
             fi
             echo "→ publishing $crate $crate_version"
+            # Not `--locked`: the packaged crate resolves the crates it depends
+            # on from crates.io, which the workspace lockfile has as path
+            # entries. `cargo package` in CI verifies the same build.
             # `cargo publish` waits until the crate is available before returning,
             # so the next crate can depend on it. crates.io limits how many new
             # crates can be created in a short time (the first release creates
@@ -208,15 +222,18 @@ jobs:
           VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
-          echo "release_commit=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           # main may have moved on while this ran: write the version on top of
-          # the latest main instead of rebasing the release commit.
-          for attempt in 1 2 3; do
+          # the latest main instead of rebasing the release commit. The commit
+          # that lands on main is the one the tag points at, so the tag is
+          # always an ancestor of main (a dangling tag breaks `git describe`
+          # and the generated release notes).
+          for _ in 1 2 3; do
             git fetch origin main
-            git checkout -B version-bump origin/main
+            git checkout -B version-bump FETCH_HEAD
             on_main=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "next-rust") | .version')
             if [ "$(printf '%s\n%s\n' "$VERSION" "$on_main" | sort -V | tail -n1)" = "$on_main" ]; then
               echo "main already has version $on_main"
+              echo "release_commit=$(git rev-parse FETCH_HEAD)" >> "$GITHUB_ENV"
               exit 0
             fi
             esc=${on_main//./\\.}
@@ -226,24 +243,31 @@ jobs:
               Cargo.toml
             cargo update --workspace
             git commit -am "release: v$VERSION [skip ci]"
-            if git push origin HEAD:main; then exit 0; fi
+            if git push origin HEAD:main; then
+              echo "release_commit=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+              exit 0
+            fi
             echo "main moved while pushing; retrying"
           done
           echo "::error::Could not push the version bump to main (is the branch protected?)"
           exit 1
 
+      # `always()`: the crates are on crates.io by this point, so the tag and
+      # the release are written even if the version commit could not be pushed.
       - name: Tag and create GitHub release
-        if: steps.publish.outputs.published == 'true'
+        if: always() && steps.publish.outputs.published == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          tag="v${{ steps.version.outputs.version }}"
+          tag="v$VERSION"
           if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
             echo "Tag $tag already exists"
           else
             # Tag the exact source that was published.
-            git tag "$tag" "${release_commit:-${{ github.event.workflow_run.head_sha }}}"
+            git tag "$tag" "${release_commit:-$HEAD_SHA}"
             git push origin "$tag"
           fi
           if ! gh release view "$tag" >/dev/null 2>&1; then
@@ -264,3 +288,99 @@ jobs:
       - name: Drop packaging output
         if: always()
         run: rm -rf target/package
+
+  # The `next-rust` command-line tool, prebuilt, attached to the GitHub
+  # release with a SHA-256 checksum and a build provenance attestation
+  # (`gh attestation verify <file> --repo <owner>/<repo>`). A failure here
+  # never undoes the crates.io release above; re-run the job to fill the gap.
+  binaries:
+    name: CLI binary (${{ matrix.target }})
+    needs: publish
+    if: needs.publish.outputs.published == 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    permissions:
+      contents: write # upload to the GitHub release
+      id-token: write # sign the attestation
+      attestations: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest }
+          - { target: aarch64-unknown-linux-gnu, os: ubuntu-24.04-arm }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-24.04-arm }
+          - { target: x86_64-apple-darwin, os: macos-latest }
+          - { target: aarch64-apple-darwin, os: macos-latest }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest }
+    defaults:
+      run:
+        shell: bash
+    env:
+      TAG: v${{ needs.publish.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          # The exact source that was published.
+          ref: refs/tags/v${{ needs.publish.outputs.version }}
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+          targets: ${{ matrix.target }}
+
+      - name: Install the musl linker
+        if: endsWith(matrix.target, '-musl')
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends musl-tools
+
+      - name: Build
+        run: cargo build --release --locked -p next-rust-cli --target "$TARGET"
+
+      - name: Package
+        id: package
+        run: |
+          set -euo pipefail
+          name="next-rust-$TAG-$TARGET"
+          mkdir -p "dist/$name"
+          cp README.md LICENSE-MIT LICENSE-APACHE "dist/$name/"
+          cd dist
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp "../target/$TARGET/release/next-rust.exe" "$name/"
+            archive="$name.zip"
+            7z a -bso0 "$archive" "$name"
+          else
+            cp "../target/$TARGET/release/next-rust" "$name/"
+            archive="$name.tar.gz"
+            tar -czf "$archive" "$name"
+          fi
+          if command -v sha256sum > /dev/null; then
+            sha256sum "$archive" > "$archive.sha256"
+          else
+            shasum -a 256 "$archive" > "$archive.sha256"
+          fi
+          cat "$archive.sha256"
+          echo "archive=dist/$archive" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: ${{ steps.package.outputs.archive }}
+
+      - name: Upload to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ARCHIVE: ${{ steps.package.outputs.archive }}
+        run: |
+          set -euo pipefail
+          # Every target uploads to the same release; concurrent uploads are
+          # rejected now and then, so try again before failing the job.
+          for wait in 5 15 30 60 0; do
+            if gh release upload "$TAG" "$ARCHIVE" "$ARCHIVE.sha256" --clobber; then exit 0; fi
+            [ "$wait" -eq 0 ] && break
+            echo "upload failed; retrying in ${wait}s"
+            sleep "$wait"
+          done
+          echo "::error::Could not upload $ARCHIVE to $TAG"
+          exit 1

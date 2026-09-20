@@ -1,5 +1,14 @@
+# Text is LF everywhere, on Windows checkouts too: tests hash and compare file
+# contents read with `include_str!`, which does not normalize line endings.
+* text=auto eol=lf
+
 # The framework is written in Rust. The HTML and CSS files under examples/ are
 # app content that demonstrates `page.html` pages and CSS modules, so they are
 # left out of GitHub's language statistics.
 examples/**/*.html linguist-detectable=false
 examples/**/*.css linguist-detectable=false
+
+# The browser runtime's compiled module is a build artifact that is checked in
+# (like RUNTIME_JS_MIN), so that building an application never needs the
+# wasm32 target or wasm-opt. Binary: never diffed, never line-ending mangled.
+crates/next-rust-server/src/wasm_runtime/*.wasm binary

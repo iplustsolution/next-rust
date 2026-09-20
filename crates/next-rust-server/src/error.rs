@@ -112,8 +112,8 @@ impl Error {
             }
             ErrorKind::DynamicUsage(what) => format!(
                 "`{what}` reads request data, but this page is rendered statically.\n\
-                 Mark the route dynamic with `pub const RENDERING: Rendering = Rendering::Dynamic;`\n\
-                 or remove the request-bound argument."
+                 Mark the route dynamic with `pub const RENDERING: Rendering = Rendering::Dynamic;`,\n\
+                 read it inside a `dynamic(fallback, |ctx| ..)` hole, or remove the request-bound argument."
             ),
             ErrorKind::Validation(fields) => {
                 fields.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join("\n")

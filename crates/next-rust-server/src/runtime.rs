@@ -24,6 +24,39 @@ pub fn run(routes: Routes) {
 /// }
 /// ```
 pub fn run_with(builder: AppBuilder) {
+    start(builder, |builder| async move { builder });
+}
+
+/// Like [`run_with`], with an async setup step that runs **once, before the
+/// server starts**, on the same runtime that serves requests and after the
+/// `.env` files are loaded. Build database pools, cache clients and other
+/// shared handles here, then hand them to the app:
+///
+/// ```ignore
+/// fn main() {
+///     next_rust::run_with_setup(routes(), |app| async move {
+///         let state = Arc::new(AppState::connect().await);
+///         app.state(state)            // pages take `Extension<Arc<AppState>>`
+///     });
+/// }
+/// ```
+///
+/// Connections opened in `setup` belong to the serving runtime, so they stay
+/// usable for the life of the process. `setup` also runs for `--routes` and
+/// `--export`; check `std::env::args()` to skip work those modes do not need.
+pub fn run_with_setup<F, Fut>(routes: Routes, setup: F)
+where
+    F: FnOnce(AppBuilder) -> Fut,
+    Fut: std::future::Future<Output = AppBuilder>,
+{
+    start(App::new(routes), setup);
+}
+
+fn start<F, Fut>(builder: AppBuilder, setup: F)
+where
+    F: FnOnce(AppBuilder) -> Fut,
+    Fut: std::future::Future<Output = AppBuilder>,
+{
     crate::banner::mark_process_start();
     let env = Environment::from_env();
     let config: Config =
@@ -49,6 +82,7 @@ pub fn run_with(builder: AppBuilder) {
             std::process::exit(1);
         }
     };
+    let builder = runtime.block_on(setup(builder));
     let app = match builder.config(config).environment(env).build() {
         Ok(app) => app,
         Err(e) => {

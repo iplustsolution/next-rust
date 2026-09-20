@@ -184,6 +184,15 @@ fn watch_fingerprint(info: &ProjectInfo) -> u64 {
     if let Some(src) = &c.source {
         paths.push(src.clone());
     }
+    // `[build] wasm_islands`: the islands crate is compiled by the build
+    // script, so editing an island has to rebuild like editing `src/`. Only
+    // its sources — `islands/target/` is skipped below with every other
+    // `target/`, but naming `islands/src` directly keeps the walk short.
+    if c.build.wasm_islands {
+        let islands = info.root.join("islands");
+        paths.push(islands.join("src"));
+        paths.push(islands.join("Cargo.toml"));
+    }
     paths.extend(c.dev.watch.iter().map(|p| c.resolve(p)));
     if c.tailwind.enabled {
         paths.extend(c.tailwind.stylesheets.iter().map(|p| c.resolve(p)));

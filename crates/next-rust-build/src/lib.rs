@@ -29,9 +29,15 @@ pub mod class_names;
 pub mod codegen;
 pub mod css_usage;
 pub mod js_classes;
+pub mod js_inline;
 pub mod js_minify;
+pub mod names;
 pub mod report;
+pub mod rust_sources;
 pub mod tailwind;
+pub mod wasm_islands;
+pub mod wasm_shim;
+pub mod wasm_size;
 
 use std::path::{Path, PathBuf};
 
@@ -142,8 +148,21 @@ impl Generator {
         }
         emit_rerun(&config, &manifest_dir);
 
+        // Scripts and stylesheets declared in Rust become files under
+        // `$OUT_DIR`, and from here on are treated like `client/`, `assets/`
+        // and `.css` files.
+        let (declared, declared_diagnostics) = rust_sources::collect(&config);
+        let generated = out_dir.join(rust_sources::DIR);
+        rust_sources::write(&declared, &generated).map_err(|e| e.to_string())?;
+        // Every crate that contributes browser logic — the app's islands, the
+        // Rust browser runtime, the UI kit's component script — becomes a wasm
+        // module under the generated `client/`, in time to be scanned, hashed
+        // and embedded like any other client script.
+        let wasm = wasm_islands::build(&config, &generated)?;
+        config.generated = Some(generated);
+
         let mut project = analyze_project(&config);
-        for d in config.tailwind_diagnostics() {
+        for d in config.tailwind_diagnostics().into_iter().chain(declared_diagnostics) {
             project.diagnostics.push(d);
         }
         for p in &self.plugins {
@@ -213,7 +232,7 @@ impl Generator {
             None => config.build.drop_unused_classes && std::env::var("PROFILE").is_ok_and(|p| p == "release"),
         };
         println!("cargo:rerun-if-env-changed=NEXT_RUST_DROP_CLASSES");
-        let mut report = report::BuildReport::default();
+        let mut report = report::BuildReport { wasm, ..Default::default() };
         let naming = if tailwind {
             generate_tailwind(&config, &out_dir, minify_classes, &components, &mut report)?
         } else if minify_classes && !components.is_empty() {
@@ -230,6 +249,68 @@ impl Generator {
         }
         let class_names = naming.as_ref().map(|n| n.seed);
         let renames = naming.map(|n| n.renames);
+        // Release builds give `data-*` attributes, custom properties,
+        // keyframes and layers short names; `NEXT_RUST_MINIFY_NAMES=0|1` overrides.
+        let release = std::env::var("PROFILE").is_ok_and(|p| p == "release");
+        let minify_names = match std::env::var("NEXT_RUST_MINIFY_NAMES").ok().as_deref() {
+            Some("0") => false,
+            Some(_) => true,
+            None => config.build.minify_names && release,
+        };
+        println!("cargo:rerun-if-env-changed=NEXT_RUST_MINIFY_NAMES");
+        let names = minify_names.then(|| {
+            let mut sheets = names::project_stylesheets(&config);
+            if tailwind && let Ok(css) = std::fs::read_to_string(out_dir.join("next_rust_tailwind.css")) {
+                sheets.push(css);
+            }
+            let ui = !components.is_empty();
+            if ui {
+                sheets.push(next_rust_ui::UI_CSS.css.to_owned());
+            }
+            let sheets: Vec<&str> = sheets.iter().map(String::as_str).collect();
+            // `[ui] script = "wasm"` puts the components' behaviour in a wasm
+            // data section, which cannot be rewritten the way script text can:
+            // a shorter name would move every string after it. So the names
+            // the module knows are kept instead, through the same mechanism a
+            // project uses by hand.
+            let config = if ui && config.ui.script.is_wasm() {
+                let mut config = config.clone();
+                config.build.keep_names.extend(
+                    next_rust_ui::UI_WASM_NAMES.lines().map(str::trim).filter(|n| !n.is_empty()).map(str::to_owned),
+                );
+                std::borrow::Cow::Owned(config)
+            } else {
+                std::borrow::Cow::Borrowed(&config)
+            };
+            names::plan(
+                &config,
+                &sheets,
+                ui.then_some(next_rust_ui::UI_JS_MIN),
+                class_names.unwrap_or_else(class_names::seed),
+            )
+        });
+        if let Some(plan) = &names {
+            report.names = Some(report::NamesReport {
+                renamed: plan.table.len(),
+                kept: plan.kept.iter().map(|(name, why)| format!("{name}: {why}")).collect(),
+            });
+        }
+        write_if_changed(
+            &out_dir.join(names::FILE),
+            class_names::table_source(names.as_ref().map_or(&[][..], |p| &p.table)).as_bytes(),
+        )
+        .map_err(|e| e.to_string())?;
+        // Release builds write compact HTML; `NEXT_RUST_MINIFY_HTML=0|1` overrides.
+        let compact_html = match std::env::var("NEXT_RUST_MINIFY_HTML").ok().as_deref() {
+            Some("0") => false,
+            Some(_) => true,
+            None => config.build.minify_html && release,
+        };
+        println!("cargo:rerun-if-env-changed=NEXT_RUST_MINIFY_HTML");
+        let markup = (compact_html || names.is_some()).then_some(codegen::MarkupOptions {
+            compact: compact_html,
+            svg_precision: if compact_html { config.build.svg_precision } else { 0 },
+        });
         // Release builds embed the scripts in `client/` and `assets/`
         // minified; `NEXT_RUST_MINIFY_JS=0|1` overrides. The minified copies
         // live under `$OUT_DIR/next_rust_min` (`asset!` hashes those), and are
@@ -247,15 +328,33 @@ impl Generator {
         let precompress = embed_files && !matches!(std::env::var("NEXT_RUST_PRECOMPRESS").ok().as_deref(), Some("0"));
         println!("cargo:rerun-if-env-changed=NEXT_RUST_PRECOMPRESS");
         let minified_dir = out_dir.join(codegen::MINIFIED_DIR);
-        let minified_dir = if embed_files && (minify_js || renames.is_some() || precompress) {
+        let minified_dir = if embed_files && (minify_js || renames.is_some() || precompress || names.is_some()) {
             Some(minified_dir)
         } else {
             let _ = std::fs::remove_dir_all(&minified_dir);
             None
         };
+        // `[build] inline_assets`: pages carry their scripts, prepared here.
+        let inline_dir = config.build.inline_assets.then(|| out_dir.join(codegen::INLINE_DIR));
+        if inline_dir.is_none() {
+            let _ = std::fs::remove_dir_all(out_dir.join(codegen::INLINE_DIR));
+        } else {
+            // Development builds read the scripts from disk at build time.
+            for (_, dir) in rust_sources::script_dirs(&config).into_iter().filter(|(_, d)| d.is_dir()) {
+                println!("cargo:rerun-if-changed={}", dir.display());
+            }
+        }
         // Classes that scripts add outside the view tree keep their rules on
         // every page: the CSS macros read them from this file.
-        let keep: Vec<&String> = config.tailwind.keep_classes.iter().chain(&config.assets.css_safelist).collect();
+        let keep: Vec<&String> = config
+            .tailwind
+            .keep_classes
+            .iter()
+            .chain(&config.assets.css_safelist)
+            .chain(&config.assets.css_keep_vars)
+            .collect();
+        let fixed: Vec<String> = config.assets.css_static_attributes.iter().map(|a| format!("!{a}")).collect();
+        let keep: Vec<&String> = keep.into_iter().chain(&fixed).collect();
         let keep = keep.iter().map(|c| c.as_str()).collect::<Vec<_>>().join("\n");
         write_if_changed(&out_dir.join(css_usage::KEEP_FILE), keep.as_bytes()).map_err(|e| e.to_string())?;
         let (mut code, generated) = codegen::generate_code_reporting(
@@ -270,6 +369,10 @@ impl Generator {
                 renames,
                 precompress,
                 drop_classes,
+                inline_dir,
+                names,
+                markup,
+                drop_console: config.build.drop_console,
             },
         );
         report.scripts = generated.scripts;
@@ -346,7 +449,7 @@ fn generate_tailwind(
     }
     // A missing file would rerun the build script on every build; config
     // validation already reports it (NR0008).
-    for sheet in tailwind::stylesheet_paths(config).into_iter().filter(|p| p.is_file()) {
+    for sheet in tailwind::configured_stylesheets(config).into_iter().filter(|p| p.is_file()) {
         println!("cargo:rerun-if-changed={}", sheet.display());
     }
     // `next-rust dev` / `build` download the engine with a progress bar
@@ -355,6 +458,12 @@ fn generate_tailwind(
     // Always minified: browser devtools format CSS on their own, so readable
     // output in development would only cost bytes.
     let mut css = tailwind::compile(&bin, config, out_dir, true)?;
+    // A little tighter than the engine leaves it (`a, b`, `calc(1 / 2)`, `;}`).
+    let compacted = next_rust_assets::css::compact(&css);
+    if compacted != css {
+        css = compacted;
+        write_if_changed(&out_dir.join("next_rust_tailwind.css"), css.as_bytes()).map_err(|e| e.to_string())?;
+    }
     // Before renaming: these classes keep their names.
     let keep = class_names::outside_classes(&css, config);
     write_if_changed(&out_dir.join("next_rust_tailwind_keep.rs"), class_names::list_source(&keep).as_bytes())

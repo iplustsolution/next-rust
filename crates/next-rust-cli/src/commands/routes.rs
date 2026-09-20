@@ -38,6 +38,7 @@ pub fn print_table(project: &next_rust_build::Project, layouts: bool) {
             let kind = match (r.route.kind, r.rendering) {
                 (RouteKind::Api, _) => ui::magenta("api"),
                 (_, "static") => ui::green("○ static"),
+                (_, "partial") => ui::cyan("◐ partial"),
                 _ => ui::yellow("λ dynamic"),
             };
             let mut path = r.route.pattern.to_display_string();
@@ -63,6 +64,11 @@ pub fn print_table(project: &next_rust_build::Project, layouts: bool) {
                     ui::dim(&relative(l, root))
                 );
             }
+            if ar.rendering == "partial" {
+                let declared = project.files.get(&ar.route.source).and_then(|f| f.rendering()) == Some("partial");
+                let why = if declared { "rendering = partial" } else { "the page or a layout calls dynamic(..)" };
+                println!("{}  {}", " ".repeat(w0), ui::dim(&format!("  partial because: {why}")));
+            }
             if let Some(reason) = &ar.dynamic_reason
                 && ar.route.kind != RouteKind::Api
             {
@@ -71,12 +77,22 @@ pub fn print_table(project: &next_rust_build::Project, layouts: bool) {
         }
     }
     let statics = project.routes.iter().filter(|r| r.rendering == "static").count();
+    let partials = project.routes.iter().filter(|r| r.rendering == "partial").count();
     let apis = project.routes.iter().filter(|r| r.route.kind == RouteKind::Api).count();
     println!(
-        "\n{} routes: {} static, {} dynamic, {} api",
+        "\n{} routes: {} static, {} partial, {} dynamic, {} api",
         project.routes.len(),
         statics,
-        project.routes.len() - statics - apis,
+        partials,
+        project.routes.len() - statics - partials - apis,
         apis
     );
+    if partials > 0 {
+        println!(
+            "{}",
+            ui::dim(
+                "◐ partial: a static shell, cached like a static page, with dynamic(..) holes rendered per request"
+            )
+        );
+    }
 }

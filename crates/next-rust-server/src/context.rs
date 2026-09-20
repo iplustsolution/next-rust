@@ -47,6 +47,8 @@ pub struct RequestContext {
     pub config: Arc<Config>,
     pub(crate) status: AtomicU16,
     pub(crate) response_headers: Mutex<HeaderMap>,
+    /// Static renders leave the shell of a page with holes here.
+    pub(crate) shell: Mutex<Option<next_rust_view::Shell>>,
 }
 
 /// Shared handle to the context.
@@ -75,6 +77,12 @@ impl RequestContext {
         let _ = self.status.compare_exchange(200, code, Ordering::Relaxed, Ordering::Relaxed);
     }
 
+    /// Resolve an extractor by hand, as page arguments are: inside a
+    /// [`dynamic`](crate::dynamic) hole, `ctx.extract::<Query<Filter>>()?`.
+    pub fn extract<T: FromContext>(self: &Arc<Self>) -> Result<T> {
+        T::from_context(self)
+    }
+
     fn require_request(&self, what: &'static str) -> Result<()> {
         if self.is_static() { Err(Error::new(ErrorKind::DynamicUsage(what))) } else { Ok(()) }
     }
@@ -99,6 +107,7 @@ impl RequestContext {
             config,
             status: AtomicU16::new(200),
             response_headers: Mutex::new(HeaderMap::new()),
+            shell: Mutex::new(None),
         })
     }
 
@@ -117,6 +126,7 @@ impl RequestContext {
             config,
             status: AtomicU16::new(200),
             response_headers: Mutex::new(HeaderMap::new()),
+            shell: Mutex::new(None),
         })
     }
 }
@@ -219,7 +229,7 @@ pub struct ClientIp(pub Option<std::net::IpAddr>);
 impl FromContext for ClientIp {
     fn from_context(ctx: &Ctx) -> Result<Self> {
         ctx.require_request("ClientIp")?;
-        Ok(ClientIp(crate::request::client_ip_from(&ctx.headers, ctx.remote_addr, crate::trust_proxy())))
+        Ok(ClientIp(crate::request::client_ip_from(&ctx.headers, ctx.remote_addr, crate::trusted_proxies())))
     }
 }
 

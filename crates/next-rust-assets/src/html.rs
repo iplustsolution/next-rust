@@ -200,6 +200,30 @@ fn tag_end(input: &str, start: usize) -> usize {
     input.len()
 }
 
+/// Make JavaScript safe to write inside a `<script>` element: `</script`
+/// becomes `<\/script` and `<!--` becomes `<\!--`, which mean the same in
+/// string, template and regular-expression literals (the only places they
+/// can appear in a valid script).
+pub fn escape_inline_script(code: &str) -> String {
+    let bytes = code.as_bytes();
+    let mut out = String::with_capacity(code.len());
+    let mut last = 0;
+    for (i, _) in code.match_indices('<') {
+        let rest = &bytes[i + 1..];
+        if rest.len() >= 7 && rest[0] == b'/' && rest[1..7].eq_ignore_ascii_case(b"script") {
+            out.push_str(&code[last..i]);
+            out.push_str("<\\/");
+            last = i + 2;
+        } else if rest.starts_with(b"!--") {
+            out.push_str(&code[last..i]);
+            out.push_str("<\\!--");
+            last = i + 4;
+        }
+    }
+    out.push_str(&code[last..]);
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -225,5 +249,43 @@ mod tests {
     #[test]
     fn plain_text_comparisons_survive() {
         assert_eq!(minify("<p>1 < 2 and 3 > 2</p>"), "<p>1 < 2 and 3 > 2</p>");
+    }
+
+    #[test]
+    fn inline_scripts_cannot_close_their_element() {
+        assert_eq!(
+            escape_inline_script("a = \"</script><!-- </SCRIPT x\"; b < c"),
+            "a = \"<\\/script><\\!-- <\\/SCRIPT x\"; b < c"
+        );
+        assert_eq!(escape_inline_script("plain"), "plain");
+    }
+
+    /// Every way out of a `<script>` element: the end tag in any case and at
+    /// the end of the code, and `<!--`, which would otherwise put the parser
+    /// in the escaped state where `<script` hides the next end tag.
+    #[test]
+    fn no_end_tag_and_no_comment_survive_the_escaper() {
+        for code in [
+            "x</script",
+            "</ScRiPt\t>",
+            "</script\n>",
+            "a</scriptx",
+            "<<!--",
+            "<!--<script>alert(1)</script>-->",
+            "<!--",
+            "<",
+            "<!-",
+            "</",
+            "</scrip",
+            "0</script>1</SCRIPT >2<!--3",
+            "\u{1f600}</script>",
+        ] {
+            let out = escape_inline_script(code);
+            let lower = out.to_ascii_lowercase();
+            assert!(!lower.contains("</script"), "{code:?} -> {out:?}");
+            assert!(!out.contains("<!--"), "{code:?} -> {out:?}");
+            // Nothing is lost: the escaper only adds backslashes.
+            assert_eq!(out.replace("<\\/", "</").replace("<\\!--", "<!--"), code, "{code:?} -> {out:?}");
+        }
     }
 }

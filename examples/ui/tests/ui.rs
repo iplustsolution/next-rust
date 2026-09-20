@@ -27,7 +27,32 @@ async fn showcase_renders_with_the_component_script() {
     let script = client.get("/_next-rust/ui.js").await;
     assert_eq!(script.status, 200);
     assert_eq!(script.header("content-type"), Some("text/javascript; charset=utf-8"));
-    assert!(script.text.contains("nr-ui-js") && script.text.contains("data-nr-press"));
+
+    // `/_next-rust/ui.js` answers with whichever script `[ui] script` selects,
+    // and this example exists to be flipped between the two: its own
+    // next-rust.toml invites the reader to set `script = "wasm"` and try it.
+    // Asserting the JavaScript's strings unconditionally made that invitation
+    // turn the suite red, which reads as "the wasm path is broken" when all
+    // that happened is the file did its job. So ask the config what it chose.
+    let wasm = next_rust::Config::discover(env!("CARGO_MANIFEST_DIR"))
+        .expect("the example's next-rust.toml")
+        .ui
+        .script
+        .is_wasm();
+    if wasm {
+        // The boot module: it loads the island module and calls `start()`,
+        // which is where the components' behaviour lives on this setting.
+        assert!(
+            script.text.contains("/_next-rust/client/__nrw.js") && script.text.contains("start()"),
+            "[ui] script = \"wasm\" must serve the boot module: {}",
+            script.text
+        );
+    } else {
+        assert!(
+            script.text.contains("nr-ui-js") && script.text.contains("data-nr-press"),
+            "[ui] script = \"js\" must serve the component script"
+        );
+    }
 }
 
 #[tokio::test]

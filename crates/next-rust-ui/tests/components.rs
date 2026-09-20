@@ -291,6 +291,179 @@ fn every_css_rule_belongs_to_rendered_markup() {
     ]);
     all += &markup(Table![columns = ["a", "b"], empty = "none"]);
 
+    // ---- Overlays and menus
+    for c in colors {
+        all += &markup(Dropdown![
+            DropdownSection![
+                title = "t",
+                DropdownItem![color = c, href = "/", description = "d", start_content = "i", shortcut = "k", "a"]
+            ],
+            DropdownItem![color = c, end_content = "e", disabled = true, "b"],
+        ]);
+        all += &markup(Toast![color = c, title = "t", "x"]);
+        all += &markup(LoadingOverlay![visible = true, blur = true, color = c, label = "l", "x"]);
+    }
+    all += &markup(Dropdown![align = MenuAlign::End, side = Side::Top, trigger = Button!["o"], DropdownItem!["a"]]);
+    for side in [Side::Top, Side::Bottom, Side::Left, Side::Right] {
+        all += &markup(Popover![side = side, align = MenuAlign::End, title = "t", trigger = Button!["o"], "x"]);
+    }
+    all += &markup(ContextMenu![target = "t", DropdownItem!["a"]]);
+    for w in [Width::Sm, Width::Md, Width::Lg, Width::Xl, Width::Xxl, Width::Full] {
+        all += &markup(Drawer![size = w, title = "t", ModalBody!["b"]]);
+    }
+    for side in [DrawerSide::Left, DrawerSide::Right, DrawerSide::Top, DrawerSide::Bottom] {
+        all += &markup(Drawer![side = side, "x"]);
+    }
+    all += &markup(ConfirmDialog![title = "t", "x"]);
+    all += &markup(LoadingOverlay![visible = true, "x"]);
+    for p in [
+        ToastPlacement::TopLeft,
+        ToastPlacement::TopCenter,
+        ToastPlacement::TopRight,
+        ToastPlacement::BottomLeft,
+        ToastPlacement::BottomCenter,
+        ToastPlacement::BottomRight,
+    ] {
+        all += &markup(Toaster![placement = p, Toast![duration = 0, "x"]]);
+    }
+    all += &markup(CommandPalette![CommandGroup![
+        title = "g",
+        CommandItem![href = "/", start_content = "i", shortcut = "k", "a"]
+    ]]);
+
+    // ---- Forms
+    for s in sizes {
+        all += &markup(Slider![size = s, label = "l", description = "d", name = "n"]);
+        all += &markup(PinInput![size = s, label = "l", name = "n", error_message = "e"]);
+        all += &markup(Rating![size = s, label = "l"]);
+        all += &markup(Rating![size = s, readonly = true, value = 3.5]);
+        all += &markup(SegmentedControl![
+            size = s,
+            full_width = true,
+            Segment![start_content = "i", disabled = true, "a"]
+        ]);
+        all += &markup(ColorPicker![size = s, label = "l"]);
+    }
+    all += &markup(SearchInput![action = "/s", shortcut = "k"]);
+    all += &markup(NumberInput![label = "n"]);
+    all += &markup(TimePicker![label = "t"]);
+    all += &markup(Combobox![label = "c", options = ["a"]]);
+    all += &markup(TagsInput![label = "t", values = ["a"], options = ["b"]]);
+    all += &markup(FileUpload![label = "f", hint = "h", name = "f", description = "d", disabled = true]);
+    all += &markup(DateRangePicker![label = "d", name = "d"]);
+    all += &markup(FormField![label = "l", name = "n", description = "d", horizontal = true, required = true, "x"]);
+    all += &markup(FormSection![title = "t", description = "d", "x"]);
+    for j in [Justify::Start, Justify::Center, Justify::End, Justify::Between] {
+        all += &markup(FormActions![justify = j, bordered = true, "x"]);
+    }
+
+    // ---- Sections and layout
+    all += &markup(Hero![
+        eyebrow = "e",
+        title = "t",
+        subtitle = "s",
+        actions = "a",
+        media = "m",
+        split = true,
+        glow = true,
+        align = Align::Start
+    ]);
+    all += &markup(Section![
+        eyebrow = "e",
+        title = "t",
+        subtitle = "s",
+        muted = true,
+        compact = true,
+        align = Align::Start,
+        "x"
+    ]);
+    all += &markup(FeatureGrid![Feature![icon = "i", title = "t", href = "/", card = true, "x"]]);
+    all += &markup(PricingTable![PricingCard![
+        name = "n",
+        price = "p",
+        period = "/m",
+        description = "d",
+        badge = "b",
+        featured = true,
+        cta = "c",
+        PricingFeature!["a"],
+        PricingFeature![included = false, "b"]
+    ]]);
+    all += &markup(Testimonial![name = "n", role = "r", rating = 5.0, logo = "l", "q"]);
+    all += &markup(LogoCloud![title = "t", "a"]);
+    for c in colors {
+        all += &markup(Cta![color = c, title = "t", description = "d", split = true, "a"]);
+        all += &markup(Cta![color = c, soft = true, "a"]);
+        all += &markup(Banner![color = c, href = "/", icon = "i", "x"]);
+        all += &markup(Banner![color = c, soft = true, persist = "k", "x"]);
+        all += &markup(TimelineItem![color = c, title = "t", time = "now", icon = "i", "x"]);
+    }
+    all += &markup(Timeline![TimelineItem![title = "t", "x"]]);
+    for n in 1..=4 {
+        all += &markup(Carousel![per_view = n, peek = true, gap = 2, CarouselItem!["a"]]);
+        all += &markup(Bento![cols = n, BentoItem![col_span = n, row_span = n, title = "t", description = "d", "x"]]);
+    }
+    all += &markup(Marquee![reverse = true, "a"]);
+    all += &markup(Footer![
+        brand = "b",
+        description = "d",
+        social = "s",
+        bottom = "c",
+        bottom_end = "e",
+        FooterColumn![title = "t", FooterLink![href = "/", "a"], FooterLink![href = "/", external = true, "b"]]
+    ]);
+    for s in sizes {
+        all += &markup(Pagination![size = s, page = 5, total = 12]);
+        all += &markup(Meter![size = s, value = 50.0, label = "l", segments = 4]);
+    }
+    all += &markup(Pagination![compact = true, page = 1, total = 3]);
+    all += &markup(AspectRatio![ratio = "1", "x"]);
+    all += &markup(ScrollArea![horizontal = true, max_height = "4rem", "x"]);
+    all += &markup(Spacer![size = 2]);
+    for b in [Breakpoint::Sm, Breakpoint::Md, Breakpoint::Lg, Breakpoint::Xl] {
+        all += &markup(Show![above = b, "x"]);
+        all += &markup(Hide![above = b, "x"]);
+    }
+    all += &markup(Sticky![blurred = true, bordered = true, top = "4rem", "x"]);
+
+    // ---- Data display
+    all += &markup(Table![
+        header = fragment![TableSelectAll![], SortHeader![href = "/", direction = SortDirection::Asc, "a"]],
+        tr![TableSelect![name = "ids", value = "1"], td!["x"]]
+    ]);
+    all += &markup(List![
+        divided = true,
+        bordered = true,
+        compact = true,
+        ListItem![title = "t", description = "d", href = "/", start_content = "s", end_content = "e"]
+    ]);
+    for n in 2..=4 {
+        all += &markup(DescriptionList![cols = n, DescriptionItem![term = "t", "v"]]);
+    }
+    all += &markup(DescriptionList![horizontal = true, DescriptionItem![term = "t", "v"]]);
+    all += &markup(ChipGroup![Chip!["a"]]);
+    all += &markup(Code!["x"]);
+    all += &markup(CodeBlock![language = "rust", title = "t", wrap = true, "x"]);
+    for k in [CalloutKind::Note, CalloutKind::Tip, CalloutKind::Important, CalloutKind::Warning, CalloutKind::Danger] {
+        all += &markup(Callout![kind = k, "x"]);
+    }
+    all += &markup(Figure![src = "/a.png", alt = "a", caption = "c", ratio = "1", bordered = true]);
+    all += &markup(VideoEmbed![youtube = "abc"]);
+    for st in [ResultStatus::Success, ResultStatus::Error, ResultStatus::Warning, ResultStatus::Info] {
+        all += &markup(ResultBlock![status = st, title = "t", description = "d", "a"]);
+    }
+    all += &markup(ResultBlock![code = "404", title = "t"]);
+    for st in [AvatarStatus::Online, AvatarStatus::Away, AvatarStatus::Busy, AvatarStatus::Offline] {
+        all += &markup(Avatar![name = "a", status = st]);
+    }
+    all += &markup(Sparkline![values = [1.0, 2.0]]);
+    all += &markup(BarChart![title = "t", data = [("a", 1.0)], show_values = true]);
+    all += &markup(BarChart![data = [("a", 1.0)]]);
+    all += &markup(LineChart![title = "t", labels = ["a", "b"], values = [1.0, 2.0]]);
+    let eight: Vec<(String, Vec<f64>)> = (0..8).map(|i| (format!("s{i}"), vec![1.0, 2.0])).collect();
+    all += &markup(LineChart![series = eight]);
+    all += &markup(Donut![title = "t", center_label = "c", data = [("a", 1.0), ("b", 2.0)]]);
+
     let rendered = classes(&all);
     let css = next_rust_ui::style::UI_CSS_SOURCE;
     let components = &css[css.find("@layer components {").unwrap()..];

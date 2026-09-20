@@ -2,9 +2,87 @@
 
 use next_rust::prelude::*;
 
+/// The box that opens the page: the feature without the jargon.
+fn plain_words(text: impl View) -> Node {
+    div![class("callout"), p![strong!["In plain words. "], text]].into_node()
+}
+
 pub fn content() -> Node {
     fragment![
+        plain_words(
+            "Middleware is the doorman of your site. Every request passes it on the way in and every response passes \
+             it on the way out, so it is the one place to check a ticket, turn someone away, note the time, or stamp \
+             something on the reply, without repeating that code in every page."
+        ),
+        p![
+            "Typical jobs: send guests to the login page, limit how many requests one visitor may make, add a header \
+             to every response, measure how long requests take. A site needs no middleware at all; without a ",
+            code!["middleware.rs"],
+            " file requests go straight to the page or API route.",
+        ],
+        p!["Words used on this page:"],
+        ul![
+            li![
+                strong!["Request"],
+                " and ",
+                strong!["response"],
+                ": what the browser sends (a URL, headers, maybe a form) and what the server sends back (a status \
+                 code, headers, the page).",
+            ],
+            li![
+                strong!["Header"],
+                ": a named note attached to a request or response, such as ",
+                code!["authorization"],
+                " or ",
+                code!["cache-control"],
+                ".",
+            ],
+            li![
+                strong!["Extension"],
+                ": a value middleware attaches to the request for later code to read, such as the signed-in user.",
+            ],
+            li![
+                strong!["Session"],
+                ": the server's memory of one visitor between requests, found again through a cookie.",
+            ],
+            li![
+                strong!["CSRF"],
+                " (cross-site request forgery): another website tricking a signed-in visitor's browser into \
+                 submitting something to yours.",
+            ],
+            li![
+                strong!["CORS"],
+                " (cross-origin resource sharing): the browser rule that decides whether a script on another site \
+                 may read your API's answers.",
+            ],
+        ],
         h2![id("middleware-files"), a![class("anchor"), href("#middleware-files"), "Middleware files"]],
+        p![
+            "A file named ",
+            code!["middleware.rs"],
+            " inside ",
+            code!["app/"],
+            " guards the folder it sits in and everything below it. It must export one function with exactly this \
+             shape: it receives the request and ",
+            code!["next"],
+            " (the rest of the chain), and returns a response. Calling ",
+            code!["next.run(req).await"],
+            " lets the request continue; returning without calling it stops the request there. Any other signature \
+             is build error ",
+            code!["NR0205"],
+            ".",
+        ],
+        p![
+            "The first example is ",
+            code!["app/middleware.rs"],
+            ", at the top of ",
+            code!["app/"],
+            ", so it sees every request. It serves ",
+            code!["/home"],
+            " as if the visitor had asked for ",
+            code!["/"],
+            " (a rewrite: the address bar does not change) and adds a timing header to every response:",
+        ],
         pre![code![
             class("language-rust"),
             r#"// app/middleware.rs – every request, before routing
@@ -19,6 +97,14 @@ pub async fn middleware(mut req: Request, next: Next) -> Response {
     res.with_header("server-timing", &format!("app;dur={}", started.elapsed().as_millis()))
 }"#,
         ],],
+        p![
+            "The second example is ",
+            code!["app/admin/middleware.rs"],
+            ". Because of where it lives it only runs for ",
+            code!["/admin"],
+            " and the pages under it. It lets administrators through, answers other signed-in users with 403 \
+             (forbidden) and sends guests to the login page:",
+        ],
         pre![code![
             class("language-rust"),
             r#"// app/admin/middleware.rs – only /admin and below
@@ -36,7 +122,17 @@ pub async fn middleware(req: Request, next: Next) -> Response {
             li!["short-circuit with its own response (reject, redirect);"],
             li!["modify the response (headers, cookies, status)."],
         ],
+        p![
+            "Create the file by hand or with ",
+            code!["next-rust generate middleware /admin"],
+            ". Like every file under ",
+            code!["app/"],
+            ", a new one needs a rebuild; ",
+            code!["next-rust dev"],
+            " does that for you.",
+        ],
         h2![id("order"), a![class("anchor"), href("#order"), "Order"]],
+        p!["Several middleware can apply to one request. They run from the outside in, like doors in a corridor."],
         p!["For ", code!["GET /admin/users"], ":"],
         ol![
             li!["global middleware added with ", code!["App::middleware"], ", in order;"],
@@ -50,7 +146,24 @@ pub async fn middleware(req: Request, next: Next) -> Response {
             ".",
         ],
         h2![id("global-middleware"), a![class("anchor"), href("#global-middleware"), "Global middleware"]],
-        p!["Replace ", code!["next_rust::app!()"], " with ", code!["routes!()"], " and your own ", code!["main"], ":",],
+        p![
+            "Global middleware is not a file under ",
+            code!["app/"],
+            "; it is added in code where the server is started, and it runs first, for everything. This is where \
+             the ready-made pieces below (request ids, CORS, rate limits, sessions) are switched on. A new project's ",
+            code!["src/main.rs"],
+            " is the single line ",
+            code!["next_rust::app!();"],
+            ", which has no room for options. Replace ",
+            code!["next_rust::app!()"],
+            " with ",
+            code!["routes!()"],
+            " and your own ",
+            code!["main"],
+            ". The whole of ",
+            code!["src/main.rs"],
+            " then looks like this:",
+        ],
         pre![code![
             class("language-rust"),
             r#"use next_rust::*;
@@ -83,6 +196,11 @@ async fn authenticate(mut req: Request, next: Next) -> Response {
             " trait.",
         ],
         h2![id("built-in-middleware"), a![class("anchor"), href("#built-in-middleware"), "Built-in middleware"],],
+        p![
+            "These come with the framework. Each is a function that returns middleware, to pass to ",
+            code!["App::middleware(..)"],
+            " as in the example above.",
+        ],
         div![
             class("table-wrap"),
             table![
@@ -126,6 +244,17 @@ async fn authenticate(mut req: Request, next: Next) -> Response {
             ],
         ],
         p![
+            "In plain terms: ",
+            code!["request_id"],
+            " gives every request a reference number you can find again in the logs; ",
+            code!["cors"],
+            " lets a website on another domain call your API; ",
+            code!["rate_limit"],
+            " answers 429 (too many requests) when one visitor sends too much; ",
+            code!["protected"],
+            " keeps guests out of a part of the site.",
+        ],
+        p![
             "The rate limiter is per process. For fleets, implement ",
             code!["Middleware"],
             " on top of a shared store such as Redis.",
@@ -135,7 +264,9 @@ async fn authenticate(mut req: Request, next: Next) -> Response {
             a![class("anchor"), href("#authentication-primitives"), "Authentication primitives"],
         ],
         p![
-            "Next Rust doesn't ship an authentication provider. It gives you the pieces to build JWT, session, OAuth or custom authentication:",
+            "Next Rust doesn't ship an authentication provider. It gives you the pieces to build JWT, session, OAuth or custom authentication. (The optional auth kit with sessions, passwords and rate limits built on these pieces is described in ",
+            a![href("/docs/auth"), "Auth & rate limits"],
+            ".) The idea is a relay: middleware works out who is asking once, and everything after it just reads the answer.",
         ],
         ul![
             li![
@@ -178,7 +309,21 @@ async fn authenticate(mut req: Request, next: Next) -> Response {
             ],
         ],
         h2![id("sessions"), a![class("anchor"), href("#sessions"), "Sessions"]],
+        p![
+            "A session is a small box of data the server keeps per visitor: a visit counter, a shopping cart, the \
+             signed-in user's id. The visitor's browser holds only the key to the box (a cookie). Switch sessions on \
+             with one line of global middleware in ",
+            code!["src/main.rs"],
+            ":",
+        ],
         pre![code![class("language-rust"), r"App::new(routes()).middleware(sessions(MemorySessionStore::default()))",],],
+        p![
+            "Then any page can ask for the session. This page, for example ",
+            code!["app/visits/page.rs"],
+            ", counts how often the same visitor has opened it. Without the ",
+            code!["sessions(..)"],
+            " line above, the page answers with a 500 error because there is no session to hand over.",
+        ],
         pre![code![
             class("language-rust"),
             r#"pub fn Page(Extension(session): Extension<Session>) -> impl View {
@@ -207,6 +352,9 @@ async fn authenticate(mut req: Request, next: Next) -> Response {
             ],
         ],
         h2![id("csrf"), a![class("anchor"), href("#csrf"), "CSRF"]],
+        p!["The attack: a visitor is signed in to your site, opens a malicious page elsewhere, and that page quietly \
+             submits a form to your site using the visitor's cookies. The defence is to make sure a state-changing \
+             request really came from one of your own pages.",],
         ul![
             li![
                 p![
@@ -252,7 +400,19 @@ async fn authenticate(mut req: Request, next: Next) -> Response {
             id("cors-example-single-api-route"),
             a![class("anchor"), href("#cors-example-single-api-route"), "CORS example (single API route)"],
         ],
-        p!["For CORS on a subtree, put a ", code!["middleware.rs"], " there:"],
+        p![
+            "By default a script running on another website may not read your API's responses. An ",
+            code!["access-control-allow-origin"],
+            " header lifts that for the origins you name (",
+            code!["*"],
+            " means anyone, which is only right for public, cookie-less data). For CORS on a subtree, put a ",
+            code!["middleware.rs"],
+            " there. This one, ",
+            code!["app/api/public/middleware.rs"],
+            ", opens up everything under ",
+            code!["/api/public"],
+            " and nothing else:",
+        ],
         pre![code![
             class("language-rust"),
             r#"// app/api/public/middleware.rs
@@ -262,5 +422,80 @@ pub async fn middleware(req: Request, next: Next) -> Response {
     res
 }"#,
         ],],
+        p![
+            "For preflight requests, credentials and exposed headers, use the built-in ",
+            code!["cors(Cors::default()..)"],
+            " instead of setting headers by hand.",
+        ],
+        h2![id("check-it-worked"), a![class("anchor"), href("#check-it-worked"), "How to check it worked"]],
+        ul![
+            li![
+                "Look at the response headers. With the first example in place, this terminal command prints the \
+                 timing header the middleware added: ",
+                code!["curl -sI http://localhost:3000/ | grep -i server-timing"],
+                ".",
+            ],
+            li![
+                "For a guard, request the protected URL without signing in and expect the redirect: ",
+                code!["curl -sI http://localhost:3000/admin"],
+                " should answer ",
+                code!["307"],
+                " with ",
+                code!["location: /login"],
+                ".",
+            ],
+            li![
+                "In a test, ",
+                code!["TestClient"],
+                " runs the same chain: see ",
+                a![href("/docs/testing"), "Testing"],
+                ".",
+            ],
+        ],
+        h2![id("common-mistakes"), a![class("anchor"), href("#common-mistakes"), "Common mistakes"]],
+        ul![
+            li![
+                strong!["Forgetting to call "],
+                code!["next.run(req).await"],
+                ". The request never reaches the page, and every URL answers with whatever the middleware returned.",
+            ],
+            li![
+                strong!["The wrong signature."],
+                " The function is named ",
+                code!["middleware"],
+                ", is ",
+                code!["pub async"],
+                " and takes exactly ",
+                code!["(Request, Next)"],
+                ". Extractors such as ",
+                code!["Cookies"],
+                " are for pages; here you read ",
+                code!["req.cookies()"],
+                " and ",
+                code!["req.header(..)"],
+                ".",
+            ],
+            li![
+                strong!["Expecting a nested file to see other folders."],
+                " ",
+                code!["app/admin/middleware.rs"],
+                " never runs for ",
+                code!["/account"],
+                ". Put shared checks in ",
+                code!["app/middleware.rs"],
+                " or in a route group folder that contains both.",
+            ],
+            li![
+                strong!["Heavy work in the root middleware."],
+                " It also runs for static files and unknown URLs, so a database query there is paid on every image \
+                 request. Check the path first, or move the check down into the folder that needs it.",
+            ],
+            li![
+                strong!["Redirecting to a URL taken from the request."],
+                " Check it with ",
+                code!["is_local_path"],
+                " first, or an attacker can craft a login link that ends on their site.",
+            ],
+        ],
     ]
 }

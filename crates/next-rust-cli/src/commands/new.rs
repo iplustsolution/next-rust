@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use crate::{Args, starter, templates, ui};
+use crate::{Args, starter, templates, ui, wasm};
 
 /// A progress step: label, detail, and the files it writes.
 type Step<'a> = (&'a str, &'a str, Vec<(&'a str, String)>);
@@ -10,7 +10,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let a = Args::new(args);
     if a.flag(&["-h", "--help"]) {
         println!(
-            "next-rust new <name> [--git | --framework-path <path to next-rust checkout>] [--no-tailwind]\n\nCreates a project with app/, public/, build.rs and next-rust.toml, styled with Tailwind CSS\n(configured in next-rust.toml, no CSS files). --no-tailwind uses a plain CSS file instead.\nThe project depends on next-rust from crates.io (matching this CLI's version) when it is published there;\notherwise, or with --git, on the GitHub repository."
+            "next-rust new <name> [--git | --framework-path <path to next-rust checkout>] [--no-tailwind] [--wasm [--ui]]\n\nCreates a project with app/, public/, build.rs and next-rust.toml, styled with Tailwind CSS\n(configured in next-rust.toml, no CSS files). --no-tailwind uses a plain CSS file instead.\n--wasm adds the islands/ crate, turns on [build] wasm_islands and writes a working\n#[client(wasm = \"Counter\")] island at /wasm; --ui also moves the shipped components'\nbehaviour to Rust ([ui] script = \"wasm\").\nThe project depends on next-rust from crates.io (matching this CLI's version) when it is published there;\notherwise, or with --git, on the GitHub repository."
         );
         return Ok(());
     }
@@ -40,8 +40,19 @@ pub fn run(args: &[String]) -> Result<(), String> {
     };
 
     let tailwind = !a.flag(&["--no-tailwind"]);
-    let config =
+    let mut config =
         if tailwind { format!("{}{}", templates::CONFIG, starter::TW_CONFIG) } else { templates::CONFIG.into() };
+    // `--wasm` writes the keys into the config before it is written out, so
+    // the project is correct on its first build rather than after a second
+    // command nobody knows to run.
+    let islands = a.flag(&["--wasm"]).then(|| wasm::Options { ui: a.flag(&["--ui"]), demo: true });
+    if let Some(options) = islands {
+        for (section, key, value) in wasm::keys(options) {
+            if let Some(next) = wasm::set_key(&config, section, key, value) {
+                config = next;
+            }
+        }
+    }
 
     let started = Instant::now();
     ui::banner();
@@ -118,19 +129,38 @@ pub fn run(args: &[String]) -> Result<(), String> {
         ui::done_step(label, detail);
     }
 
+    if let Some(options) = islands {
+        let (written, _) = wasm::scaffold(dir, pkg, &source, options, &dir.join("app"))?;
+        count += written.len();
+        ui::done_step("WebAssembly", "islands/ crate · a Rust click handler at /wasm");
+    }
+
     ui::done_step("Framework", &source.describe());
     eprintln!();
 
     let route = |path: &str, file: &str| format!("{}  {}", ui::pad(&ui::bold(path), 13), ui::dim(file));
-    ui::boxed(&[
+    let mut lines = vec![
         format!("{} {}", ui::green("✔"), ui::bold(&format!("{name} is ready")))
             + &ui::dim(&format!("   {count} files · {} ms", started.elapsed().as_millis())),
         String::new(),
         ui::dim("Routes"),
         route("/", "app/page.rs"),
         route("/api/hello", "app/api/hello/route.rs"),
-    ]);
+    ];
+    if islands.is_some() {
+        lines.push(route("/wasm", "app/wasm/page.rs"));
+    }
+    ui::boxed(&lines);
     eprintln!();
+    if islands.is_some() {
+        eprintln!(
+            "   {} {}",
+            ui::yellow("!"),
+            ui::dim("WebAssembly needs one thing per machine: rustup target add wasm32-unknown-unknown")
+        );
+        eprintln!("     {}", ui::dim("`next-rust doctor` checks it, and everything else the module needs."));
+        eprintln!();
+    }
 
     eprintln!("   {}", ui::bold("Get started"));
     eprintln!();

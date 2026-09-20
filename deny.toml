@@ -1,0 +1,41 @@
+# cargo-deny configuration: `cargo deny check` (see the `deny` job in
+# .github/workflows/ci.yml and the scheduled .github/workflows/audit.yml).
+
+[graph]
+all-features = true
+
+[advisories]
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Permissive licenses only: everything here is compatible with shipping under
+# MIT OR Apache-2.0. Add to the list deliberately, never a copyleft license.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[licenses.private]
+# Examples, benchmarks and the website are not published.
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# Workspace members depend on each other by path (plus a version where they
+# are published); that is not a wildcard.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

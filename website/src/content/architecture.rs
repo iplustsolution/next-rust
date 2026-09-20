@@ -4,14 +4,45 @@ use next_rust::prelude::*;
 
 pub fn content() -> Node {
     fragment![
+        div![
+            class("callout"),
+            p![
+                strong!["In plain words."],
+                " Think of a restaurant. Before opening, an inspector walks through the building and writes down which table is where; that is the build step reading your ",
+                code!["app/"],
+                " folder. During service, a guest's order goes to the door, past the host, to the right table, and the kitchen sends out the dish in courses; that is a request passing through middleware, the router and the renderer, which streams the page. This page describes both halves, and why the framework is cut into the pieces it is.",
+            ],
+        ],
+        p![
+            "Terms used on this page: a ",
+            strong!["crate"],
+            " is a Rust package, the unit that is compiled and published; ",
+            strong!["codegen"],
+            " (code generation) is a program writing Rust source for the compiler to check; a ",
+            strong!["trie"],
+            " is a lookup tree that is walked one URL segment at a time; ",
+            strong!["SSR"],
+            " is server-side rendering, producing a page's HTML on the server; ",
+            strong!["ISR"],
+            " is incremental static regeneration, refreshing a cached page in the background; a ",
+            strong!["binary"],
+            " is the finished program as one file.",
+        ],
         h2![id("crate-graph"), a![class("anchor"), href("#crate-graph"), "Crate graph"]],
+        p![
+            "An application depends on one crate, ",
+            code!["next-rust"],
+            ", which re-exports the others. Each box shows a crate, what it contains, and which sibling crates it uses. ",
+            strong!["Why it matters:"],
+            " tools that only run while building never end up in the program you deploy, which keeps the binary small.",
+        ],
         div![
             class("crate-grid"),
             div![
                 class("crate"),
                 code!["next-rust"],
                 span!["prelude · app!"],
-                small!["uses server, view, router, cache, core, macros"],
+                small!["uses server, view, router, cache, core, macros, jobs, ui, icons"],
             ],
             div![
                 class("crate"),
@@ -57,6 +88,18 @@ pub fn content() -> Node {
                 span!["#[client] · #[server_action] · css_module!"],
                 small!["uses assets"],
             ],
+            div![
+                class("crate"),
+                code!["next-rust-jobs"],
+                span!["queues · retries · cron"],
+                small!["no internal dependencies"],
+            ],
+            div![
+                class("crate"),
+                code!["next-rust-auth"],
+                span!["sessions · passwords · limiters (optional)"],
+                small!["uses server"],
+            ],
             div![class("crate"), code!["next-rust-build"], span!["analysis · codegen"], small!["uses core, router"],],
             div![
                 class("crate"),
@@ -95,6 +138,15 @@ pub fn content() -> Node {
             ],
         ],
         h2![id("build-pipeline"), a![class("anchor"), href("#build-pipeline"), "Build pipeline"]],
+        p![
+            "This diagram follows your source files from the ",
+            code!["app/"],
+            " directory to the deployable binary. Each arrow names the function or tool that does the step, and the branches to the right are where build errors (",
+            code!["NR"],
+            " codes) come from. It describes what ",
+            code!["build.rs"],
+            " and the compiler do; there is nothing here to write yourself:",
+        ],
         pre![code![
             class("language-text"),
             r#"app/ directory
@@ -115,6 +167,10 @@ cargo/rustc  ── type checks every page against its extractors ──▶ serv
     ▼
 .next-rust/<name>   one self-contained file; static pages render into memory at startup"#,
         ],],
+        p![
+            strong!["Why it matters:"],
+            " everything that can be wrong with a route is found in this pipeline, on your machine, and not by a visitor.",
+        ],
         p!["Design decisions:"],
         ol![
             li![
@@ -151,6 +207,11 @@ cargo/rustc  ── type checks every page against its extractors ──▶ serv
             ],
         ],
         h2![id("request-lifecycle"), a![class("anchor"), href("#request-lifecycle"), "Request lifecycle"]],
+        p![
+            "This diagram shows what happens, in order, from the moment a browser connects until the response leaves. Indentation means \"inside\": middleware wraps routing, routing wraps the page. It is a map of ",
+            code!["crates/next-rust-server"],
+            ", useful when you need to know whether, say, a redirect rule runs before or after your middleware:",
+        ],
         pre![code![
             class("language-text"),
             r"hyper connection (HTTP/1.1 keep-alive or HTTP/2)
@@ -170,7 +231,7 @@ cargo/rustc  ── type checks every page against its extractors ──▶ serv
           │       └─ 404 page
           └─ finish: Set-Cookie from the shared jar, [[headers]], security headers",
         ],],
-        p!["Page rendering (", code!["render.rs"], "):"],
+        p!["Page rendering (", code!["render.rs"], ") then builds the page from the outside in, in three steps:",],
         ol![
             li!["Metadata functions for every segment run concurrently, then merge root to leaf."],
             li![
@@ -298,16 +359,24 @@ cargo/rustc  ── type checks every page against its extractors ──▶ serv
                         td!["regex-based parsing (fragile)"],
                     ],
                     tr![
-                        td![code!["flate2"], " (feature ", code!["compression"], ", default)"],
+                        td![code!["flate2"], ", ", code!["brotli"], " (feature ", code!["compression"], ", default)"],
                         td!["server"],
-                        td!["gzip with pure-Rust miniz backend"],
-                        td!["brotli (larger, C deps in common crates)"],
+                        td![
+                            "response compression: Brotli when the client accepts it, gzip (pure-Rust miniz backend) otherwise"
+                        ],
+                        td!["gzip only (larger responses)"],
                     ],
                     tr![
                         td![code!["tokio-tungstenite"], " (feature ", code!["websocket"], ")"],
                         td!["server"],
                         td!["RFC 6455 WebSocket protocol"],
                         td!["—"],
+                    ],
+                    tr![
+                        td![code!["redis"], " (feature ", code!["jobs-redis"], ")"],
+                        td!["jobs"],
+                        td!["the reliable job queue: Lua scripts over a reconnecting multiplexed connection"],
+                        td!["a hand-written RESP client"],
                     ],
                     tr![
                         td![code!["tracing"], " (feature ", code!["tracing"], ")"],
@@ -339,15 +408,15 @@ cargo/rustc  ── type checks every page against its extractors ──▶ serv
         h2![id("frontend-runtime"), a![class("anchor"), href("#frontend-runtime"), "Frontend runtime"]],
         p![
             code!["/_next-rust/runtime.js"],
-            " is one dependency-free ES module (",
-            del![
-                "4 KB gzipped) with four responsibilities: client navigation, streaming swaps after navigation, form and action enhancement, and island hydration. It never uses ",
+            " is the only script the framework itself sends to browsers, and only to pages that need it. It is one dependency-free ES module (",
+            fragment![
+                "about 4 KB gzipped) with four responsibilities: client navigation, streaming swaps after navigation, form and action enhancement, and island hydration. It never uses ",
                 code!["eval"],
                 " or ",
                 code!["new Function"],
                 ". Island hydration is attribute-driven, or delegated to ES modules through the ",
                 code!["hydrate(element, props)"],
-                " contract, which WASM glue code can implement. The streaming swap function is separate and inlined (",
+                " contract, which WASM glue code can implement. The streaming swap function is separate and inlined (about ",
             ],
             "150 bytes) only on pages that suspend, so streaming works without the runtime.",
         ],

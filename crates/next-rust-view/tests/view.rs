@@ -300,3 +300,112 @@ fn svg_text_filters_and_foreign_objects() {
         assert!(TAGS.contains(&name), "{name} is listed in TAGS");
     }
 }
+
+/// A hole that renders the `String` it is given as context.
+fn name_hole(fallback: &'static str) -> Node {
+    hole(p![fallback], |cx| {
+        Box::pin(async move {
+            let name = cx.downcast_ref::<String>().cloned().unwrap_or_default();
+            p![class("who"), Link!(href = "/me", name)].into_node()
+        })
+    })
+}
+
+#[test]
+fn holes_show_their_fallback_without_a_context() {
+    assert_eq!(render_static(div![name_hole("…")]), "<div><p>…</p></div>");
+    let html = futures_executor::block_on(render_to_string(div![name_hole("…")]));
+    assert_eq!(html, "<div><p>…</p></div>");
+    // With a context, a document renders them like suspense: streamed, or in place.
+    let cx: HoleContext = std::sync::Arc::new("Ada".to_owned());
+    let parts =
+        |cx: &HoleContext| DocumentParts { hole_context: Some(cx.clone()), ..DocumentParts::new(name_hole("…")) };
+    let chunks = futures_executor::block_on(stream_document(parts(&cx), true).collect::<Vec<_>>());
+    assert!(chunks[0].contains(r#"<nr-b id="nr-b1"><p>…</p></nr-b>"#), "{}", chunks[0]);
+    assert!(chunks[1].starts_with(r#"<template id="nr-t1"><p class="who">"#), "{}", chunks[1]);
+    let whole = futures_executor::block_on(stream_document(parts(&cx), false).collect::<Vec<_>>()).concat();
+    assert!(whole.contains(r#"<body><p class="who"><a href="/me" data-nr-link="">Ada</a></p></body>"#), "{whole}");
+}
+
+#[test]
+fn a_shell_is_rendered_once_and_resumed_for_each_request() {
+    let view = main![
+        h1!["Shop"],
+        // Suspense belongs to the shell: it is awaited once.
+        suspense(p!["…"], async { p!["catalogue"] }),
+        name_hole("who?"),
+        // A hole inside a fallback is not one: there is nothing to swap it into.
+        hole(name_hole("nested fallback"), |_| Box::pin(async { Node::Empty })),
+    ];
+    let parts = DocumentParts { tail: Box::new(|f| format!("[links={}]", f.links)), ..DocumentParts::new(view) };
+    let (html, shell) = futures_executor::block_on(render_shell(parts));
+    let shell = std::sync::Arc::new(shell.expect("a document with holes has a shell"));
+    assert_eq!(shell.holes(), 2);
+    assert!(html.contains("function $nr("), "the swap script is part of the shell: {html}");
+    assert!(
+        html.ends_with(
+            r#"<body><main><h1>Shop</h1><p>catalogue</p><nr-b id="nr-b1"><p>who?</p></nr-b><nr-b id="nr-b2"><p>nested fallback</p></nr-b></main>"#
+        ),
+        "no tail, no closing tags: {html}"
+    );
+
+    let resume = |name: &str, streaming: bool| Resume {
+        html: html.clone(),
+        shell: shell.clone(),
+        context: std::sync::Arc::new(name.to_owned()),
+        nonce: Some("n1".into()),
+        tail: Box::new(|f| format!("[links={}]", f.links)),
+        streaming,
+        known_styles: Vec::new(),
+    };
+    for name in ["Ada", "Bob"] {
+        let chunks = futures_executor::block_on(resume_document(resume(name, true)).collect::<Vec<_>>());
+        assert_eq!(chunks[0], html, "the shell goes out as it is");
+        let rest = chunks[1..].concat();
+        assert!(
+            rest.contains(&format!(r#"<template id="nr-t1"><p class="who"><a href="/me" data-nr-link="">{name}</a>"#))
+        );
+        assert!(rest.contains(r#"<script nonce="n1">$nr(1)</script>"#) && rest.contains(r#"<template id="nr-t2">"#));
+        assert!(rest.ends_with("[links=true]</body></html>"), "flags of the holes reach the tail: {rest}");
+
+        let whole = futures_executor::block_on(resume_document(resume(name, false)).collect::<Vec<_>>());
+        assert_eq!(whole.len(), 1);
+        assert!(whole[0].contains(&format!(
+            r#"<p>catalogue</p><p class="who"><a href="/me" data-nr-link="">{name}</a></p></main>"#
+        )));
+        assert!(!whole[0].contains("<nr-b") && !whole[0].contains("<template"), "{}", whole[0]);
+    }
+
+    // Holes that are not in the HTML being sent (a region of the shell) are not run.
+    let mut cut = resume("Ada", true);
+    cut.html = html.replace(r#"<nr-b id="nr-b1"><p>who?</p></nr-b>"#, "");
+    let rest = futures_executor::block_on(resume_document(cut).collect::<Vec<_>>())[1..].concat();
+    assert!(!rest.contains("nr-t1") && rest.contains("nr-t2"), "{rest}");
+
+    // No holes: the document is complete and there is nothing to resume.
+    let (html, shell) = futures_executor::block_on(render_shell(DocumentParts::new(p!["plain"])));
+    assert!(shell.is_none() && html.ends_with("<p>plain</p></body></html>"), "{html}");
+}
+
+#[test]
+fn rendered_fragments_carry_their_styles_and_flags() {
+    static CARD: Stylesheet = Stylesheet { id: "card", css: ".card{color:red}", per_class: None, scripts: &[] };
+    let fragment = futures_executor::block_on(render_fragment(div![
+        class("card"),
+        &CARD,
+        suspense((), async { Link!(href = "/x", "more") })
+    ]));
+    assert_eq!(fragment.html, r#"<div class="card"><a href="/x" data-nr-link="">more</a></div>"#);
+    assert!(fragment.flags.links && fragment.classes == ["card"] && fragment.sheets.len() == 1);
+    assert!(!fragment.flags.forms);
+    // A form asks for the runtime too: it is sent without a page reload.
+    let search = futures_executor::block_on(render_fragment(form![action("/search"), input![name("q")]]));
+    assert!(search.flags.forms && !search.flags.links);
+
+    let twice = fragment![Node::Rendered(Box::new(fragment.clone())), Node::Rendered(Box::new(fragment))];
+    let parts = DocumentParts { tail: Box::new(|f| format!("[links={}]", f.links)), ..DocumentParts::new(twice) };
+    let html = futures_executor::block_on(stream_document(parts, false).collect::<Vec<_>>()).concat();
+    assert_eq!(html.matches(r#"<style data-nr-css="card">"#).count(), 1, "hoisted once: {html}");
+    assert_eq!(html.matches(r#"<div class="card">"#).count(), 2);
+    assert!(html.ends_with("[links=true]</body></html>"));
+}

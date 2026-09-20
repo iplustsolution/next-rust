@@ -8,7 +8,7 @@ use next_rust_core::{Config, Diagnostic, Diagnostics, RenderingMode};
 use next_rust_router::manifest::{RouteManifest, relative};
 use next_rust_router::{Route, RouteKind, ScanOutput, SegmentEntry, scan_project};
 
-use crate::analyze::{ArgKind, FileInfo, FnInfo, analyze_file, scan_src_actions};
+use crate::analyze::{ArgKind, FileInfo, FnInfo, ModDecl, analyze_file, scan_src_actions};
 
 pub const HTTP_METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"];
 
@@ -16,7 +16,8 @@ pub const HTTP_METHODS: &[&str] = &["GET", "HEAD", "POST", "PUT", "PATCH", "DELE
 #[derive(Debug, Clone)]
 pub struct AnalyzedRoute {
     pub route: Route,
-    /// `static` or `dynamic` (pages) / `dynamic` (API routes).
+    /// `static`, `partial` (a static shell with `dynamic` holes) or `dynamic`
+    /// (pages) / `dynamic` (API routes).
     pub rendering: &'static str,
     /// Why the route is dynamic (for `next-rust routes` / analyze).
     pub dynamic_reason: Option<String>,
@@ -40,6 +41,9 @@ pub struct Project {
 pub struct ActionSource {
     /// `Some(file)` for actions declared in app-directory special files.
     pub file: Option<PathBuf>,
+    /// Module path below `file`'s module (`function`, `forms::login`) for
+    /// actions in a file module the special file declares with `#[path]`.
+    pub inner: Option<String>,
     /// `crate::...` module path for actions in `src/`.
     pub module: Option<String>,
     pub name: String,
@@ -94,6 +98,9 @@ pub fn analyze_project(config: &Config) -> Project {
     let routes = project.scan.routes.clone();
     for route in routes {
         let analyzed = analyze_route(&project, route);
+        if let Some(d) = partial_misuse(&project, &analyzed) {
+            project.diagnostics.push(d);
+        }
         project.routes.push(analyzed);
     }
 
@@ -101,11 +108,18 @@ pub fn analyze_project(config: &Config) -> Project {
         for (name, argc) in &info.actions {
             project.actions.push(ActionSource {
                 file: Some(path.clone()),
+                inner: None,
                 module: None,
                 name: name.clone(),
                 argc: *argc,
             });
         }
+    }
+    let route_files: Vec<(PathBuf, Vec<ModDecl>)> =
+        project.files.iter().map(|(p, i)| (p.clone(), i.modules.clone())).collect();
+    for (route_file, modules) in route_files {
+        let mut seen = BTreeSet::new();
+        collect_module_actions(&mut project, &route_file, &modules, "", &mut seen);
     }
     let src = config.root.join("src");
     if src.is_dir() {
@@ -113,7 +127,7 @@ pub fn analyze_project(config: &Config) -> Project {
         let (found, diags) = scan_src_actions(&src, &skip);
         project.diagnostics.0.extend(diags);
         for (module, name, argc) in found {
-            project.actions.push(ActionSource { file: None, module: Some(module), name, argc });
+            project.actions.push(ActionSource { file: None, inner: None, module: Some(module), name, argc });
         }
     }
     for a in &project.actions {
@@ -126,6 +140,51 @@ pub fn analyze_project(config: &Config) -> Project {
         }
     }
     project
+}
+
+/// Server actions in the file modules a route file declares (`#[path =
+/// "function.rs"] pub mod function;`), and in theirs, registered under the
+/// route file's module. `seen` stops a module cycle.
+fn collect_module_actions(
+    project: &mut Project,
+    route_file: &Path,
+    modules: &[ModDecl],
+    prefix: &str,
+    seen: &mut BTreeSet<PathBuf>,
+) {
+    for decl in modules {
+        let key = decl.path.canonicalize().unwrap_or_else(|_| decl.path.clone());
+        if !seen.insert(key) {
+            continue;
+        }
+        let inner = if prefix.is_empty() { decl.name.clone() } else { format!("{prefix}::{}", decl.name) };
+        let info = match analyze_file(&decl.path) {
+            Ok(info) => info,
+            Err(d) => {
+                project.diagnostics.push(d);
+                continue;
+            }
+        };
+        if !info.actions.is_empty() && !decl.reachable {
+            project.diagnostics.push(
+                Diagnostic::error("NR0211", format!("Module `{}` holds server actions but is private", decl.name))
+                    .location(format!("{}:{}", route_file.display(), decl.line))
+                    .message("The route table registers these actions from outside the route file, so it must be able to reach the module.")
+                    .help(format!("declare it `pub mod {};`", decl.name)),
+            );
+            continue;
+        }
+        for (name, argc) in &info.actions {
+            project.actions.push(ActionSource {
+                file: Some(route_file.to_path_buf()),
+                inner: Some(inner.clone()),
+                module: None,
+                name: name.clone(),
+                argc: *argc,
+            });
+        }
+        collect_module_actions(project, route_file, &info.modules, &inner, seen);
+    }
 }
 
 fn collect_rs(node: &next_rust_router::RouteNode, out: &mut BTreeSet<PathBuf>) {
@@ -315,14 +374,62 @@ fn analyze_route(project: &Project, route: Route) -> AnalyzedRoute {
     let requested = explicit.unwrap_or(default);
     let (rendering, reason) = match requested {
         "static" => ("static", None),
+        "partial" => ("partial", None),
         "dynamic" => ("dynamic", Some("rendering = dynamic".to_owned())),
         _ => match auto_dynamic_reason(project, &route) {
             Some(reason) => ("dynamic", Some(reason)),
             None => ("static", None),
         },
     };
+    // A static page with `dynamic(..)` holes is served as a cached shell
+    // plus per-request holes, whatever asked for it to be static.
+    let rendering = if rendering == "static" && route_has_holes(project, &route) { "partial" } else { rendering };
     let methods = vec!["GET".into(), "HEAD".into()];
     AnalyzedRoute { route, rendering, dynamic_reason: reason, methods, revalidate }
+}
+
+/// The files rendered into a route's static HTML: layouts, templates, slot
+/// pages and the page itself.
+fn route_files(route: &Route) -> Vec<&PathBuf> {
+    let mut files = Vec::new();
+    for seg in &route.chain {
+        files.extend([&seg.layout, &seg.template].into_iter().flatten());
+        files.extend(seg.slots.iter().filter_map(|slot| slot.page.as_ref().or(slot.default.as_ref())));
+    }
+    files.push(&route.source);
+    files
+}
+
+/// A file rendered for the route calls `dynamic(..)`. Holes in components
+/// outside the app directory are not seen here; the server finds them when it
+/// renders the page, so they work the same.
+fn route_has_holes(project: &Project, route: &Route) -> bool {
+    route.kind != RouteKind::Html
+        && route_files(route).into_iter().any(|p| project.files.get(p).is_some_and(|i| i.holes))
+}
+
+/// `RENDERING = Partial` on a page that cannot have a static shell.
+fn partial_misuse(project: &Project, analyzed: &AnalyzedRoute) -> Option<Diagnostic> {
+    let route = &analyzed.route;
+    let explicit = project.files.get(&route.source).and_then(FileInfo::rendering) == Some("partial");
+    if !explicit {
+        return None;
+    }
+    let reason = if route.intercept.is_some() {
+        "it is an intercepting route, which is always rendered per request".to_owned()
+    } else {
+        format!("{} reads the request, and the shell is rendered without one", request_bound_arg(project, route)?)
+    };
+    Some(
+        Diagnostic::error("NR0212", "This page cannot be partially prerendered")
+            .location(&route.source)
+            .message(format!("`RENDERING` is `Rendering::Partial`, but {reason}."))
+            .help(
+                "Read request data inside a hole instead: `dynamic(fallback, |ctx| async move { .. })` gets the \
+                 request's context (`ctx.cookies`, `ctx.headers`, `ctx.extract::<Query>()?`). Everything outside \
+                 holes is rendered once and shared by all visitors.",
+            ),
+    )
 }
 
 /// `None` when the route can be rendered statically.
@@ -337,6 +444,12 @@ fn auto_dynamic_reason(project: &Project, route: &Route) -> Option<String> {
     if route.pattern.is_dynamic() && page.get("generate_params").is_none() {
         return Some("dynamic segment without generate_params".into());
     }
+    request_bound_arg(project, route)
+}
+
+/// The first argument on the route's render path that reads the request.
+fn request_bound_arg(project: &Project, route: &Route) -> Option<String> {
+    let page = project.files.get(&route.source)?;
     let mut fns: Vec<(PathBuf, &FnInfo)> = Vec::new();
     for seg in &route.chain {
         for (file, name) in [
@@ -666,6 +779,26 @@ pub struct CodegenOptions {
     /// Give the app the classes the build knows (`next_rust_known_classes.rs`),
     /// so pages leave out generated-looking classes that style nothing.
     pub drop_classes: bool,
+    /// Prepare the scripts for inline delivery (`[build] inline_assets`):
+    /// the prepared copies are written under this directory
+    /// (`$OUT_DIR/next_rust_inline`) and compiled in from there.
+    pub inline_dir: Option<PathBuf>,
+    /// Short names of the build (`[build] minify_names`, see `names`): the
+    /// scripts copied under `minified_dir` are rewritten to use them, and
+    /// the app gets the table (`next_rust_names.rs`) for its pages.
+    pub names: Option<crate::names::Plan>,
+    /// How the app writes HTML (`[build] minify_html`, `svg_precision`).
+    pub markup: Option<MarkupOptions>,
+    /// Remove `console.*` calls from minified scripts (`[build] drop_console`).
+    pub drop_console: bool,
+}
+
+/// `[build] minify_html` and `svg_precision`, as the app gets them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MarkupOptions {
+    pub compact: bool,
+    /// Decimals kept in SVG path data; `0` keeps them all.
+    pub svg_precision: u8,
 }
 
 /// What generating the code found out, for the build report.
@@ -673,6 +806,9 @@ pub struct CodegenOptions {
 pub struct CodegenReport {
     pub scripts: Vec<crate::report::ScriptReport>,
     pub files: Vec<crate::report::FileReport>,
+    /// The embedded scripts as they are served (`client/x.js` → code), which
+    /// is what inline delivery starts from.
+    pub served_scripts: BTreeMap<String, String>,
 }
 
 /// Short class names to apply to scripts.
@@ -738,6 +874,115 @@ pub fn referenced_assets(config: &Config) -> std::collections::BTreeSet<String> 
     found
 }
 
+/// Directory under `$OUT_DIR` holding the scripts prepared for inline delivery.
+pub const INLINE_DIR: &str = "next_rust_inline";
+
+/// `static __NR_DECLARED`: the scripts declared in Rust, for builds that do
+/// not embed their files (the server reads `client/` and `assets/` from disk
+/// there, and these have no file).
+fn declared_code(config: &Config) -> String {
+    let mut out = String::from("static __NR_DECLARED: &[(&str, &str)] = &[\n");
+    if let Some(generated) = &config.generated {
+        for field in ["assets", "client"] {
+            for (rel, path) in embeddable_files(&generated.join(field)) {
+                // Generated files that are not scripts — the WebAssembly
+                // module of `[build] wasm_islands` — are bytes, not text, and
+                // go into `__NR_DECLARED_BIN` instead.
+                if !is_script(field, &rel) {
+                    continue;
+                }
+                let _ = writeln!(
+                    out,
+                    "    ({}, include_str!({})),",
+                    lit(&format!("{field}/{rel}")),
+                    lit(&path.to_string_lossy())
+                );
+            }
+        }
+    }
+    out.push_str("];\n\n");
+    out
+}
+
+/// `static __NR_DECLARED_BIN`: the generated files that are *not* scripts, for
+/// builds that do not embed their files. Today that is the wasm module of
+/// `[build] wasm_islands`, which has no file under the project's `client/`.
+fn declared_bin_code(config: &Config) -> String {
+    let mut out = String::from("static __NR_DECLARED_BIN: &[(&str, &[u8])] = &[\n");
+    if let Some(generated) = &config.generated {
+        for field in ["assets", "client"] {
+            for (rel, path) in embeddable_files(&generated.join(field)) {
+                if is_script(field, &rel) {
+                    continue;
+                }
+                let _ = writeln!(
+                    out,
+                    "    ({}, include_bytes!({})),",
+                    lit(&format!("{field}/{rel}")),
+                    lit(&path.to_string_lossy())
+                );
+            }
+        }
+    }
+    out.push_str("];\n\n");
+    out
+}
+
+/// `static __NR_INLINE`: every script prepared for inline delivery (see
+/// `js_inline`). `served` holds the embedded scripts as served; without it
+/// (builds that do not embed) the scripts are read as written.
+fn inline_code(config: &Config, dir: &Path, served: &BTreeMap<String, String>, embedded: bool) -> String {
+    let mut sources = served.clone();
+    if !embedded {
+        for field in ["client", "assets"] {
+            for (rel, path) in crate::rust_sources::files(config, field) {
+                if is_script(field, &rel)
+                    && let Ok(code) = std::fs::read_to_string(&path)
+                {
+                    sources.insert(format!("{field}/{rel}"), code);
+                }
+            }
+        }
+    }
+    let (prepared, warnings) = crate::js_inline::prepare(&sources);
+    for warning in warnings {
+        println!("cargo:warning=Next Rust: {warning}");
+    }
+    let mut out = String::from("static __NR_INLINE: &[__nr::InlineScript] = &[\n");
+    let mut keep = Vec::new();
+    for script in &prepared {
+        let kind = match script.kind {
+            crate::js_inline::Kind::Factory => "Factory",
+            crate::js_inline::Kind::Plain => "Plain",
+            crate::js_inline::Kind::Lazy => "Lazy",
+        };
+        let target = dir.join(format!("{}.{}", script.key, kind.to_ascii_lowercase()));
+        if let Some(parent) = target.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if std::fs::read(&target).ok().as_deref() != Some(script.code.as_bytes()) {
+            let _ = std::fs::write(&target, &script.code);
+        }
+        let deps: Vec<String> = script.deps.iter().map(|d| lit(d)).collect();
+        let _ = writeln!(
+            out,
+            "    __nr::InlineScript {{ key: {}, id: {}, kind: __nr::InlineKind::{kind}, code: include_str!({}), deps: &[{}] }},",
+            lit(&script.key),
+            lit(&script.id),
+            lit(&target.to_string_lossy()),
+            deps.join(", "),
+        );
+        keep.push(target);
+    }
+    for (_, path) in embeddable_files(dir) {
+        if !keep.contains(&path) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    out.push_str("];\n\n");
+    out
+}
+
 /// Directory under `$OUT_DIR` holding the minified copies of embedded scripts.
 pub const MINIFIED_DIR: &str = "next_rust_min";
 
@@ -756,9 +1001,9 @@ fn minified_copy(
     rel: &str,
     path: &Path,
     bytes: &[u8],
-    minify: bool,
-    renames: Option<&ScriptRenames>,
+    options: &CodegenOptions,
 ) -> Option<(PathBuf, Vec<u8>, usize)> {
+    let (minify, renames) = (options.minify_js, options.renames.as_ref());
     let mut source = String::from_utf8(bytes.to_vec()).ok()?;
     let mut renamed = 0;
     if let Some(r) = renames {
@@ -773,10 +1018,21 @@ fn minified_copy(
             ),
         }
     }
+    // After the classes: the names in the strings that are left.
+    if let Some(plan) = options.names.as_ref().filter(|p| !p.table.is_empty()) {
+        // A script that does not parse: `names::plan` kept its names, and said so.
+        if let Ok(found) = crate::names::analyze_script(&source) {
+            let (rewritten, count) = found.apply(&source, plan);
+            source = rewritten;
+            renamed += count;
+        }
+    }
+    let drop_console = options.drop_console;
     let minified = match (minify, field) {
         (false, _) => Ok(source.clone()),
-        (true, "client") => crate::js_minify::minify(&source, true),
-        (true, _) => crate::js_minify::minify_any(&source),
+        (true, "client") => crate::js_minify::minify_with(&source, true, drop_console),
+        (true, _) => crate::js_minify::minify_with(&source, false, drop_console)
+            .or_else(|_| crate::js_minify::minify_with(&source, true, drop_console)),
     };
     match minified {
         Ok(code) => {
@@ -840,29 +1096,35 @@ fn embedded_code(config: &Config, options: &CodegenOptions, report: &mut Codegen
     let used_assets = referenced_assets(config);
     for (field, dir) in embedded_dirs(config) {
         let _ = writeln!(out, "static __NR_EMBED_{}: &[__nr::EmbeddedFile] = &[", field.to_uppercase());
-        for (rel, path) in embeddable_files(&dir) {
+        // Scripts declared in Rust are embedded with the files of `client/`
+        // and `assets/`.
+        let files = if field == "public" { embeddable_files(&dir) } else { crate::rust_sources::files(config, field) };
+        for (rel, path) in files {
             if field == "assets" && !used_assets.contains(&rel) {
                 continue;
             }
             let Ok(bytes) = std::fs::read(&path) else { continue };
             let original = bytes.len();
             let (path, bytes) = match minified_dir.filter(|_| is_script(field, &rel)) {
-                Some(min) => {
-                    match minified_copy(min, field, &rel, &path, &bytes, options.minify_js, options.renames.as_ref()) {
-                        Some((p, b, renamed)) => {
-                            report.scripts.push(crate::report::ScriptReport {
-                                path: format!("{field}/{rel}"),
-                                bytes: original,
-                                minified: b.len(),
-                                renamed,
-                            });
-                            (p, b)
-                        }
-                        None => (path, bytes),
+                Some(min) => match minified_copy(min, field, &rel, &path, &bytes, options) {
+                    Some((p, b, renamed)) => {
+                        report.scripts.push(crate::report::ScriptReport {
+                            path: format!("{field}/{rel}"),
+                            bytes: original,
+                            minified: b.len(),
+                            renamed,
+                        });
+                        (p, b)
                     }
-                }
+                    None => (path, bytes),
+                },
                 None => (path, bytes),
             };
+            if is_script(field, &rel)
+                && let Ok(code) = std::str::from_utf8(&bytes)
+            {
+                report.served_scripts.insert(format!("{field}/{rel}"), code.to_owned());
+            }
             let [br, gz] = match minified_dir.filter(|_| options.precompress) {
                 Some(dir) => precompressed(dir, field, &rel, &bytes),
                 None => [None, None],
@@ -1027,7 +1289,11 @@ pub fn generate_code_reporting(project: &Project, options: CodegenOptions) -> (S
                     body,
                     segments.join(",\n                "),
                     Gen::opt(metadata),
-                    if ar.rendering == "static" { "Static" } else { "Dynamic" },
+                    match ar.rendering {
+                        "static" => "Static",
+                        "partial" => "Partial",
+                        _ => "Dynamic",
+                    },
                     revalidate,
                     Gen::opt(gen_params),
                     dynamic_params,
@@ -1079,7 +1345,10 @@ pub fn generate_code_reporting(project: &Project, options: CodegenOptions) -> (S
     let mut actions = Vec::new();
     for a in &project.actions {
         let prefix = match (&a.file, &a.module) {
-            (Some(file), _) => g.module(file),
+            (Some(file), _) => match &a.inner {
+                Some(inner) => format!("{}::{inner}", g.module(file)),
+                None => g.module(file),
+            },
             (None, Some(module)) => module.clone(),
             _ => continue,
         };
@@ -1104,6 +1373,25 @@ pub fn generate_code_reporting(project: &Project, options: CodegenOptions) -> (S
         "Some(&__NR_EMBEDDED)"
     } else {
         "None"
+    };
+    let declared_scripts = if options.embed_files {
+        "&[]"
+    } else {
+        out.push_str(&declared_code(&project.config));
+        "__NR_DECLARED"
+    };
+    let declared_binaries = if options.embed_files {
+        "&[]"
+    } else {
+        out.push_str(&declared_bin_code(&project.config));
+        "__NR_DECLARED_BIN"
+    };
+    let inline_scripts = match &options.inline_dir {
+        Some(dir) => {
+            out.push_str(&inline_code(&project.config, dir, &report.served_scripts, options.embed_files));
+            "__NR_INLINE"
+        }
+        None => "&[]",
     };
     let stylesheets = if options.tailwind {
         // Pages get only the rules for the classes they render, plus those
@@ -1131,13 +1419,31 @@ pub fn generate_code_reporting(project: &Project, options: CodegenOptions) -> (S
     } else {
         "&[]"
     };
+    let names = if options.names.is_some() {
+        out.push_str(
+            "/// Short names of this build (`data-*` attribute, custom property, id, keyframes or layer → short name).\nstatic __NR_NAMES: &[(&str, &str)] = include!(concat!(env!(\"OUT_DIR\"), \"/next_rust_names.rs\"));\n\n",
+        );
+        "__NR_NAMES"
+    } else {
+        "&[]"
+    };
+    let markup = options.markup.unwrap_or_default();
     let mut id = build_id(&project.config);
     if let Some(seed) = options.class_names {
         id.push_str(&format!("-{seed:016x}"));
     }
+    if let Some(plan) = &options.names {
+        // A browser never mixes pages and scripts of builds with other names.
+        let mut h = next_rust_assets::Fnv64::new();
+        for (key, short) in &plan.table {
+            h.write(key.as_bytes());
+            h.write(short.as_bytes());
+        }
+        id.push_str(&format!("-{:08x}", h.finish() as u32));
+    }
     let _ = write!(
         out,
-        "/// All routes discovered in the app directory.\npub fn routes() -> ::next_rust::Routes {{\n    __nr::Routes {{\n        pages: vec![\n{}\n        ],\n        apis: vec![\n{}\n        ],\n        actions: vec![\n{}\n        ],\n        root: {},\n        middleware: {},\n        global_error: {},\n        sitemap: {},\n        robots: {},\n        project_root: {},\n        embedded: {},\n        build_id: {},\n        toml: {},\n        stylesheets: {},\n        class_names: {},\n        known_classes: {},\n    }}\n}}\n",
+        "/// All routes discovered in the app directory.\npub fn routes() -> ::next_rust::Routes {{\n    __nr::Routes {{\n        pages: vec![\n{}\n        ],\n        apis: vec![\n{}\n        ],\n        actions: vec![\n{}\n        ],\n        root: {},\n        middleware: {},\n        global_error: {},\n        sitemap: {},\n        robots: {},\n        project_root: {},\n        embedded: {},\n        build_id: {},\n        toml: {},\n        stylesheets: {},\n        class_names: {},\n        known_classes: {},\n        inline_scripts: {},\n        declared_scripts: {},\n        declared_binaries: {},\n        names: {},\n        markup: __nr::Markup {{ compact: {}, svg_precision: {} }},\n    }}\n}}\n",
         pages.join(",\n"),
         apis.join(",\n"),
         actions.join(",\n"),
@@ -1155,6 +1461,12 @@ pub fn generate_code_reporting(project: &Project, options: CodegenOptions) -> (S
         stylesheets,
         class_names,
         known_classes,
+        inline_scripts,
+        declared_scripts,
+        declared_binaries,
+        names,
+        markup.compact,
+        markup.svg_precision,
     );
     (out, report)
 }

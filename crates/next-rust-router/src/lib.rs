@@ -43,7 +43,8 @@ pub fn decode_segment(seg: &str) -> Option<String> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' {
-            let hex = bytes.get(i + 1..i + 3)?;
+            // Two hex digits, nothing else: `from_str_radix` alone reads `%+f`.
+            let hex = bytes.get(i + 1..i + 3).filter(|h| h.iter().all(u8::is_ascii_hexdigit))?;
             let s = std::str::from_utf8(hex).ok()?;
             out.push(u8::from_str_radix(s, 16).ok()?);
             i += 3;

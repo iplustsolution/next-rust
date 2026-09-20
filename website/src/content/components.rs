@@ -21,10 +21,57 @@ fn props(rows: &[(&'static str, &'static str)]) -> Node {
     .into_node()
 }
 
+/// The box that opens the page: the feature without the jargon.
+fn plain_words(text: impl View) -> Node {
+    div![class("callout"), p![strong!["In plain words. "], text]].into_node()
+}
+
 pub fn content() -> Node {
     fragment![
+        plain_words(
+            "A component is a ready-made piece of a web page: a button, a date picker, a pricing table. Think of \
+             furniture that arrives assembled. Instead of building a dropdown from raw HTML, styling it and making it \
+             work with a keyboard, you write one line saying \"a dropdown with these items\" and get one that \
+             already looks right, works on phones, supports dark mode and can be used by people with screen readers."
+        ),
         p![
-            "Next Rust ships a set of ready-made components: buttons, text fields, a password field, a custom select, a date picker, checkboxes, switches, radios, avatars, cards, chips, spinners, alerts, badges, progress bars, skeletons, stats, tabs, breadcrumbs, steps, accordions, modals, tables, tooltips, empty states and layout. They are written, configured and rendered in Rust, look good without any CSS of your own, and every property is optional.",
+            "Next Rust ships a set of ready-made components: buttons and text fields, a custom select, a date picker, comboboxes, sliders, ratings and file uploads; dropdowns, popovers, drawers, modals, toasts and a command palette; heroes, pricing tables, testimonials, carousels and footers; tables, lists, code blocks, callouts and server-rendered charts. They are written, configured and rendered in Rust, look good without any CSS of your own, and every property is optional.",
+        ],
+        div![
+            class("callout"),
+            p![
+                strong!["See them all: "],
+                a![href("/components"), "the component gallery"],
+                " shows every component with the code that makes it. Each example has a ",
+                strong!["Preview"],
+                " button that opens the live, working component in a popup, so you can click, type and tab through \
+                 it before copying the code. This page is the reference for the properties; the gallery is the \
+                 place to look and try.",
+            ],
+            p![
+                strong!["Looking for an icon? "],
+                a![href("/icons"), "The icon browser"],
+                " searches every built-in icon and copies it as a Rust function call or as SVG.",
+            ],
+        ],
+        p![
+            "Nothing needs installing: the components are part of the ",
+            code!["next-rust"],
+            " crate, and one line, ",
+            code!["use next_rust::ui::*;"],
+            ", brings them into a file. They are optional. A page can mix them freely with plain element macros (",
+            code!["div!"],
+            ", ",
+            code!["p!"],
+            "), and a project that never uses them ships none of their CSS or script.",
+        ],
+        p![
+            "The example below is a complete sign-up page, for example ",
+            code!["app/signup/page.rs"],
+            ": a card containing a form that posts to a ",
+            a![href("/docs/server-actions"), "server action"],
+            ", with an email field that shows the server's validation error, a password field, a select, a date \
+             picker, a checkbox and a submit button.",
         ],
         rust(
             r#"use next_rust::prelude::*;
@@ -45,8 +92,47 @@ pub fn Page(form: FormState) -> impl View {
     ]
 }"#,
         ),
-        p!["Run the showcase with ", code!["cargo run -p example-ui"], " from ", code!["examples/ui"], ".",],
+        p![
+            "To run the same showcase on your own machine, clone the framework repository and run ",
+            code!["cargo run -p example-ui"],
+            " (the project lives in ",
+            code!["examples/ui"],
+            ").",
+        ],
+        p!["Words used on this page:"],
+        ul![
+            li![
+                strong!["Property"],
+                " (prop): a named setting of a component, such as ",
+                code!["color"],
+                " or ",
+                code!["label"],
+                ".",
+            ],
+            li![strong!["Variant"], ": one of a component's visual styles (solid, bordered, flat, ...).",],
+            li![
+                strong!["Native control"],
+                ": the browser's own version of a control, such as its built-in date input. Components fall back to \
+                 it when JavaScript is off.",
+            ],
+            li![
+                strong!["Progressive enhancement"],
+                ": everything works as plain HTML first; scripts only add comfort on top.",
+            ],
+            li![
+                strong!["ARIA"],
+                ": the attributes that tell screen readers what an element is and what state it is in. The \
+                 components set them for you.",
+            ],
+        ],
         h2("syntax", "Syntax"),
+        p![
+            "Every snippet on this page goes inside a view: a ",
+            code!["Page"],
+            ", a ",
+            code!["Layout"],
+            " or a component function of your own.",
+        ],
         p![
             "Each component is a builder with a macro of the same name. Inside the macro, ",
             code!["key = value"],
@@ -142,7 +228,16 @@ pub fn Page(form: FormState) -> impl View {
             ],
         ],
         h2("theming", "Theming and dark mode"),
-        p!["Colors, radii and shadows are CSS variables. Set them once to restyle every component:"],
+        p![
+            "Colors, radii and shadows are CSS variables (named values that every rule reads). Set them once to \
+             restyle every component. This block goes in your global stylesheet (",
+            code!["app/globals.css"],
+            ", or a file listed in ",
+            code!["[tailwind] stylesheets"],
+            "; see ",
+            a![href("/docs/styling-and-assets#global-css"), "Global CSS"],
+            "):",
+        ],
         pre![code![
             class("language-css"),
             ":root {\n  --nr-primary: #e11d48;       /* also: --nr-secondary, --nr-success, --nr-warning, --nr-danger */\n  --nr-primary-text: #be123c;  /* the color as text on a tint */\n  --nr-radius-md: 10px;        /* --nr-radius-sm, --nr-radius-lg */\n  --nr-font: \"Inter\", sans-serif;\n}",
@@ -478,6 +573,156 @@ Grid![min_width = "16rem", ...]                             // as many columns a
         p![
             "Navbar and sidebar links highlight themselves on their page. On small screens the sidebar becomes a drawer, opened by the navbar's menu button.",
         ],
+        h2("overlays", "Dropdown, Popover, Drawer, ConfirmDialog and ContextMenu"),
+        rust(
+            r#"Dropdown![trigger = Button![variant = Variant::Bordered, "Options"],
+    DropdownSection![title = "Project",
+        DropdownItem![href = "/edit", start_content = icons::Pencil().size(16), shortcut = "⌘E", "Edit"],
+        DropdownItem![on_press = action!(duplicate), description = "Make a copy", "Duplicate"]],
+    DropdownSection![DropdownItem![color = Color::Danger, on_press = Press::open_modal("confirm"), "Delete"]],
+]
+Popover![trigger = Button!["Share"], title = "Share this page", side = Side::Top, p!["Anyone with the link can view."]]
+Drawer![id = "filters", title = "Filters", side = DrawerSide::Right, size = Width::Md, ModalBody![...], ModalFooter![...]]
+ConfirmDialog![id = "confirm", title = "Delete the class?", confirm_label = "Delete",
+    on_confirm = action!(delete), "Students keep their work."]
+ContextMenu![target = Card![...], DropdownItem![href = "/rename", "Rename"]]"#,
+        ),
+        p![
+            "Menus and popovers are the browser's own ",
+            code!["popover"],
+            " elements placed with CSS anchor positioning, so they open, close on a click outside or ",
+            code!["Escape"],
+            " and return focus with no script at all; the component script adds arrow keys, ",
+            code!["Home"],
+            "/",
+            code!["End"],
+            " and type-ahead, and positions them where anchor positioning is missing. Drawers and confirm dialogs are ",
+            code!["<dialog>"],
+            " elements opened with ",
+            code!["Press::open_modal"],
+            ", which also renders ",
+            code!["commandfor"],
+            " so browsers with invoker commands open them without JavaScript. Only the context menu needs the script; without it the browser's own menu appears.",
+        ],
+        h2("toasts", "Toaster and CommandPalette"),
+        rust(
+            r#"// Once, in the root layout. A server flash message becomes a toast with no script:
+Toaster![placement = ToastPlacement::BottomRight,
+    flash.map(|m| Toast![color = Color::Success, title = "Saved", duration = 5000, m])]
+
+Button![on_press = Press::toast("Copied"), "Copy"]        // from a press
+// From your own scripts: nextRust.toast({ title: "Saved", message: "…", color: "success", duration: 5000 })
+
+CommandPalette![id = "commands", hotkey = "k",             // ⌘K / Ctrl K
+    CommandGroup![title = "Pages", CommandItem![href = "/docs", keywords = "guide manual", "Documentation"]],
+    CommandGroup![title = "Actions", CommandItem![on_press = action!(sign_out), shortcut = "⇧Q", "Sign out"]],
+]"#,
+        ),
+        p![
+            "Toasts rendered by the server fade out on their own, with CSS alone. The palette filters as you type and moves with the arrow keys once the script is there; without it the dialog still lists every command as a link.",
+        ],
+        h2("more-fields", "More form controls"),
+        rust(
+            r##"SearchInput![action = "/search", value = query, shortcut = "⌘K"]   // a whole GET form, name = "q"
+Combobox![label = "Country", name = "country", options = ["India", "Germany"]]   // <input list> + <datalist>
+TagsInput![label = "Topics", name = "topics", values = ["rust"], max = 5]        // submits "rust, web"
+NumberInput![label = "Seats", name = "seats", value = "3", min = 1.0, max = 10.0]
+Slider![label = "Volume", name = "volume", value = 40.0, unit = "%"]
+PinInput![label = "Code", name = "code", length = 6]                             // one input: paste and SMS autofill work
+Rating![name = "stars", label = "Your rating", value = 4.0]   Rating![value = 4.5, readonly = true]
+SegmentedControl![name = "view", value = "week", label = "View", [("day", "Day"), ("week", "Week")]]
+FileUpload![name = "photo", label = "Photo", accept = "image/*", hint = "PNG or JPG, up to 5 MB"]
+TimePicker![label = "Starts at", name = "start", value = "09:30", step = 900]
+ColorPicker![label = "Brand color", name = "brand", value = "#7828c8"]
+DateRangePicker![label = "Stay", name = "stay", start = "2026-09-01", end = "2026-09-05"]  // stay_start, stay_end
+
+FormField![label = "Avatar", name = "avatar", control_id = "avatar", any_control]   // label + errors around anything
+FormSection![title = "Profile", description = "Shown on your public page.", fields…]
+FormActions![justify = Justify::Between, bordered = true, buttons…]"##,
+        ),
+        p![
+            "Every one of these is a native control underneath, so they submit, validate and autofill like the browser's own, and they keep working with JavaScript off: the combobox falls back to a ",
+            code!["<datalist>"],
+            ", the tags field to comma separated text, the rating to radio buttons, the pin field to one text input. Like the other fields, those with a ",
+            code!["name"],
+            " render an error slot that server-action validation errors land in.",
+        ],
+        h2("sections", "Page sections"),
+        rust(
+            r#"Hero![eyebrow = "New", title = "Ship faster", subtitle = "One binary.", glow = true, split = true,
+    actions = Button![size = Size::Lg, href = "/signup", "Get started"], media = img![src(shot), alt("")]]
+Section![id = "pricing", eyebrow = "Pricing", title = "Simple plans", muted = true, children]
+FeatureGrid![cols = 3, Feature![icon = icons::Zap().size(20), title = "Fast", card = true, "Renders in microseconds."]]
+PricingTable![PricingCard![name = "Pro", price = "$19", period = "/month", featured = true, badge = "Popular",
+    cta = Button![full_width = true, "Choose Pro"], PricingFeature!["Unlimited projects"], PricingFeature![included = false, "SSO"]]]
+Testimonial![name = "Ada Lovelace", role = "CTO", rating = 5.0, "It just works."]
+LogoCloud![title = "Trusted by teams at", img![src("/acme.svg"), alt("Acme")], ...]
+Cta![title = "Ready to build?", description = "Start free.", split = true, Button![href = "/signup", "Get started"]]
+Faq![structured_data = true, [("Is it free?", "Yes, MIT or Apache-2.0.")]]        // accordion + FAQPage JSON-LD
+Carousel![label = "Screenshots", per_view = 3, CarouselItem![...], ...]           // CSS scroll snapping
+Marquee![speed = 30, span!["Acme"], span!["Globex"]]   Bento![cols = 3, BentoItem![col_span = 2, title = "…", ...]]
+Timeline![TimelineItem![title = "Ordered", time = "09:12", color = Color::Success, "Payment received."]]
+Footer![brand = strong!["Acme"], description = "Tools for teams.", bottom = "© 2026 Acme",
+    FooterColumn![title = "Product", FooterLink![href = "/pricing", "Pricing"]]]"#,
+        ),
+        p![
+            "A landing page can be written with these alone. The carousel scrolls with touch, the trackpad and the arrow keys through CSS scroll snapping (the previous/next buttons are the only part that needs the script), and the marquee stands still under ",
+            code!["prefers-reduced-motion"],
+            ", where it scrolls by hand instead.",
+        ],
+        h2("layout-helpers", "Pagination and layout helpers"),
+        rust(
+            r#"Pagination![page = 3, total = 20, href = "/posts?page={page}"]     // plain links, rel="prev"/"next"
+AspectRatio![ratio = "16 / 9", img![src(cover), alt("")]]
+ScrollArea![max_height = "20rem", label = "Changelog", children]
+Spacer![]                        // takes the space left in a Stack
+Spacer![size = 8]                // a fixed 2rem gap
+Show![above = Breakpoint::Md, children]   Hide![above = Breakpoint::Md, children]
+Sticky![top = "0", blurred = true, bordered = true, Navbar![...]]"#,
+        ),
+        h2("data-display", "Lists, code, callouts and tables"),
+        rust(
+            r#"List![divided = true, bordered = true,
+    ListItem![title = "Ada Lovelace", description = "Admin", href = "/u/ada",
+        start_content = Avatar![name = "Ada Lovelace", status = AvatarStatus::Online], end_content = Chip![size = Size::Sm, "Owner"]]]
+DescriptionList![horizontal = true, DescriptionItem![term = "Plan", "Pro"]]      // or cols = 3
+ChipGroup![label = "Topics", Chip![...], Chip![...]]
+Code!["cargo run"]   CodeBlock![language = "rust", title = "src/main.rs", copy = true, source]
+Callout![kind = CalloutKind::Warning, "Back up first."]                          // Note, Tip, Important, Warning, Danger
+Banner![href = "/blog/launch", link_label = "Read more", persist = "launch-2026", "Version 2 is out."]
+Figure![src = "/team.jpg", alt = "The team", caption = "Berlin, 2026", ratio = "3 / 2"]
+VideoEmbed![youtube = "VIDEO_ID", title = "Launch video"]        // only the poster loads until play
+ResultBlock![status = ResultStatus::Success, title = "Payment received", description = "…", Button![...]]
+
+// Sorting and selection are ordinary links and checkboxes, so the server does the work:
+Table![header = fragment![TableSelectAll![],
+        SortHeader![href = "/students?sort=name&dir=desc", direction = SortDirection::Asc, "Student"], th!["Score"]],
+    each(rows, |r| tr![TableSelect![name = "ids", value = r.id], td![r.name.clone()], td![r.score.to_string()]]),
+]"#,
+        ),
+        p![
+            "The code block's copy button needs the script and the clipboard, and hides itself without them. A banner dismisses itself with a checkbox and ",
+            code![":has()"],
+            "; with ",
+            code!["persist"],
+            " the script remembers the dismissal for the next visits.",
+        ],
+        h2("charts", "Charts"),
+        rust(
+            r#"Sparkline![values = [3.0, 5.0, 4.0, 8.0], color = Color::Success, label = "Signups"]
+BarChart![title = "Signups", data = [("Mon", 12.0), ("Tue", 30.0)], unit = "%"]
+LineChart![title = "Revenue", labels = ["Jan", "Feb", "Mar"],
+    series = [("2025", vec![10.0, 14.0, 12.0]), ("2026", vec![12.0, 18.0, 25.0])]]
+Donut![title = "Traffic", center_label = "visits", data = [("Direct", 60.0), ("Search", 40.0)]]
+Meter![label = "Storage", value = 92.0, low = 60.0, high = 85.0, high_is_bad = true, value_label = "92 GB of 100 GB"]"#,
+        ),
+        p![
+            "Charts are HTML and SVG rendered on the server: no canvas, no chart library, no JavaScript. Values appear on hover with CSS, the whole chart carries an accessible name listing its data, and the series colors are the CSS variables ",
+            code!["--nr-chart-1"],
+            " to ",
+            code!["--nr-chart-8"],
+            ", chosen to stay apart in both themes and for colorblind readers. More than eight series fold into one group.",
+        ],
         h2("icons", "Icons"),
         p![
             "Every ",
@@ -518,6 +763,131 @@ Input![label = "Search", start_content = icons::Search().size(18)]"##,
             ", the drawer, tab panels, modals, closable alerts) are driven by a small script, ",
             code!["/_next-rust/ui.js"],
             " (about 5 KB gzipped). It is added only to pages that render one of them. Without it, every component falls back to the native control, so forms still submit.",
+        ],
+        h3![id("ui-script-wasm"), "The same behaviour in Rust"],
+        p![
+            "That behaviour also exists as Rust, compiled into the one WebAssembly module a site shares. ",
+            code![r#"[ui] script = "wasm""#],
+            " serves it instead of the script: the page then carries a two-line loader rather than 27 KB of \
+             JavaScript, and the components' logic is in the module.",
+        ],
+        pre![code![
+            class("language-toml"),
+            r#"# next-rust.toml
+[ui]
+script = "wasm"        # "js" (the default) serves /_next-rust/ui.js
+
+[build]
+wasm_islands = true    # the module is compiled from the islands/ crate"#
+        ]],
+        p![
+            "The markup, the stylesheet, the ARIA and the keyboard contract are identical either way, and every \
+             component still works with no script at all — so this is a delivery choice, not a behaviour one. It \
+             needs an ",
+            code!["islands/"],
+            " crate beside ",
+            code!["next-rust.toml"],
+            " whose ",
+            code!["islands!"],
+            " names ",
+            code!["start: next_rust_ui_wasm::boot"],
+            "; ",
+            code!["examples/ui"],
+            " has a working one.",
+        ],
+        p![
+            strong!["It costs bytes."],
+            " Measured on the component showcase: the module is about 31 KB brotli against 7.6 KB for the \
+             minified script, and it needs the 5.4 KB shim the islands already load. Take this path because you \
+             want the behaviour in Rust, or because the site already ships a WebAssembly module and the kit can \
+             ride along in it — not to make the page smaller.",
+        ],
+        p![
+            "Two differences worth knowing. ",
+            code!["nextRust.toast(…)"],
+            " is published by the shim as a forwarder, so it raises the toast but returns nothing, where the \
+             script returned the element. And release builds cannot shorten the names a module knows — a wasm \
+             data section is not rewritable the way script text is — so the components' classes and ",
+            code!["data-"],
+            " attributes keep their full names in the HTML and the CSS.",
+        ],
+        h2("check-it-worked", "How to check it worked"),
+        ul![
+            li![
+                "Open the ",
+                a![href("/components"), "gallery"],
+                ", press Preview on the component you want, and compare it with your page.",
+            ],
+            li!["Turn JavaScript off in the browser's developer tools and reload. Every form must still submit, and \
+                 selects and date pickers must show the browser's own controls.",],
+            li!["Tab through the page with the keyboard. Every control should be reachable and show a focus ring.",],
+            li![
+                "Run ",
+                code!["next-rust build"],
+                " and ",
+                code!["next-rust start"],
+                " once before deploying: component class names (",
+                code!["nr-*"],
+                ") are shortened in release builds, which is where a stylesheet or script that targets them by name \
+                 stops matching.",
+            ],
+        ],
+        h2("common-mistakes", "Common mistakes"),
+        ul![
+            li![
+                strong!["Forgetting the import."],
+                " ",
+                code!["use next_rust::ui::*;"],
+                " is separate from the prelude. Without it ",
+                code!["Button!"],
+                " is an unknown macro.",
+            ],
+            li![
+                strong!["Copying a component's markup to restyle it."],
+                " Add ",
+                code!["class(..)"],
+                " or set the ",
+                code!["--nr-*"],
+                " variables instead. Your classes always win over the defaults, and you keep the keyboard and \
+                 accessibility behaviour.",
+            ],
+            li![
+                strong!["Targeting ", code!["nr-*"], " classes from your own CSS or scripts."],
+                " They are renamed in release builds. Give the component your own class or id.",
+            ],
+            li![
+                strong!["A field without ", code!["name"], "."],
+                " It is not submitted with the form and gets no slot for server-side validation errors.",
+            ],
+            li![
+                strong!["A button inside a form that should not submit it."],
+                " ",
+                code!["Button!"],
+                " is ",
+                code!["type=\"button\""],
+                " unless you set ",
+                code!["submit = true"],
+                "; a plain ",
+                code!["button!"],
+                " element is the opposite and submits by default, as in HTML.",
+            ],
+            li![
+                strong!["Expecting ", code!["on_press"], " to run Rust in the browser."],
+                " Views run on the server. ",
+                code!["on_press"],
+                " describes what the browser should do: call a server action, navigate, open a modal, emit an event.",
+            ],
+            li![strong!["Several ", code!["Toaster!"], "s."], " Render it once, in the root layout.",],
+            li![
+                strong!["A modal that never opens."],
+                " The ",
+                code!["id"],
+                " of the ",
+                code!["Modal!"],
+                " and the string in ",
+                code!["Press::open_modal(..)"],
+                " must be identical.",
+            ],
         ],
     ]
 }

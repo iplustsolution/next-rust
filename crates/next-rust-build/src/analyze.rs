@@ -48,6 +48,24 @@ pub struct FileInfo {
     pub consts: BTreeMap<String, String>,
     /// `#[server_action]` functions: (name, argument count).
     pub actions: Vec<(String, usize)>,
+    /// File modules the source declares with `#[path = ".."] mod name;`,
+    /// resolved against the file's directory. Their server actions are
+    /// registered under this file's module (`page.rs` → `function.rs`).
+    pub modules: Vec<ModDecl>,
+    /// The file calls `dynamic(..)` or `Dynamic::new(..)`: it renders a
+    /// per-request hole, which makes a static page a partial one.
+    pub holes: bool,
+}
+
+/// A `#[path = "file.rs"] mod name;` declaration.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModDecl {
+    pub name: String,
+    pub path: PathBuf,
+    /// Declared `pub` (or `pub(crate)`): the generated route table, which
+    /// lives outside the route file's module, can reach it.
+    pub reachable: bool,
+    pub line: usize,
 }
 
 impl FileInfo {
@@ -55,13 +73,14 @@ impl FileInfo {
         self.fns.get(name).filter(|f| f.is_pub)
     }
 
-    /// `RENDERING` constant resolved to `static`/`dynamic`/`auto`.
+    /// `RENDERING` constant resolved to `static`/`dynamic`/`partial`/`auto`.
     pub fn rendering(&self) -> Option<&'static str> {
         let v = self.consts.get("RENDERING")?;
         let last = v.rsplit("::").next().unwrap_or(v).trim();
         match last {
             "Static" => Some("static"),
             "Dynamic" => Some("dynamic"),
+            "Partial" => Some("partial"),
             "Auto" => Some("auto"),
             _ => None,
         }
@@ -117,7 +136,7 @@ pub fn analyze_source(path: &Path, source: &str) -> Result<FileInfo, Diagnostic>
             .location(format!("{}:{}:{}", path.display(), start.line, start.column + 1))
             .message(e.to_string())
     })?;
-    let mut info = FileInfo { path: path.to_path_buf(), ..Default::default() };
+    let mut info = FileInfo { path: path.to_path_buf(), holes: calls_dynamic(&file), ..Default::default() };
     for item in &file.items {
         match item {
             Item::Fn(f) => {
@@ -145,6 +164,24 @@ pub fn analyze_source(path: &Path, source: &str) -> Result<FileInfo, Diagnostic>
                     },
                 );
             }
+            Item::Mod(m) if m.content.is_none() => {
+                let target = m.attrs.iter().find(|a| a.path().is_ident("path")).and_then(|a| match &a.meta {
+                    syn::Meta::NameValue(nv) => match &nv.value {
+                        syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Str(s), .. }) => Some(s.value()),
+                        _ => None,
+                    },
+                    _ => None,
+                });
+                if let Some(target) = target {
+                    let dir = path.parent().unwrap_or_else(|| Path::new("."));
+                    info.modules.push(ModDecl {
+                        name: m.ident.to_string(),
+                        path: dir.join(target),
+                        reachable: matches!(m.vis, Visibility::Public(_) | Visibility::Restricted(_)),
+                        line: m.ident.span().start().line,
+                    });
+                }
+            }
             Item::Const(c) if matches!(c.vis, Visibility::Public(_)) => {
                 let expr = &c.expr;
                 info.consts.insert(c.ident.to_string(), quote::quote!(#expr).to_string().replace(' ', ""));
@@ -153,6 +190,38 @@ pub fn analyze_source(path: &Path, source: &str) -> Result<FileInfo, Diagnostic>
         }
     }
     Ok(info)
+}
+
+/// Whether the file calls `dynamic(..)` or `Dynamic::new(..)`. Tokens, not
+/// text: comments and strings do not count, macro bodies (`main![..]`) do.
+fn calls_dynamic(file: &syn::File) -> bool {
+    use proc_macro2::{Delimiter, TokenStream, TokenTree};
+
+    fn walk(stream: TokenStream) -> bool {
+        // The four tokens before the current one, as text.
+        let mut before: [String; 4] = Default::default();
+        for tree in stream {
+            let text = match &tree {
+                TokenTree::Group(g) => {
+                    let [a, b, c, d] = &before;
+                    // `dynamic(`, but not `fn dynamic(` or `x.dynamic(`.
+                    let hole = d == "dynamic" && c != "fn" && c != ".";
+                    let builder = a == "Dynamic" && b == ":" && c == ":" && d == "new";
+                    if (g.delimiter() == Delimiter::Parenthesis && (hole || builder)) || walk(g.stream()) {
+                        return true;
+                    }
+                    String::new()
+                }
+                TokenTree::Ident(i) => i.to_string(),
+                TokenTree::Punct(p) => p.as_char().to_string(),
+                TokenTree::Literal(_) => String::new(),
+            };
+            before.rotate_left(1);
+            before[3] = text;
+        }
+        false
+    }
+    walk(quote::ToTokens::to_token_stream(file))
 }
 
 /// Find `#[server_action]` functions in `src/` and derive module paths
@@ -232,6 +301,21 @@ mod tests {
         assert_eq!(info.rendering(), Some("static"));
         assert_eq!(info.revalidate_literal(), Some(3600));
         assert_eq!(info.actions, vec![("save".into(), 2)]);
+    }
+
+    #[test]
+    fn finds_dynamic_holes() {
+        let holes = |src: &str| analyze_source(Path::new("page.rs"), src).unwrap().holes;
+        assert!(holes(
+            "pub fn Page() -> impl View { main![h1![\"x\"], dynamic(p![\"…\"], |ctx| async move { p![\"hi\"] })] }"
+        ));
+        assert!(holes("pub fn Page() -> impl View { next_rust::dynamic((), cart) }"));
+        assert!(holes("pub fn Page() -> impl View { Dynamic::new(()).on_error(oops).render(cart) }"));
+        assert!(!holes("// dynamic(a, b)\npub fn Page() -> impl View { p![\"dynamic (not a call)\"] }"));
+        assert!(!holes("fn dynamic(x: u8) {}\npub fn Page() -> impl View { p![is_dynamic(1)] }"));
+        let info =
+            analyze_source(Path::new("page.rs"), "pub const RENDERING: Rendering = Rendering::Partial;").unwrap();
+        assert_eq!(info.rendering(), Some("partial"));
     }
 
     #[test]

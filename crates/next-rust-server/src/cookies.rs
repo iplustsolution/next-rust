@@ -241,6 +241,15 @@ impl Cookies {
         cookie.http_only.get_or_insert(true);
         cookie.same_site.get_or_insert(SameSite::Lax);
         cookie.secure.get_or_insert(self.secure_default);
+        // Browsers refuse prefixed cookies that break the prefix's promise;
+        // make them keep it instead of silently losing the cookie.
+        if cookie.name.starts_with("__Host-") {
+            cookie.secure = Some(true);
+            cookie.path = Some("/".into());
+            cookie.domain = None;
+        } else if cookie.name.starts_with("__Secure-") {
+            cookie.secure = Some(true);
+        }
         self.lock().changes.push(cookie);
     }
 
@@ -366,5 +375,16 @@ mod tests {
         headers.insert(http::header::COOKIE, format!("data={}", c.value).parse().unwrap());
         let jar = Cookies::from_headers(&headers, false);
         assert_eq!(jar.get_decoded("data").as_deref(), Some("{\"a\": \"b c;\"}"));
+    }
+
+    #[test]
+    fn prefixed_cookies_keep_their_promise() {
+        let jar = Cookies::from_headers(&HeaderMap::new(), false);
+        jar.set(Cookie::new("__Host-sid", "abc").path("/app").domain("example.com"));
+        jar.set(Cookie::new("__Secure-pref", "1"));
+        let headers = jar.set_cookie_headers();
+        assert!(headers[0].contains("; Path=/;") && headers[0].contains("; Secure"), "{}", headers[0]);
+        assert!(!headers[0].contains("Domain"), "{}", headers[0]);
+        assert!(headers[1].contains("; Secure"), "{}", headers[1]);
     }
 }

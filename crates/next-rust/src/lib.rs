@@ -34,11 +34,15 @@
 #![forbid(unsafe_code)]
 
 mod font;
+pub mod jobs;
 
 pub use font::LocalFont;
 pub use next_rust_cache::{Cache, CacheEntry, CacheKey, CacheOptions, CacheStore, FileStore, MemoryStore};
 pub use next_rust_core::{Config, Diagnostic, Environment, RenderingMode, config, env as dotenv};
-pub use next_rust_macros::{action, asset, client, css_module, global_css, server, server_action};
+pub use next_rust_macros::{
+    action, asset, asset_script, client, client_script, css_module, global_css, server, server_action, stylesheet,
+};
+pub use next_rust_macros::{cron, job};
 pub use next_rust_router::{ParamValue, Params};
 pub use next_rust_server::*;
 pub use next_rust_view::*;
@@ -48,6 +52,12 @@ pub use next_rust_ui as ui;
 
 /// Every Lucide icon: `icons::House().size(20)` (see [`next_rust_icons`]).
 pub use next_rust_icons as icons;
+
+/// Authentication and rate-limit building blocks (the `auth` feature; see
+/// [`next_rust_auth`]): sealed tokens, `__Host-` cookies, rotating sessions,
+/// argon2id passwords, one-time codes, in-memory and Redis limiters.
+#[cfg(feature = "auth")]
+pub use next_rust_auth as auth;
 
 /// Re-exported crates for advanced use.
 pub mod deps {
@@ -65,13 +75,17 @@ pub use next_rust_server::{revalidate_path, revalidate_tag};
 
 /// Everything needed in page, layout and route files.
 pub mod prelude {
-    pub use next_rust_macros::{action, asset, client, css_module, global_css, server, server_action};
+    pub use next_rust_jobs::{JobClient, JobContext, JobError, enqueue, enqueue_at, enqueue_in};
+    pub use next_rust_macros::{
+        action, asset, asset_script, client, client_script, css_module, global_css, server, server_action, stylesheet,
+    };
+    pub use next_rust_macros::{cron, job};
     pub use next_rust_router::Params;
     pub use next_rust_server::{
         ActionContext, Auth, AuthUser, Body, ClientIp, Cookie, Cookies, CsrfToken, Data, Error, ErrorInfo, Extension,
         Feed, FeedEntry, FormState, Headers, Html, IntoResponse, Json, Next, Nonce, OrNotFound, Path, Query, Rendering,
         Request, RequestInfo, Response, ResponseHeaders, Result, Robots, RobotsRule, SameSite, Session, Sitemap,
-        SitemapEntry, SseEvent, not_found, permanent_redirect, redirect,
+        SitemapEntry, SseEvent, cached, dynamic, is_local_path, not_found, permanent_redirect, redirect,
     };
     pub use next_rust_view::metadata::{Icon, OgImage, OpenGraph, Twitter};
     pub use next_rust_view::*;

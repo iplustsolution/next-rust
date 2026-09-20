@@ -56,6 +56,12 @@ pub struct Config {
     /// The config file that was loaded, if any.
     #[serde(skip)]
     pub source: Option<PathBuf>,
+    /// Where the build wrote the scripts and stylesheets declared in Rust
+    /// (`client_script!`, `asset_script!`, `stylesheet!`): a directory with
+    /// `client/`, `assets/` and `styles/` inside. Set by `next-rust-build`
+    /// while it runs; never read from the file.
+    #[serde(skip)]
+    pub generated: Option<PathBuf>,
 
     pub app: AppConfig,
     pub api: ApiConfig,
@@ -63,6 +69,14 @@ pub struct Config {
     pub build: BuildConfig,
     pub assets: AssetsConfig,
     pub rendering: RenderingConfig,
+    /// What the browser runtime does on its own: `[client]`.
+    pub client: ClientConfig,
+    /// How the shipped UI components behave in the browser: `[ui]`.
+    pub ui: UiConfig,
+    /// Motion built into every page: `[animation]`.
+    pub animation: AnimationConfig,
+    /// The loading bar across the top of the page: `[loader]`.
+    pub loader: LoaderConfig,
     pub images: ImagesConfig,
     pub security: SecurityConfig,
     pub env: EnvConfig,
@@ -74,6 +88,10 @@ pub struct Config {
     pub plugins: BTreeMap<String, serde_json::Value>,
     /// Tailwind CSS: `[tailwind]`.
     pub tailwind: TailwindConfig,
+    /// Site-ownership proofs for search engines and ad platforms: `[verification]`.
+    pub verification: crate::tracking::VerificationConfig,
+    /// Measurement and advertising tags: `[analytics]`.
+    pub analytics: crate::tracking::AnalyticsConfig,
 }
 
 impl Default for Config {
@@ -81,12 +99,17 @@ impl Default for Config {
         Self {
             root: PathBuf::from("."),
             source: None,
+            generated: None,
             app: AppConfig::default(),
             api: ApiConfig::default(),
             server: ServerConfig::default(),
             build: BuildConfig::default(),
             assets: AssetsConfig::default(),
             rendering: RenderingConfig::default(),
+            client: ClientConfig::default(),
+            ui: UiConfig::default(),
+            animation: AnimationConfig::default(),
+            loader: LoaderConfig::default(),
             images: ImagesConfig::default(),
             security: SecurityConfig::default(),
             env: EnvConfig::default(),
@@ -96,6 +119,8 @@ impl Default for Config {
             headers: Vec::new(),
             plugins: BTreeMap::new(),
             tailwind: TailwindConfig::default(),
+            verification: Default::default(),
+            analytics: Default::default(),
         }
     }
 }
@@ -294,6 +319,12 @@ pub struct ServerConfig {
     pub http2: bool,
     /// Trust `X-Forwarded-For` / `X-Forwarded-Proto` from a reverse proxy.
     pub trust_proxy: bool,
+    /// How many proxies of yours a request passes (with `trust_proxy`). Each
+    /// one appends the address it saw to `X-Forwarded-For`, so the client is
+    /// that many entries from the right; everything further left was sent by
+    /// the client and is ignored. 1 for one proxy or load balancer, 2 for a
+    /// CDN in front of a load balancer.
+    pub trusted_proxies: u8,
 }
 
 impl Default for ServerConfig {
@@ -308,6 +339,7 @@ impl Default for ServerConfig {
             compression: true,
             http2: false,
             trust_proxy: false,
+            trusted_proxies: 1,
         }
     }
 }
@@ -333,6 +365,60 @@ pub struct BuildConfig {
     /// project knows them: they would style nothing
     /// (`NEXT_RUST_DROP_CLASSES=0|1` overrides).
     pub drop_unused_classes: bool,
+    /// Write scripts into the document instead of linking them: the
+    /// framework's runtime and component script, island modules and
+    /// `asset!` scripts become inline `<script>` elements (with the CSP
+    /// nonce), so a page loads without any `.js` request. Modules reached
+    /// only through a dynamic `import("./x.js")` stay out of the page and
+    /// are fetched on demand from `/_next-rust/m/<hash>`.
+    pub inline_assets: bool,
+    /// Release builds write HTML without what browsers do not need: quotes
+    /// around simple attribute values, `=""`, default attributes
+    /// (`method="get"`) and optional end tags (`</li>`, `</td>`, `</p>`).
+    /// Text, `<pre>`, `<textarea>`, scripts and styles are never touched
+    /// (`NEXT_RUST_MINIFY_HTML=0|1` overrides).
+    pub minify_html: bool,
+    /// Release builds give `data-*` attributes, CSS custom properties,
+    /// `@keyframes` and `@layer` names (and the ids of `rename_ids`) short
+    /// random names, in pages, stylesheets and scripts alike
+    /// (`NEXT_RUST_MINIFY_NAMES=0|1` overrides). Makes pages smaller and
+    /// hard to read; it hides nothing a browser needs.
+    pub minify_names: bool,
+    /// Names `minify_names` leaves alone: `data-state`, `--brand`, a
+    /// keyframes or layer name, an id; `data-chart-*` keeps a whole family.
+    /// For names only code the build cannot read knows (a third-party
+    /// script loaded from a URL, HTML built in a string).
+    pub keep_names: Vec<String>,
+    /// Ids `minify_names` may rename (`newsletter-email`, `auth-*`). Ids are
+    /// public (`/page#pricing` links to one), so only the ids listed here
+    /// and those the UI components generate get short names.
+    pub rename_ids: Vec<String>,
+    /// Decimals release builds keep in SVG path data (`d`, `points`);
+    /// `0` leaves the numbers as written. Part of writing compact HTML, so
+    /// `minify_html = false` keeps the numbers whatever this says.
+    pub svg_precision: u8,
+    /// Release builds remove `console.*` calls from the scripts they minify
+    /// (see `minify_js`); `debugger` statements go with or without it.
+    pub drop_console: bool,
+    /// Compile the project's `islands/` crate to one WebAssembly module and
+    /// serve `#[client(wasm = "…")]` islands from it. Island logic is then
+    /// written in Rust instead of JavaScript and ships as a binary, which is
+    /// much harder to read than minified JS — but it is **not** hidden and
+    /// **not** a security boundary: the module is downloadable and
+    /// disassemblable (`wasm2wat`), and every string literal in it stays
+    /// readable. Secrets belong on the server. Needs the
+    /// `wasm32-unknown-unknown` target; `wasm-opt` is used when on `PATH`.
+    pub wasm_islands: bool,
+    /// Shrink every WebAssembly module the build produces with `wasm-opt -Oz`
+    /// when it is on `PATH`. `false` ships what the linker wrote, which builds
+    /// a little faster and is easier to follow in a disassembler. A missing or
+    /// failing `wasm-opt` is a warning either way, never a build failure.
+    pub wasm_opt: bool,
+    /// Keep the WebAssembly name section, so functions carry their Rust names
+    /// in a profiler, a stack trace and `wasm2wat`. It costs a few kilobytes
+    /// and undoes most of what makes a module tedious to read, so it is off by
+    /// default. Unrelated to `keep_names`, which is about `minify_names`.
+    pub wasm_keep_names: bool,
 }
 
 impl Default for BuildConfig {
@@ -345,6 +431,16 @@ impl Default for BuildConfig {
             signature: true,
             minify_js: true,
             drop_unused_classes: true,
+            inline_assets: false,
+            minify_html: true,
+            minify_names: true,
+            keep_names: Vec::new(),
+            rename_ids: Vec::new(),
+            svg_precision: 3,
+            drop_console: true,
+            wasm_islands: false,
+            wasm_opt: true,
+            wasm_keep_names: false,
         }
     }
 }
@@ -382,14 +478,31 @@ pub struct AssetsConfig {
     /// Release builds leave out CSS rules (from `global_css!` and
     /// `css_module!`) whose classes or ids appear nowhere in the project.
     pub prune_css: bool,
-    /// Class and id names to keep even though they don't appear in the
-    /// source, e.g. names assembled at runtime.
+    /// Names to keep even though they don't appear in the source, e.g.
+    /// names assembled at runtime: classes and ids, and for the per-page
+    /// stylesheets also attributes (`data-theme`) and elements (`dialog`)
+    /// that only a script outside the project adds.
     pub css_safelist: Vec<String>,
+    /// Custom properties (`--brand`) every page keeps although nothing on it
+    /// reads them: read by a script the build cannot see, or by CSS loaded
+    /// from elsewhere.
+    pub css_keep_vars: Vec<String>,
+    /// Attributes that only have the values the server renders, although a
+    /// script names them (`data-theme` restored from storage by a boot
+    /// script): per-page stylesheets leave out the rules for other values.
+    pub css_static_attributes: Vec<String>,
 }
 
 impl Default for AssetsConfig {
     fn default() -> Self {
-        Self { optimize: true, public_max_age: 0, prune_css: true, css_safelist: Vec::new() }
+        Self {
+            optimize: true,
+            public_max_age: 0,
+            prune_css: true,
+            css_safelist: Vec::new(),
+            css_keep_vars: Vec::new(),
+            css_static_attributes: Vec::new(),
+        }
     }
 }
 
@@ -408,6 +521,189 @@ pub struct RenderingConfig {
 impl Default for RenderingConfig {
     fn default() -> Self {
         Self { default: RenderingMode::Auto, streaming: true, revalidate: None, client_navigation: true }
+    }
+}
+
+/// `[client]`: what the browser runtime does without being asked.
+///
+/// ```toml
+/// [client]
+/// enhance_forms = true   # default
+/// runtime = "js"         # default; "wasm" ships the Rust runtime instead
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct ClientConfig {
+    /// Send every same-origin form from the runtime instead of letting the
+    /// browser reload the page: GET forms become client navigations, POST
+    /// forms are posted with `fetch` and the answer is shown. A form or
+    /// button opts out with `data-nr-reload`. `false` leaves all forms except
+    /// server-action forms to the browser.
+    pub enhance_forms: bool,
+    /// Which browser runtime a page loads: the JavaScript one, or the same
+    /// behaviour written in Rust and compiled to WebAssembly. What the runtime
+    /// *does* — client navigation, prefetching, the loading bar, form
+    /// enhancement, island hydration — is identical either way; only the
+    /// language it is written in changes.
+    pub runtime: ClientRuntime,
+}
+
+impl Default for ClientConfig {
+    fn default() -> Self {
+        Self { enhance_forms: true, runtime: ClientRuntime::Js }
+    }
+}
+
+/// `[client] runtime`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ClientRuntime {
+    /// The JavaScript runtime the framework has always shipped.
+    #[default]
+    Js,
+    /// The Rust runtime compiled to WebAssembly, behind a logic-free shim.
+    /// Needs the `wasm32-unknown-unknown` target, and relaxes `script-src` by
+    /// `'wasm-unsafe-eval'` exactly like `[build] wasm_islands`.
+    Wasm,
+}
+
+impl ClientRuntime {
+    /// Whether this choice makes the page compile a WebAssembly module.
+    pub fn is_wasm(self) -> bool {
+        matches!(self, Self::Wasm)
+    }
+}
+
+/// `[ui]`: how the `next_rust::ui` components behave in the browser.
+///
+/// ```toml
+/// [ui]
+/// script = "js"          # default; "wasm" ships the Rust component logic
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct UiConfig {
+    /// Where the behaviour of the shipped components (select, date picker,
+    /// toggles, dialogs, …) comes from. The markup, the stylesheet and the
+    /// keyboard contract are the same either way.
+    pub script: UiScript,
+}
+
+/// `[ui] script`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UiScript {
+    /// The component script the UI crate has always shipped.
+    #[default]
+    Js,
+    /// The component logic in Rust, compiled to WebAssembly.
+    Wasm,
+}
+
+impl UiScript {
+    /// Whether this choice makes the page compile a WebAssembly module.
+    pub fn is_wasm(self) -> bool {
+        matches!(self, Self::Wasm)
+    }
+}
+
+/// Motion every page gets without writing any CSS: pages fade into each
+/// other, and hover, focus and state changes ease instead of jumping. All on
+/// by default; `[animation] enabled = false` turns everything off. Browsers
+/// asking for reduced motion get none of it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AnimationConfig {
+    /// `false` leaves the motion stylesheet out entirely.
+    pub enabled: bool,
+    /// Fade between pages: client navigations swap the page inside a view
+    /// transition, and full loads use cross-document view transitions.
+    pub pages: bool,
+    /// Ease every hover, focus, active and class change on every element
+    /// (colors, size, spacing, transforms, shadows, opacity). Elements with
+    /// their own `transition` and Tailwind `transition-*` utilities keep
+    /// theirs; `data-nr-motion="off"` opts a subtree out.
+    pub hover: bool,
+    /// How long a hover or state change takes, in milliseconds.
+    pub duration: u32,
+    /// How long the fade between two pages takes, in milliseconds.
+    pub page_duration: u32,
+    /// The timing function of hover and state changes.
+    pub easing: String,
+}
+
+impl Default for AnimationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            pages: true,
+            hover: true,
+            duration: 200,
+            page_duration: 250,
+            easing: "cubic-bezier(0.2, 0, 0, 1)".into(),
+        }
+    }
+}
+
+impl AnimationConfig {
+    /// Whether pages fade into each other.
+    pub fn pages(&self) -> bool {
+        self.enabled && self.pages && self.page_duration > 0
+    }
+
+    /// Whether hover and state changes ease.
+    pub fn hover(&self) -> bool {
+        self.enabled && self.hover && self.duration > 0
+    }
+}
+
+/// The bar that runs across the top of the page while the next page loads
+/// (client navigations, server-action forms and full page loads), and
+/// disappears once it is there. On by default; every part is configurable.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct LoaderConfig {
+    /// `false` leaves the bar out.
+    pub enabled: bool,
+    /// Any CSS color: your brand color, or a variable such as
+    /// `var(--color-brand)` from `[tailwind.theme]`. The default follows the
+    /// UI components' primary color.
+    pub color: String,
+    /// Height of the bar in pixels.
+    pub height: u32,
+    /// A soft glow around the bar, brightest under its leading edge.
+    pub shadow: bool,
+    /// A small spinner in the corner while loading.
+    pub spinner: bool,
+    /// Show the bar only when a load takes longer than this many
+    /// milliseconds, so instant (prefetched) navigations never flash it.
+    pub delay: u32,
+    /// How long the bar takes to fill once the page is there, and then again
+    /// to fade, in milliseconds.
+    pub speed: u32,
+    /// The timing function of that fill. While loading the bar moves on its
+    /// own curve: fast at first, ever slower, never resting.
+    pub easing: String,
+    /// The `z-index` of the bar.
+    pub z_index: i64,
+    /// Run the bar along the bottom of the page instead of the top.
+    pub at_bottom: bool,
+}
+
+impl Default for LoaderConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            color: "var(--nr-primary, #006fee)".into(),
+            height: 4,
+            shadow: true,
+            spinner: false,
+            delay: 100,
+            speed: 200,
+            easing: "ease".into(),
+            z_index: 1600,
+            at_bottom: false,
+        }
     }
 }
 
@@ -596,6 +892,17 @@ impl std::error::Error for ConfigError {}
 pub type TomlParser = fn(&str) -> Result<Config, String>;
 
 impl Config {
+    /// Whether anything in this project makes a browser compile a WebAssembly
+    /// module: the app's islands, the browser runtime or the UI components.
+    ///
+    /// This is the one question the rest of the framework should ask. It
+    /// decides whether `script-src` gains `'wasm-unsafe-eval'` and whether a
+    /// page preloads a module — never `build.wasm_islands` alone, which only
+    /// covers the app's own `islands/` crate.
+    pub fn uses_wasm(&self) -> bool {
+        self.build.wasm_islands || self.client.runtime.is_wasm() || self.ui.script.is_wasm()
+    }
+
     /// Discover and load the configuration starting at `start`.
     pub fn discover(start: impl AsRef<Path>) -> Result<Self, ConfigError> {
         Self::discover_with(start, Some(Self::from_toml_str))
@@ -747,6 +1054,8 @@ impl Config {
             }
         }
         out.extend(self.tailwind_diagnostics());
+        out.extend(self.verification.diagnostics());
+        out.extend(self.analytics.diagnostics());
         if let Some(level) = &self.logging.level
             && !matches!(level.as_str(), "error" | "warn" | "info" | "debug" | "trace")
         {
@@ -823,12 +1132,78 @@ mod tests {
     use super::*;
 
     #[test]
+    fn forms_are_enhanced_unless_turned_off() {
+        assert!(Config::from_toml_str("").unwrap().client.enhance_forms);
+        assert!(!Config::from_toml_str("[client]\nenhance_forms = false").unwrap().client.enhance_forms);
+        assert!(Config::from_toml_str("[client]\nforms = false").is_err(), "unknown keys are errors");
+    }
+
+    #[test]
     fn defaults_are_zero_config() {
         let c = Config::from_toml_str("").unwrap();
         assert_eq!(c.app.directory, PathBuf::from("app"));
         assert_eq!(c.server.port, 3000);
         assert_eq!(c.build.output, PathBuf::from(".next-rust"));
         assert_eq!(c.rendering.default, RenderingMode::Auto);
+        assert!(c.animation.pages() && c.animation.hover());
+        assert_eq!((c.animation.duration, c.animation.page_duration), (200, 250));
+    }
+
+    /// Every WebAssembly switch defaults to the JavaScript an existing app
+    /// already ships, so upgrading changes nothing until the file is edited.
+    /// `uses_wasm()` is the single question the CSP and the build ask.
+    #[test]
+    fn webassembly_is_off_until_it_is_asked_for() {
+        let c = Config::from_toml_str("").unwrap();
+        assert!(!c.build.wasm_islands);
+        assert_eq!(c.client.runtime, ClientRuntime::Js);
+        assert_eq!(c.ui.script, UiScript::Js);
+        assert!(!c.uses_wasm(), "the defaults must not relax anyone's CSP");
+        // `wasm_opt` is the one that defaults to on: it only makes the module
+        // smaller, and a missing `wasm-opt` is a warning rather than a failure.
+        assert!(c.build.wasm_opt);
+        assert!(!c.build.wasm_keep_names);
+
+        // Each switch on its own is enough to make a page compile a module.
+        for toml in ["[build]\nwasm_islands = true", "[client]\nruntime = \"wasm\"", "[ui]\nscript = \"wasm\""] {
+            assert!(Config::from_toml_str(toml).unwrap().uses_wasm(), "{toml}");
+        }
+
+        let c = Config::from_toml_str("[client]\nruntime = \"wasm\"\n[ui]\nscript = \"wasm\"").unwrap();
+        assert!(c.client.runtime.is_wasm() && c.ui.script.is_wasm());
+        // `keep_names` and `wasm_keep_names` are different keys on purpose.
+        let c = Config::from_toml_str("[build]\nkeep_names = [\"data-state\"]\nwasm_keep_names = true").unwrap();
+        assert_eq!(c.build.keep_names, ["data-state"]);
+        assert!(c.build.wasm_keep_names);
+
+        assert!(Config::from_toml_str("[client]\nruntime = \"rust\"").is_err(), "only js | wasm");
+        assert!(Config::from_toml_str("[ui]\nscript = \"typescript\"").is_err(), "only js | wasm");
+        assert!(Config::from_toml_str("[ui]\nruntime = \"wasm\"").is_err(), "unknown keys are errors");
+    }
+
+    #[test]
+    fn animation_can_be_turned_off_in_parts_or_at_once() {
+        let c = Config::from_toml_str("[animation]\nhover = false\npage_duration = 400").unwrap();
+        assert!(c.animation.pages() && !c.animation.hover());
+        assert_eq!(c.animation.page_duration, 400);
+        let c = Config::from_toml_str("[animation]\nenabled = false").unwrap();
+        assert!(!c.animation.pages() && !c.animation.hover());
+        let c = Config::from_toml_str("[animation]\nduration = 0").unwrap();
+        assert!(c.animation.pages() && !c.animation.hover());
+        assert!(Config::from_toml_str("[animation]\nfade = true").is_err(), "unknown keys are errors");
+    }
+
+    #[test]
+    fn the_loader_is_on_and_customizable() {
+        let c = Config::from_toml_str("").unwrap();
+        assert!(c.loader.enabled && c.loader.shadow && !c.loader.spinner);
+        assert_eq!((c.loader.height, c.loader.delay, c.loader.speed), (4, 100, 200));
+        let c = Config::from_toml_str("[loader]\ncolor = \"#f26b2a\"\nheight = 3\nspinner = true\nat_bottom = true")
+            .unwrap();
+        assert_eq!(c.loader.color, "#f26b2a");
+        assert!(c.loader.spinner && c.loader.at_bottom && c.loader.height == 3);
+        assert!(!Config::from_toml_str("[loader]\nenabled = false").unwrap().loader.enabled);
+        assert!(Config::from_toml_str("[loader]\ncolour = \"red\"").is_err());
     }
 
     #[test]

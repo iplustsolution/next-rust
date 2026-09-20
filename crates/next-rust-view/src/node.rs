@@ -1,7 +1,9 @@
+use std::any::Any;
 use std::borrow::Cow;
 use std::fmt;
 use std::future::Future;
 use std::pin::Pin;
+use std::sync::Arc;
 
 use crate::style::Stylesheet;
 
@@ -20,6 +22,11 @@ pub enum Node {
     Suspense(Box<Suspense>),
     /// A stylesheet used by this subtree; emitted once per document.
     Style(&'static Stylesheet),
+    /// A per-request region of an otherwise static page (see [`crate::hole`]).
+    Hole(Box<Hole>),
+    /// Markup rendered earlier, with what the document needs to know about
+    /// it (see [`crate::render_fragment`]).
+    Rendered(Box<crate::render::Rendered>),
 }
 
 impl fmt::Debug for Node {
@@ -32,6 +39,8 @@ impl fmt::Debug for Node {
             Node::Fragment(c) => f.debug_tuple("Fragment").field(c).finish(),
             Node::Suspense(_) => f.write_str("Suspense(..)"),
             Node::Style(s) => f.debug_tuple("Style").field(&s.id).finish(),
+            Node::Hole(_) => f.write_str("Hole(..)"),
+            Node::Rendered(r) => f.debug_tuple("Rendered").field(&r.html).finish(),
         }
     }
 }
@@ -43,6 +52,21 @@ pub type BoxNodeFuture = Pin<Box<dyn Future<Output = Node> + Send + 'static>>;
 pub struct Suspense {
     pub fallback: Node,
     pub content: BoxNodeFuture,
+}
+
+/// What a [`Hole`] is rendered with: the server passes its request context.
+pub type HoleContext = Arc<dyn Any + Send + Sync>;
+
+/// Renders the content of a [`Hole`] for one request. Called once per request,
+/// so it is a function rather than a future.
+pub type HoleFn = Arc<dyn Fn(HoleContext) -> BoxNodeFuture + Send + Sync>;
+
+/// A dynamic region inside a static shell. The shell (rendered once and
+/// cached) holds `fallback`; `content` runs for every request and its result
+/// is streamed into place like a [`Suspense`] boundary.
+pub struct Hole {
+    pub fallback: Node,
+    pub content: HoleFn,
 }
 
 /// Attribute value.

@@ -13,9 +13,14 @@ pub fn Layout(children: Children) -> impl View {
     // Header and footer are shared by every page, so client navigations never
     // replace them: the logo is requested once per visit.
     div![
-        class("min-h-dvh bg-bg font-sans text-base/[1.6] text-fg antialiased selection:bg-accent-soft selection:text-fg"),
+        // No background here: `html` already carries `bg-bg` (build.rs), so the
+        // ambient light layer below can show through on every page.
+        class("min-h-dvh font-sans text-base/[1.6] text-fg antialiased selection:bg-accent-soft selection:text-fg"),
+        crate::ui::ambient(),
         a![
-            class("absolute -top-12 left-3 z-[100] rounded-lg bg-accent px-3.5 py-2 font-semibold text-on-accent focus:top-3"),
+            class(
+                "absolute -top-12 left-3 z-[100] rounded-lg bg-accent px-3.5 py-2 font-semibold text-on-accent focus:top-3"
+            ),
             href("#content"),
             "Skip to content"
         ],

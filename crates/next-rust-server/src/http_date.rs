@@ -33,7 +33,12 @@ pub fn parse(s: &str) -> Option<SystemTime> {
     let month = MONTHS.iter().position(|m| *m == parts[2])? as i64 + 1;
     let year: i64 = parts[3].parse().ok()?;
     let hms: Vec<u64> = parts[4].split(':').map(|p| p.parse().ok()).collect::<Option<_>>()?;
-    if hms.len() != 3 {
+    // The header comes from the client: out-of-range fields would overflow
+    // the arithmetic below (a panic, and with `panic = "abort"` the process).
+    if hms.len() != 3 || !(1..=31).contains(&day) || !(1970..=9999).contains(&year) {
+        return None;
+    }
+    if hms[0] > 23 || hms[1] > 59 || hms[2] > 60 {
         return None;
     }
     let days = days_from_civil(year, month, day);
@@ -79,5 +84,20 @@ mod tests {
         assert_eq!(format(UNIX_EPOCH), "Thu, 01 Jan 1970 00:00:00 GMT");
         let leap = UNIX_EPOCH + Duration::from_secs(951_782_400); // 2000-02-29
         assert_eq!(format(leap), "Tue, 29 Feb 2000 00:00:00 GMT");
+    }
+
+    #[test]
+    fn hostile_dates_are_refused_without_overflow() {
+        for bad in [
+            "Mon, 01 Jan 2000 5000000000000000:00:00 GMT",
+            "Mon, 01 Jan 2000 00:18446744073709551615:00 GMT",
+            "Mon, 01 Jan 9223372036854775807 00:00:00 GMT",
+            "Mon, 01 Jan -9223372036854775808 00:00:00 GMT",
+            "Mon, 9223372036854775807 Jan 2000 00:00:00 GMT",
+            "Mon, 00 Jan 2000 00:00:00 GMT",
+            "Mon, 01 Jan 2000 24:00:00 GMT",
+        ] {
+            assert_eq!(parse(bad), None, "{bad}");
+        }
     }
 }

@@ -97,7 +97,8 @@ async fn get(app: &App, path: &str, known: &[&str]) -> String {
     res.into_text().await
 }
 
-/// `(id, css)` of every utility `<style>` in `html`.
+/// `(id, css)` of every utility `<style>` in `html`; the framework's own
+/// motion and loading-bar sheets (`tests/motion.rs`) are left out.
 fn styles(html: &str) -> Vec<(String, String)> {
     html.split("<style data-nr-css=\"")
         .skip(1)
@@ -105,10 +106,12 @@ fn styles(html: &str) -> Vec<(String, String)> {
             let (id, rest) = rest.split_once("\">").unwrap();
             (id.to_owned(), rest.split("</style>").next().unwrap().to_owned())
         })
+        .filter(|(id, _)| !id.starts_with("nr-motion-") && !id.starts_with("nr-loader-"))
         .collect()
 }
 
-const BASE: &str = "@layer theme,base,components,utilities;@layer theme{:root{--c:red}}@layer base{*{margin:0}}";
+/// `--c` in the theme layer is read by nothing: it is not sent (`tests/page_css.rs`).
+const BASE: &str = "@layer theme,base,components,utilities;@layer base{*{margin:0}}";
 
 #[tokio::test]
 async fn pages_get_only_the_rules_they_use() {

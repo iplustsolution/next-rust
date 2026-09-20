@@ -49,7 +49,7 @@ impl EnvVars {
                 *v = existing;
             }
         }
-        Ok(Self { vars, public_prefix: public_prefix.to_owned() })
+        Ok(Self { vars, public_prefix: safe_prefix(public_prefix) })
     }
 
     /// Export loaded values into the process environment (only for keys that
@@ -90,6 +90,24 @@ impl EnvVars {
     pub fn is_public(&self, key: &str) -> bool {
         key.starts_with(&self.public_prefix)
     }
+}
+
+/// The default, and the shortest prefix that may be configured: a short or
+/// empty `[env] public_prefix` would put the whole environment — database
+/// URLs, API keys — into every page, and the one place that check can be
+/// made for every caller is here.
+pub const DEFAULT_PUBLIC_PREFIX: &str = "NEXT_RUST_PUBLIC_";
+const MIN_PUBLIC_PREFIX: usize = 4;
+
+fn safe_prefix(prefix: &str) -> String {
+    if prefix.chars().count() >= MIN_PUBLIC_PREFIX {
+        return prefix.to_owned();
+    }
+    eprintln!(
+        "warning: [env] public_prefix {prefix:?} is shorter than {MIN_PUBLIC_PREFIX} characters, which would expose \
+         too much of the environment to browsers; using {DEFAULT_PUBLIC_PREFIX:?}"
+    );
+    DEFAULT_PUBLIC_PREFIX.to_owned()
 }
 
 #[allow(unsafe_code)]
@@ -181,6 +199,25 @@ fn unescape_double(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_short_public_prefix_never_opens_the_whole_environment() {
+        // Its own directory: tests in one binary run in parallel.
+        let root = std::env::temp_dir().join(format!("nr-env-prefix-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&root);
+        std::fs::write(root.join(".env"), "DATABASE_URL=postgres://u:p@h/db\nNEXT_RUST_PUBLIC_API=/api\n").unwrap();
+        for prefix in ["", "N", "NE_", "   "] {
+            let vars = EnvVars::load(&root, Environment::Test, prefix).unwrap();
+            let public = vars.public();
+            assert!(!public.contains_key("DATABASE_URL"), "{prefix:?} exposed the database URL");
+            assert_eq!(public.get("NEXT_RUST_PUBLIC_API").map(String::as_str), Some("/api"), "{prefix:?}");
+            assert!(!vars.is_public("DATABASE_URL"), "{prefix:?}");
+        }
+        // A prefix of its own is kept as written.
+        let vars = EnvVars::load(&root, Environment::Test, "MYAPP_PUBLIC_").unwrap();
+        assert!(vars.public().is_empty() && !vars.is_public("DATABASE_URL"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     #[test]
     fn parses_dotenv() {

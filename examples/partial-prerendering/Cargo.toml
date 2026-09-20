@@ -1,0 +1,14 @@
+[package]
+name = "example-partial-prerendering"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+next-rust = { path = "../../crates/next-rust" }
+
+[build-dependencies]
+next-rust-build = { path = "../../crates/next-rust-build" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

@@ -615,6 +615,169 @@ pub fn rename_classes(css: &str, rename: &dyn Fn(&str) -> Option<String>) -> Str
     out
 }
 
+/// Names in a minified stylesheet that a script may bring to a page without
+/// the markup showing them: the words of its selectors outside class names
+/// (elements, ids, attribute names and values), its custom properties
+/// (`--x`) and its `@keyframes`. Sorted; for matching against the words of a
+/// script (see `next_rust_build::class_names::script_classes`).
+pub fn dynamic_names(css: &str) -> std::collections::BTreeSet<String> {
+    let mut names = std::collections::BTreeSet::new();
+    let word = |c: char| c.is_ascii_alphanumeric() || c == '-' || c == '_';
+    for_each_selector(css, &mut |selector| {
+        for w in selector.split(|c: char| !word(c)).filter(|w| !w.is_empty() && w.len() <= 64) {
+            names.insert(w.to_owned());
+            names.insert(w.to_ascii_lowercase());
+        }
+    });
+    for (at, _) in css.match_indices("--") {
+        if at > 0 && word(css[..at].chars().next_back().unwrap_or(' ')) {
+            continue;
+        }
+        let end = css[at..].find(|c: char| !word(c)).map_or(css.len(), |e| at + e);
+        if end > at + 2 && end - at <= 64 {
+            names.insert(css[at..end].to_owned());
+        }
+    }
+    fn keyframes(css: &str, names: &mut std::collections::BTreeSet<String>) {
+        for (prelude, body) in statements(css) {
+            let Some(body) = body else { continue };
+            match keyframes_name(prelude) {
+                Some(name) => drop(names.insert(name.to_owned())),
+                None if prelude.starts_with('@') => keyframes(body, names),
+                None => {}
+            }
+        }
+    }
+    keyframes(css, &mut names);
+    names
+}
+
+/// Tighten minified CSS a little further, without changing what it means:
+///
+/// * no space after a `,` (`rgb(0, 0, 0)`, `a, b`), outside strings and `url()`;
+/// * no spaces around `/` and `*` inside `calc()`, `min()`, `max()` and
+///   `clamp()` (`calc(var(--s) * 4)`); `+` and `-` keep theirs, as CSS requires;
+/// * no `;` before a `}`, and a declaration repeated right after itself
+///   (`a:b;a:b`) is written once.
+pub fn compact(css: &str) -> String {
+    let b = css.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(b.len());
+    // Open parentheses: whether each one is inside a math function.
+    let mut parens: Vec<bool> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        match c {
+            b'"' | b'\'' => {
+                let end = skip_string(b, i);
+                out.extend_from_slice(&b[i..end]);
+                i = end;
+                continue;
+            }
+            b'\\' => {
+                out.extend_from_slice(&b[i..(i + 2).min(b.len())]);
+                i += 2;
+                continue;
+            }
+            b'/' if b.get(i + 1) == Some(&b'*') => {
+                let end = find(b, i + 2, b"*/").map_or(b.len(), |e| e + 2);
+                out.extend_from_slice(&b[i..end]);
+                i = end;
+                continue;
+            }
+            b'(' => {
+                let name_start =
+                    out.iter().rposition(|c| !(c.is_ascii_alphanumeric() || *c == b'-')).map_or(0, |p| p + 1);
+                let name = String::from_utf8_lossy(&out[name_start..]).to_ascii_lowercase();
+                if name == "url" {
+                    // Unquoted URLs are copied as they are.
+                    let end = find(b, i, b")").map_or(b.len(), |e| e + 1);
+                    out.extend_from_slice(&b[i..end]);
+                    i = end;
+                    continue;
+                }
+                let math = matches!(name.as_str(), "calc" | "min" | "max" | "clamp")
+                    || parens.last() == Some(&true) && name.is_empty();
+                parens.push(math);
+            }
+            b')' => {
+                parens.pop();
+            }
+            b' ' if out.last() == Some(&b',') => {
+                i += 1;
+                continue;
+            }
+            b' ' if parens.last() == Some(&true)
+                && matches!(b.get(i + 1), Some(b'/' | b'*'))
+                && b.get(i + 2) == Some(&b' ') =>
+            {
+                out.push(b[i + 1]);
+                i += 3;
+                continue;
+            }
+            b'}' if out.last() == Some(&b';') => {
+                out.pop();
+            }
+            _ => {}
+        }
+        out.push(c);
+        i += 1;
+    }
+    let text = String::from_utf8(out).unwrap_or_else(|_| css.to_owned());
+    dedupe_declarations(&text)
+}
+
+/// `a:b;a:b` → `a:b` (Tailwind's output repeats a prefixed declaration it
+/// lowered twice to the same text).
+fn dedupe_declarations(css: &str) -> String {
+    let mut out = String::with_capacity(css.len());
+    let mut rest = css;
+    // The declaration written last, as (start, end) in `out`.
+    let mut last: Option<(usize, usize)> = None;
+    while !rest.is_empty() {
+        let b = rest.as_bytes();
+        let (mut i, mut depth) = (0, 0usize);
+        while i < b.len() {
+            match b[i] {
+                b'"' | b'\'' => {
+                    i = skip_string(b, i);
+                    continue;
+                }
+                b'\\' => i += 1,
+                b'(' => depth += 1,
+                b')' => depth = depth.saturating_sub(1),
+                b';' | b'{' | b'}' if depth == 0 => break,
+                _ => {}
+            }
+            i += 1;
+        }
+        let i = i.min(b.len());
+        let piece = &rest[..i];
+        let end = b.get(i).copied();
+        let repeated = last.is_some_and(|(s, e)| &out[s..e] == piece) && piece.contains(':');
+        if repeated && matches!(end, Some(b';' | b'}') | None) {
+            // Drop the `;` written before it too when the block ends here.
+            if end != Some(b';') && out.ends_with(';') {
+                out.pop();
+            }
+        } else {
+            let start = out.len();
+            out.push_str(piece);
+            last = matches!(end, Some(b';')).then_some((start, out.len()));
+        }
+        if let Some(e) = end {
+            if !(repeated && e == b';') {
+                out.push(e as char);
+            }
+            if e != b';' {
+                last = None;
+            }
+        }
+        rest = &rest[(i + 1).min(rest.len())..];
+    }
+    out
+}
+
 /// Calls `f` with the prelude of every style rule, including rules nested in
 /// at-rules and in other rules. `@keyframes` bodies are skipped.
 fn for_each_selector<'a>(css: &'a str, f: &mut dyn FnMut(&'a str)) {
@@ -731,6 +894,34 @@ fn find(haystack: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn compact_tightens_without_changing_meaning() {
+        assert_eq!(compact("a, b{color:rgb(0, 0, 0);margin:0;}"), "a,b{color:rgb(0,0,0);margin:0}");
+        assert_eq!(
+            compact(".x{width:calc(var(--spacing) * 4);top:calc(1 / .75);left:calc(1px + (2px * 3) - 1px)}"),
+            ".x{width:calc(var(--spacing)*4);top:calc(1/.75);left:calc(1px + (2px*3) - 1px)}"
+        );
+        // Strings, URLs, selectors and values outside math functions stay.
+        let kept = ".a * .b{content:\", ;}\";background:url(a, b.png);font:12px / 1.5 x;grid-area:1 / 2}";
+        assert_eq!(compact(kept), kept);
+        assert_eq!(compact(":not(.a * .b){top:0}"), ":not(.a * .b){top:0}");
+        // A declaration repeated right after itself is written once.
+        assert_eq!(compact("a{x:inherit;x:inherit;x:inherit;y:1}b{y:1;y:1}"), "a{x:inherit;y:1}b{y:1}");
+        assert_eq!(compact("a{y:1;y:2;y:1}"), "a{y:1;y:2;y:1}", "only neighbours");
+        assert_eq!(compact("@media (a){b{c:d;}}"), "@media (a){b{c:d}}");
+    }
+
+    #[test]
+    fn dynamic_names_lists_what_scripts_may_set() {
+        let css = ":root{--brand:red}[data-theme=\"noir\"] dialog#menu .card:hover{color:var(--brand)}\
+@media (width>=1px){details[open]>summary{top:0}}@keyframes pulse{to{opacity:0}}";
+        let names = dynamic_names(css);
+        for name in ["data-theme", "noir", "dialog", "menu", "details", "open", "summary", "--brand", "pulse"] {
+            assert!(names.contains(name), "{name} missing from {names:?}");
+        }
+        assert!(!names.contains("opacity") && !names.contains("color"), "{names:?}");
+    }
 
     #[test]
     fn minifies() {

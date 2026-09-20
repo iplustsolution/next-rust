@@ -14,7 +14,7 @@ use std::net::SocketAddr;
 use std::time::{Duration, Instant};
 
 use bytes::Bytes;
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Empty, Full, StreamBody};
 use hyper::body::{Frame, Incoming};
@@ -67,7 +67,18 @@ impl App {
             let mut builder = auto::Builder::new(TokioExecutor::new());
             builder.http1().timer(TokioTimer::new()).header_read_timeout(header_timeout).keep_alive(true);
             if config.server.http2 {
-                builder.http2().timer(TokioTimer::new()).keep_alive_interval(Duration::from_secs(20));
+                // Stated rather than inherited, so an upgrade of hyper cannot
+                // loosen them: streams per connection, the size of a header
+                // block, and pings that close a connection whose peer is gone.
+                // hyper's limits on reset streams (rapid reset,
+                // CVE-2023-44487) stay at their defaults.
+                builder
+                    .http2()
+                    .timer(TokioTimer::new())
+                    .max_concurrent_streams(128)
+                    .max_header_list_size(64 * 1024)
+                    .keep_alive_interval(Duration::from_secs(20))
+                    .keep_alive_timeout(Duration::from_secs(20));
             } else {
                 builder = builder.http1_only();
             }
@@ -82,6 +93,9 @@ impl App {
             builder.timer(TokioTimer::new()).header_read_timeout(header_timeout).keep_alive(true);
             builder
         };
+        for hook in &self.inner.on_serve {
+            hook().await;
+        }
         // Every connection task holds a receiver: sending tells them to finish
         // gracefully, and `closed()` resolves once all of them are done.
         let (graceful, _) = tokio::sync::watch::channel(());
@@ -100,17 +114,31 @@ impl App {
                         }
                     };
                     let _ = stream.set_nodelay(true);
+                    // A connection that never sends a byte: hyper's header
+                    // timeout starts with the first read, and protocol
+                    // detection (HTTP/2) has none, so such a connection
+                    // would be held open for as long as the client likes.
+                    let first_byte = async move {
+                        let waited = tokio::time::timeout(header_timeout, stream.peek(&mut [0u8; 1])).await;
+                        matches!(waited, Ok(Ok(n)) if n > 0).then_some(stream)
+                    };
                     let app = self.clone();
                     let service = hyper::service::service_fn(move |req: hyper::Request<Incoming>| {
                         let app = app.clone();
                         async move { Ok::<_, Infallible>(app.handle_hyper(req, Some(remote)).await) }
                     });
-                    #[cfg(feature = "http2")]
-                    let conn = builder.serve_connection_with_upgrades(TokioIo::new(stream), service).into_owned();
-                    #[cfg(not(feature = "http2"))]
-                    let conn = builder.serve_connection(TokioIo::new(stream), service).with_upgrades();
+                    let builder = builder.clone();
                     let mut stop = graceful.subscribe();
                     tokio::spawn(async move {
+                        let stream = tokio::select! {
+                            stream = first_byte => stream,
+                            _ = stop.changed() => None,
+                        };
+                        let Some(stream) = stream else { return };
+                        #[cfg(feature = "http2")]
+                        let conn = builder.serve_connection_with_upgrades(TokioIo::new(stream), service);
+                        #[cfg(not(feature = "http2"))]
+                        let conn = builder.serve_connection(TokioIo::new(stream), service).with_upgrades();
                         let mut conn = std::pin::pin!(conn);
                         let result = tokio::select! {
                             result = conn.as_mut() => result,
@@ -142,6 +170,9 @@ impl App {
             } => {}
             _ = tokio::time::sleep(wait) => crate::log::warn("shutdown timeout: closing remaining connections"),
         }
+        for hook in &self.inner.on_shutdown {
+            hook().await;
+        }
         if banner {
             crate::banner::stopped();
         }
@@ -164,14 +195,23 @@ impl App {
         let request = Request::from_parts(parts, body, remote, config.server.body_limit, !self.environment().is_dev());
 
         let timeout = config.server.request_timeout;
-        let res = if timeout > 0 {
-            match tokio::time::timeout(Duration::from_secs(timeout), self.handle(request)).await {
+        // A panic in application code answers 500 and is logged, instead of
+        // dropping the connection (and, over HTTP/2, every request on it).
+        let handled = std::panic::AssertUnwindSafe(self.handle(request)).catch_unwind();
+        let outcome = if timeout > 0 {
+            match tokio::time::timeout(Duration::from_secs(timeout), handled).await {
                 Ok(r) => r,
-                Err(_) => Response::text("Gateway Timeout").with_status(504),
+                Err(_) => Ok(Response::text("Gateway Timeout").with_status(504)),
             }
         } else {
-            self.handle(request).await
+            handled.await
         };
+        // `App::handle` answers 500 for a panic in application code; this
+        // catches one in the pipeline around it.
+        let res = outcome.unwrap_or_else(|panic| {
+            crate::log::error(&format!("request pipeline panicked: {}", crate::app::panic_message(&panic)));
+            Response::text("Internal Server Error").with_status(500)
+        });
 
         if config.logging.requests(self.environment()) && !path.starts_with("/_next-rust/dev/") {
             let id = res.header("x-request-id").map(str::to_owned);
@@ -224,8 +264,8 @@ async fn shutdown_signal() {
     }
 }
 
-#[cfg(feature = "compression")]
-/// Whether `Accept-Encoding` allows `coding`.
+/// Whether `Accept-Encoding` allows `coding`. Not behind `compression`: files
+/// compressed at build time are served without it.
 pub(crate) fn accepts(header: Option<&str>, coding: &str) -> bool {
     header.is_some_and(|h| {
         h.split(',').any(|part| {

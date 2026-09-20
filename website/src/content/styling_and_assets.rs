@@ -2,9 +2,121 @@
 
 use next_rust::prelude::*;
 
+/// The box that opens the page: the feature without the jargon.
+fn plain_words(text: impl View) -> Node {
+    div![class("callout"), p![strong!["In plain words. "], text]].into_node()
+}
+
 pub fn content() -> Node {
     fragment![
+        plain_words(
+            "HTML is the text of a page; CSS is how it looks; assets are the files that come along: images, fonts, \
+             icons, scripts. This page explains where each of those files goes in a project and how it reaches the \
+             visitor. The short version: you put files in a few well-known folders, and the framework takes care of \
+             sending each page only the styling it uses, shrinking everything for production, and naming files so \
+             browsers can keep them for a year without ever showing an old version."
+        ),
+        p![
+            "If the project uses Tailwind (the default for new projects) you may never write a CSS file; see ",
+            a![href("/docs/tailwind"), "Tailwind CSS"],
+            ". Everything below still applies to images, fonts and scripts.",
+        ],
+        h2![id("folders"), a![class("anchor"), href("#folders"), "Which file goes where"]],
+        p![
+            "All of these are optional. They sit in the project root, next to ",
+            code!["app/"],
+            " and ",
+            code!["src/"],
+            ":"
+        ],
+        div![
+            class("table-wrap"),
+            table![
+                thead![tr![th!["file or folder"], th!["what it is for"], th!["without it"]]],
+                tbody![
+                    tr![
+                        td![code!["public/"]],
+                        td![
+                            "Files served exactly as they are, at the same path: ",
+                            code!["public/robots.txt"],
+                            " is ",
+                            code!["/robots.txt"],
+                            ". For things with a fixed, well-known URL: favicon, ",
+                            code!["robots.txt"],
+                            ", images linked from elsewhere."
+                        ],
+                        td!["No static files; pages work."],
+                    ],
+                    tr![
+                        td![code!["assets/"]],
+                        td![
+                            "Files your own code refers to with ",
+                            code!["asset!(..)"],
+                            ": fonts, logos, site-wide scripts. The URL gets a fingerprint so browsers may cache \
+                             the file forever."
+                        ],
+                        td![code!["asset!"], " has nothing to point at (a compile error if used)."],
+                    ],
+                    tr![
+                        td![code!["client/"]],
+                        td![
+                            "Browser scripts that belong to islands, served under ",
+                            code!["/_next-rust/client/"],
+                            ". See ",
+                            a![href("/docs/client#module-islands"), "Module islands"],
+                            "."
+                        ],
+                        td!["No module islands; everything else works."],
+                    ],
+                    tr![
+                        td![code!["globals.css"], " (any name)"],
+                        td![
+                            "A stylesheet for the whole site, pulled in with ",
+                            code!["global_css!"],
+                            " from the root layout."
+                        ],
+                        td!["No site-wide CSS of your own (normal with Tailwind)."],
+                    ],
+                    tr![
+                        td![code!["*.module.css"]],
+                        td![
+                            "A stylesheet private to one component, pulled in with ",
+                            code!["css_module!"],
+                            ". Its class names cannot clash with anyone else's."
+                        ],
+                        td!["Use Tailwind classes or global CSS instead."],
+                    ],
+                    tr![
+                        td![code!["next-rust.toml"]],
+                        td![
+                            "The project's settings file. This page uses its ",
+                            code!["[assets]"],
+                            " (CSS pruning, cache times), ",
+                            code!["[animation]"],
+                            ", ",
+                            code!["[loader]"],
+                            ", ",
+                            code!["[images]"],
+                            " and ",
+                            code!["[build]"],
+                            " sections."
+                        ],
+                        td!["Defaults apply. A misspelled key is a build error, not silently ignored."],
+                    ],
+                ],
+            ],
+        ],
+        p!["In a production build all of these are embedded in the one binary; there is no folder of static files \
+             to deploy next to it.",],
         h2![id("global-css"), a![class("anchor"), href("#global-css"), "Global CSS"]],
+        p![
+            "Global CSS applies to every page: the base font, colors, how headings and links look. Write an ordinary \
+             CSS file, for example ",
+            code!["app/globals.css"],
+            ", and include it once in the root layout, ",
+            code!["app/layout.rs"],
+            ", which wraps every page:",
+        ],
         pre![code![
             class("language-rust"),
             r#"// app/layout.rs
@@ -18,6 +130,16 @@ pub fn Layout(children: Children) -> impl View {
             " the stylesheet is read and minified, and a change to the CSS file triggers a rebuild.",
         ],
         h2![id("css-modules"), a![class("anchor"), href("#css-modules"), "CSS modules"]],
+        p![
+            "On a large site two people will eventually both invent a class called ",
+            code![".card"],
+            " and break each other's design. A CSS module prevents that: it is a CSS file whose name ends in ",
+            code![".module.css"],
+            ", kept next to the component that uses it, and its class names are made unique automatically. First \
+             the stylesheet, here ",
+            code!["app/components/card.module.css"],
+            ":",
+        ],
         pre![code![
             class("language-css"),
             r"/* app/components/card.module.css */
@@ -26,6 +148,13 @@ pub fn Layout(children: Children) -> impl View {
 .card:hover .card-title { text-decoration: underline; }
 :global(.dark) .card { background: #111; }",
         ],],
+        p![
+            "Then the component in the same folder (for example ",
+            code!["app/components/card.rs"],
+            ") loads it and uses the classes as fields of ",
+            code!["styles"],
+            ":",
+        ],
         pre![code![
             class("language-rust"),
             r#"let styles = css_module!("card.module.css");
@@ -70,7 +199,11 @@ article![class(styles.card), h2![class(styles.card_title), "Hello"]]"#,
             a![class("anchor"), href("#how-stylesheets-reach-the-page"), "How stylesheets reach the page"],
         ],
         p![
-            "Stylesheets are part of the view tree. A page includes a module's CSS only if it renders a class from that module, or includes a ",
+            "There are no ",
+            code!["<link rel=\"stylesheet\">"],
+            " files to manage: the CSS a page needs is written into the page itself, inside ",
+            code!["<style>"],
+            " tags. Stylesheets are part of the view tree. A page includes a module's CSS only if it renders a class from that module, or includes a ",
             code!["global_css!"],
             " stylesheet. Each stylesheet is emitted ",
             strong!["once per document"],
@@ -89,8 +222,183 @@ article![class(styles.card), h2![class(styles.card_title), "Hello"]]"#,
             code!["[tailwind] keep_classes"],
             " and ",
             code!["[assets] css_safelist"],
-            ", for classes that scripts add); rules without a class owner are always sent. See ",
-            a![href("/docs/tailwind#per-page-css"), "Only the CSS a page uses"],
+            ", for classes that scripts add), and of the rest only what that page can use. See ",
+            a![href("#per-page"), "What a page is sent"],
+            " below.",
+        ],
+        h3![id("per-page"), a![class("anchor"), href("#per-page"), "What a page is sent"]],
+        p![
+            "In short: every page gets a made-to-measure stylesheet containing only the rules that can apply to it. \
+             You do not have to do anything for this; the details matter only when a style seems to be missing. \
+             The Tailwind build (with the stylesheets imported into it), ",
+            code!["global_css!"],
+            " sheets and the UI components' stylesheet are cut down for every document, from what the renderer wrote: its classes, elements, ids, attributes, inline ",
+            code!["style"],
+            " attributes and inline scripts. Nothing is guessed from the URL, so a page that renders differently for a signed-in user gets different CSS.",
+        ],
+        ul![
+            li![
+                strong!["Rules. "],
+                "A rule is sent when the page has what one of its selectors needs: the class it starts with, and every element, id and attribute outside ",
+                code![":not()"],
+                "/",
+                code![":is()"],
+                "/",
+                code![":where()"],
+                "/",
+                code![":has()"],
+                ". ",
+                code!["details > summary"],
+                " needs a ",
+                code!["<details>"],
+                " and a ",
+                code!["<summary>"],
+                ", ",
+                code!["input[type=checkbox]"],
+                " a checkbox, ",
+                code!["[data-theme=\"noir\"]"],
+                " an element with that value, ",
+                code!["::file-selector-button"],
+                " an ",
+                code!["<input>"],
+                ". Selectors that need nothing (",
+                code!["*"],
+                ", ",
+                code![":root"],
+                ", ",
+                code!["html"],
+                ", ",
+                code!["body"],
+                ", ",
+                code!["::selection"],
+                ") always go. Values are compared for ",
+                code!["data-*"],
+                ", ",
+                code!["type"],
+                ", ",
+                code!["role"],
+                ", ",
+                code!["dir"],
+                ", ",
+                code!["lang"],
+                ", ",
+                code!["rel"],
+                ", ",
+                code!["target"],
+                ", ",
+                code!["method"],
+                " and ",
+                code!["wrap"],
+                "; other attributes by name.",
+            ],
+            li![
+                strong!["Custom properties. "],
+                "A ",
+                code!["--name: …"],
+                " declaration in ",
+                code![":root"],
+                ", ",
+                code![".dark"],
+                ", a theme block or Tailwind's ",
+                code!["@layer theme"],
+                " is sent when something sent reads it: a rule, another custom property that is itself sent (",
+                code!["--color-primary: var(--primary)"],
+                " brings ",
+                code!["--primary"],
+                "), a fallback (",
+                code!["var(--a, var(--b))"],
+                "), a ",
+                code!["calc()"],
+                " or ",
+                code!["color-mix()"],
+                ", an inline ",
+                code!["style"],
+                ", an SVG presentation attribute (",
+                code!["font-family=\"var(--mono), monospace\""],
+                "), an inline script, or another stylesheet on the page (an app's ",
+                code![":root{--nr-fg: var(--fg)}"],
+                " for the UI components' sheet). A block left without declarations is not written, and neighbouring blocks with the same selector are written as one.",
+            ],
+            li![
+                strong!["At-rules. "],
+                code!["@font-face"],
+                " goes with a ",
+                code!["font"],
+                "/",
+                code!["font-family"],
+                " (or custom property) that names its family; ",
+                code!["@keyframes"],
+                " with an ",
+                code!["animation"],
+                "/",
+                code!["animation-name"],
+                " (or custom property such as ",
+                code!["--animate-spin"],
+                ") that names them, not with ",
+                code!["float: left"],
+                "; ",
+                code!["@property"],
+                " with its variable. ",
+                code!["@media"],
+                ", ",
+                code!["@supports"],
+                ", ",
+                code!["@layer"],
+                " and ",
+                code!["@container"],
+                " are written only around what is sent. Of two identical rules in a block, only the last is kept.",
+            ],
+            li![
+                strong!["Scripts. "],
+                "What a script may add counts as present on the pages that load it: the build lists, per script in ",
+                code!["client/"],
+                ", ",
+                code!["assets/"],
+                " and ",
+                code!["public/"],
+                " (with its imports), the classes, attributes (",
+                code!["setAttribute(\"data-open\")"],
+                ", ",
+                code!["dataset.open"],
+                ", ",
+                code!["el.hidden"],
+                "), ids, custom properties and keyframes it names, and the elements it creates (",
+                code!["createElement(\"dialog\")"],
+                ", ",
+                code!["\"<dialog>\""],
+                " in a string; a computed tag name keeps every element rule). Inline scripts are read as the page is rendered. ",
+                code!["aria-*"],
+                ", ",
+                code!["open"],
+                " and ",
+                code!["data-nr-*"],
+                " always count, and so does everything the client runtime and the UI components' script set.",
+            ],
+            li![
+                strong!["Navigation. "],
+                "A client-side navigation renders only the region that changes. The ",
+                code!["<style>"],
+                " ids the browser reports carry what the rest of the document had (its elements, attributes and classes that rules wait for), so a rule or a variable the new page needs arrives even when part of its selector is outside the region, and nothing is sent twice.",
+            ],
+        ],
+        p![
+            "Three settings override what the build can see. They go in the ",
+            code!["[assets]"],
+            " section of ",
+            code!["next-rust.toml"],
+            " and are only needed when a style that should apply is missing in a release build:",
+        ],
+        pre![code![
+            class("language-toml"),
+            "[assets]\n# Classes, ids, attributes and <elements the build cannot find: kept on every page.\ncss_safelist = [\"theme-sepia\", \"data-mode\", \"<dialog\"]\n# Custom properties read from outside (a script on another origin, a browser extension API).\ncss_keep_vars = [\"--brand\"]\n# A script names the attribute, but it only ever has the values the server renders:\n# rules for other values (twenty unused theme blocks) are left out.\ncss_static_attributes = [\"data-theme\"]",
+        ],],
+        p![
+            "Not pruned: the subsets of one font family (",
+            code!["unicode-range"],
+            "; the browser downloads only the files it needs), rules for state classes after the first class of a selector, and sheets sent whole (",
+            code!["css_module!"],
+            ", the motion and loading-bar sheets). A script loaded from another origin is not read: list what it adds in ",
+            code!["css_safelist"],
             ".",
         ],
         p![
@@ -177,12 +485,99 @@ article![class(styles.card), h2![class(styles.card_title), "Hello"]]"#,
                 " never prunes.",
             ],
         ],
+        p!["The switch and the safelist, in ", code!["next-rust.toml"], ":"],
         pre![code![
             class("language-toml"),
             "[assets]\nprune_css = true                          # default\ncss_safelist = [\"theme-dark\", \"theme-sepia\"]",
         ],],
+        h2![id("animation"), a![class("anchor"), href("#animation"), "Animation"]],
+        p![
+            "Every document starts with a small motion stylesheet built from ",
+            code!["[animation]"],
+            " in ",
+            code!["next-rust.toml"],
+            ". Nothing to write, nothing to import:",
+        ],
+        ul![
+            li![
+                strong!["Pages fade into each other."],
+                " Client navigations swap the page inside a view transition, full loads use cross-document view transitions, and browsers without either get a plain fade out and in. Streamed content fades in the same way.",
+            ],
+            li![
+                strong!["Hover, focus, active and class changes ease"],
+                " on every element: colors, shadows, opacity, transforms, size, spacing and type. A ",
+                code!["hover:scale-110"],
+                " or ",
+                code!["hover:w-64"],
+                " animates instead of jumping.",
+            ],
+            li![
+                "Anything you write wins. The rule sits in the lowest cascade layer, declared before Tailwind's, so your own ",
+                code!["transition"],
+                ", a ",
+                code!["transition-*"],
+                " or ",
+                code!["transition-none"],
+                " utility, or ",
+                code!["data-nr-motion=\"off\""],
+                " on an element (and its subtree) replace it.",
+            ],
+            li![
+                "Visitors who ask for reduced motion get none of it. ",
+                code!["--nr-page-fade"],
+                ", ",
+                code!["--nr-motion"],
+                " and ",
+                code!["--nr-motion-ease"],
+                " on ",
+                code!["<html>"],
+                " carry the values, so one page can change them in CSS (",
+                code!["html { --nr-page-fade: 0ms }"],
+                " turns the fade off there).",
+            ],
+        ],
+        p!["The defaults, written out. Put the section in ", code!["next-rust.toml"], " only to change a value:"],
+        pre![code![
+            class("language-toml"),
+            "[animation]\nenabled = true               # false leaves every default animation out\npages = true                 # fade between pages\nhover = true                 # ease hover, focus and state changes\nduration = 200               # ms, hover and state changes\npage_duration = 250          # ms, the fade between two pages\neasing = \"cubic-bezier(0.2, 0, 0, 1)\"",
+        ],],
+        h3![id("loading-bar"), a![class("anchor"), href("#loading-bar"), "Loading bar"]],
+        p![
+            "While the next page is on its way, a thin bar runs along the top of the page and disappears once the page is there: during client navigations, server-action form submits and full-page link clicks. It shows only when a load has taken longer than ",
+            code!["delay"],
+            " milliseconds, so prefetched pages never flash it. It moves quickly at first and ever slower while it waits, without ever resting or reaching the end; when the page arrives it fills with your ",
+            code!["easing"],
+            " in ",
+            code!["speed"],
+            " milliseconds and fades out in as many. It is moved by a transform, so it costs no layout, and with ",
+            code!["shadow"],
+            " it glows, brightest under its leading edge. Plain form submits and other full page loads keep the bar too: the new document picks it up where the old one left it and completes it once loaded. With reduced motion the bar fades in and out in place instead of travelling. Everything about it comes from ",
+            code!["[loader]"],
+            ": your brand color (any CSS value, including a variable from ",
+            code!["[tailwind.theme]"],
+            "), height, glow, an optional spinner, timing and position. ",
+            code!["enabled = false"],
+            " removes it; your own scripts can drive it with ",
+            code!["const done = nextRust.loader.start(); …; done();"],
+            ".",
+        ],
+        p!["The section in ", code!["next-rust.toml"], ", here with a brand color instead of the default blue:"],
+        pre![code![
+            class("language-toml"),
+            "[loader]\ncolor = \"var(--color-brand)\"   # default: var(--nr-primary, #006fee)\nheight = 4                    # px\nshadow = true\nspinner = false\ndelay = 100                   # ms\nspeed = 200                   # ms, to fill, and again to fade\neasing = \"ease\"               # of the fill\nz_index = 1600\nat_bottom = false",
+        ],],
         h2![id("public"), a![class("anchor"), href("#public"), code!["public/"]]],
-        p!["Everything in ", code!["public/"], " is served from the site root:"],
+        p![
+            code!["public/"],
+            " is the folder for files that must be reachable at an exact address you choose, untouched: the favicon \
+             browsers ask for, ",
+            code!["robots.txt"],
+            ", a PDF you link to from a newsletter, verification files. Another folder name can be set with ",
+            code!["[app] public"],
+            ". Everything in ",
+            code!["public/"],
+            " is served from the site root:",
+        ],
         pre![code![
             class("language-text"),
             r"public/favicon.ico      → /favicon.ico
@@ -241,7 +636,16 @@ public/robots.txt       → /robots.txt",
             id("fingerprinted-assets-asset"),
             a![class("anchor"), href("#fingerprinted-assets-asset"), "Fingerprinted assets: ", code!["asset!"],],
         ],
-        p!["For long-term caching, put files in ", code!["assets/"], " and reference them with ", code!["asset!"], ":",],
+        p![
+            "Browsers keep copies of files to avoid downloading them again. That is only safe when a changed file \
+             gets a new address. Fingerprinting does this: a hash (a short code computed from the file's bytes) is \
+             put into the file name, so a new version of the file is a new URL, and the old copy can never be \
+             shown by mistake. For long-term caching, put files in ",
+            code!["assets/"],
+            " and reference them with ",
+            code!["asset!"],
+            ", anywhere a URL is expected in a view:",
+        ],
         pre![code![
             class("language-rust"),
             r#"link![rel("preload"), href(asset!("fonts/inter.woff2")), as_("font")]
@@ -255,7 +659,173 @@ img![src(asset!("images/logo.svg")), alt("Acme")]"#,
             code!["Cache-Control: public, max-age=31536000, immutable"],
             ", and the URL changes whenever the content does. Editing the file triggers a rebuild.",
         ],
+        p![
+            "Choosing between the two folders: if people or other sites need to know the URL, use ",
+            code!["public/"],
+            "; if only your own code refers to the file, use ",
+            code!["assets/"],
+            " and get the caching for free.",
+        ],
+        h2![
+            id("scripts-and-styles-in-rust"),
+            a![class("anchor"), href("#scripts-and-styles-in-rust"), "Scripts and styles in Rust"]
+        ],
+        p![
+            "A project does not need ",
+            code![".js"],
+            " or ",
+            code![".css"],
+            " files. Browser code and CSS can live in Rust modules, declared at module level in any file under ",
+            code!["src/"],
+            " or the app directory. Three macros stand in for the three kinds of file: ",
+            code!["client_script!"],
+            " for a file in ",
+            code!["client/"],
+            ", ",
+            code!["asset_script!"],
+            " for a script in ",
+            code!["assets/"],
+            ", and ",
+            code!["stylesheet!"],
+            " for a CSS file. The example shows one of each, in three separate Rust files (each must be part of \
+             the crate through a ",
+            code!["mod"],
+            " declaration, like any Rust file):",
+        ],
+        pre![code![
+            class("language-rust"),
+            r##"// src/client/chart.rs: stands for the file client/chart.js
+next_rust::client_script!("chart.js", r#"
+import { scale } from "./scale.js";          // another client_script!, or a file in client/
+export function hydrate(element, props) { /* … */ }
+"#);
+
+// src/scripts/site.rs: stands for assets/js/site.js; asset!("js/site.js") gives its URL
+next_rust::asset_script!("js/site.js", r#"document.documentElement.dataset.ready = "";"#);
+
+// src/styles/theme.rs: listed in next-rust.toml as a Tailwind stylesheet
+next_rust::stylesheet!(r#"
+@theme { --color-brand: #f26b2a; }
+.hero { @apply mx-auto max-w-3xl; }
+"#);"##,
+        ],],
+        p!["A Rust stylesheet is only picked up when ", code!["next-rust.toml"], " lists it:",],
+        pre![code![
+            class("language-toml"),
+            "[tailwind]\nenabled = true\nstylesheets = [\"src/styles/theme.rs\"]   # .css files and Rust files, in order",
+        ],],
+        p![
+            "The macros expand to nothing. The build script reads the sources out of the Rust files, writes them under ",
+            code!["$OUT_DIR/next_rust_src"],
+            " and treats them exactly like files: Tailwind compiles the stylesheets; scripts are scanned for the \
+             classes they add, rewritten with the short class names and minified in release builds, fingerprinted by ",
+            code!["asset!"],
+            ", embedded into the binary and served at the same URLs (",
+            code!["/_next-rust/client/chart.js"],
+            "). Modules import each other by relative path, whether the other one is a file or a declaration; a \
+             file with the same path wins. Declaring a script twice is ",
+            code!["NR0213"],
+            "; a Rust file listed in ",
+            code!["stylesheets"],
+            " without a ",
+            code!["stylesheet!"],
+            " is ",
+            code!["NR0009"],
+            ".",
+        ],
+        h2![id("inline-delivery"), a![class("anchor"), href("#inline-delivery"), "Inline delivery"]],
+        p![
+            "Normally a page's scripts are separate files the browser requests after the HTML. Inline delivery \
+             writes them into the HTML instead, so the page is complete in a single response. It is a switch in the ",
+            code!["[build]"],
+            " section of ",
+            code!["next-rust.toml"],
+            ", off by default. Page CSS is always written into the document. With ",
+            code!["[build] inline_assets = true"],
+            " scripts are too, so a page loads without a single ",
+            code![".js"],
+            " or ",
+            code![".css"],
+            " request:",
+        ],
+        ul![
+            li![
+                "the framework runtime and the component script become inline module scripts (",
+                code!["<script type=\"module\" data-nr-js=\"…\" nonce=\"…\">"],
+                ");",
+            ],
+            li![
+                "a ",
+                code!["script![src(asset!(\"js/site.js\"))]"],
+                " (or any ",
+                code!["src"],
+                " naming a script of ",
+                code!["assets/"],
+                " or ",
+                code!["client/"],
+                ") is replaced by an inline script with the same attributes;",
+            ],
+            li![
+                "the modules of the islands on the page, and what they import, are registered by inline scripts in ",
+                code!["<head>"],
+                ", and the runtime hydrates islands from that registry (",
+                code!["window.__nrm"],
+                ") instead of calling ",
+                code!["import()"],
+                " on a URL.",
+            ],
+        ],
+        p![
+            "An inline script has no URL, so at build time every ES module is turned into a factory: static ",
+            code!["import"],
+            "s become lookups in the registry, exports become getters (live bindings are kept). Each inline script \
+             carries the request's CSP nonce, so the strict preset keeps working, and a ",
+            code!["data-nr-js"],
+            " id. On a client-side navigation the runtime reports the ids the document has (",
+            code!["x-nr-scripts"],
+            "), the server leaves those scripts out, and a script never runs twice in one document (classic, \
+             non-module page scripts run on every navigation, as they do when linked). The switch works on the \
+             finished response, so streamed, static, partial and cached pages are all covered.",
+        ],
+        p![
+            strong!["Lazy modules. "],
+            "A module reached only through a dynamic ",
+            code!["import(\"./vendor/big.js\")"],
+            " (a literal, relative path) is not written into any page. It is served from the binary at ",
+            code!["/_next-rust/m/<content-hash>"],
+            " with ",
+            code!["Cache-Control: public, max-age=31536000, immutable"],
+            " and fetched when the code asks for it. That is the place for a large vendor bundle: inlining several \
+             hundred kilobytes into every page that might need them would cost far more than one cached request on \
+             the day a button is pressed. It is the one script request left, it never ends in ",
+            code![".js"],
+            ", and it is not an app file.",
+        ],
+        p![
+            "Limits: import cycles between inline modules are not supported; an import is read when the importing \
+             module starts; ",
+            code!["import.meta"],
+            " is not available in a factory; classic scripts with ",
+            code!["defer"],
+            " or ",
+            code!["async"],
+            " stay linked (use ",
+            code!["type=\"module\""],
+            "). Every script is still served at its URL, so HTML rendered outside a document keeps working. Inline \
+             scripts are not cached by the browser across full page loads: the switch trades repeat-visit bytes \
+             for zero script requests.",
+        ],
         h2![id("images"), a![class("anchor"), href("#images"), "Images"]],
+        p![
+            code!["Image!"],
+            " writes an ",
+            code!["<img>"],
+            " tag with the attributes that are easy to forget: width and height (so the page does not jump when \
+             the picture arrives), lazy loading (pictures further down load only when scrolled to) and a list of \
+             sizes for different screens. Use it in any view; the file here is ",
+            code!["public/photos/lake.jpg"],
+            ":",
+        ],
         pre![code![
             class("language-rust"),
             r#"Image!(src = "/photos/lake.jpg", width = 1200, height = 800, alt = "A lake")"#,
@@ -293,6 +863,18 @@ img![src(asset!("images/logo.svg")), alt("Acme")]"#,
             " with an image CDN.",
         ],
         h2![id("fonts"), a![class("anchor"), href("#fonts"), "Fonts"]],
+        p![
+            "To use your own typeface, put the font file in ",
+            code!["assets/fonts/"],
+            " and describe it once with ",
+            code!["LocalFont"],
+            ". This goes in the root layout, ",
+            code!["app/layout.rs"],
+            ": the font is declared, preloaded (fetched early so text does not change face after it appears) \
+             through ",
+            code!["metadata"],
+            ", and applied to everything inside the layout:",
+        ],
         pre![code![
             class("language-rust"),
             r#"use std::sync::LazyLock;
@@ -320,6 +902,100 @@ pub fn Layout(children: Children) -> impl View {
             "Buffered responses larger than 1 KB, and all streamed responses, with compressible types (HTML, CSS, JS, JSON, SVG, WASM) are gzip-compressed when the client accepts it. Streamed HTML is compressed chunk by chunk with sync flushes, so it still arrives progressively. Disable with ",
             code!["[server] compression = false"],
             ", for example when a proxy compresses.",
+        ],
+        p!["Compression is zipping a response before sending it; the browser unzips it. Files embedded in a \
+             release binary are compressed once at build time (Brotli and gzip) and served in that form, so it \
+             costs nothing per request.",],
+        h2![id("check-it-worked"), a![class("anchor"), href("#check-it-worked"), "How to check it worked"]],
+        ul![
+            li![
+                strong!["A public file: "],
+                code!["curl -I http://localhost:3000/robots.txt"],
+                " answers ",
+                code!["200"],
+                " with an ",
+                code!["etag"],
+                " header.",
+            ],
+            li![
+                strong!["A fingerprinted asset: "],
+                "view the page source; the URL looks like ",
+                code!["/_next-rust/assets/fonts/inter.<hash>.woff2"],
+                ", and requesting it shows ",
+                code!["cache-control: public, max-age=31536000, immutable"],
+                ".",
+            ],
+            li![
+                strong!["CSS on the page: "],
+                "the source contains ",
+                code!["<style data-nr-css=\"…\">"],
+                " blocks in ",
+                code!["<head>"],
+                ". In a release build they contain only rules the page can use.",
+            ],
+            li![
+                strong!["Production-only styling: "],
+                "run ",
+                code!["next-rust build"],
+                " and ",
+                code!["next-rust start"],
+                " before you deploy and click through the site. Pruning and renaming only happen in release \
+                 builds, so this is where a missing safelist entry shows.",
+            ],
+        ],
+        h2![id("common-mistakes"), a![class("anchor"), href("#common-mistakes"), "Common mistakes"]],
+        ul![
+            li![
+                strong!["A style that works in dev and is missing in production."],
+                " The class, id or attribute is assembled at runtime (",
+                code!["format!(\"theme-{name}\")"],
+                ", set by a third-party script), so the build never saw it. List it in ",
+                code!["[assets] css_safelist"],
+                " (or ",
+                code!["[tailwind] keep_classes"],
+                " for Tailwind classes). Do not switch pruning off for the whole site to fix one class.",
+            ],
+            li![
+                strong![code!["asset!"], " on a file in ", code!["public/"], "."],
+                " ",
+                code!["asset!"],
+                " only looks in ",
+                code!["assets/"],
+                ". Files in ",
+                code!["public/"],
+                " are referenced by their plain path, ",
+                code!["/images/logo.png"],
+                ".",
+            ],
+            li![
+                strong!["Expecting a file in ", code!["public/"], " to beat a route."],
+                " A page or API route with the same path wins.",
+            ],
+            li![
+                strong!["A long ", code!["public_max_age"], "."],
+                " Public URLs carry no fingerprint, so visitors keep the old file for that long after you change \
+                 it. Keep it short, or move the file to ",
+                code!["assets/"],
+                ".",
+            ],
+            li![
+                strong!["A kebab-case class on ", code!["styles"], "."],
+                " ",
+                code![".card-title"],
+                " in a CSS module is ",
+                code!["styles.card_title"],
+                " in Rust; a name that does not exist in the file is a compile error, which is the point.",
+            ],
+            li![
+                strong!["A typo in ", code!["next-rust.toml"], "."],
+                " Unknown keys fail the build with the key's name. Check the spelling against ",
+                a![href("/docs/configuration"), "Configuration"],
+                ".",
+            ],
+            li![
+                strong!["Expecting ", code!["Image!"], " to shrink pictures."],
+                " Resizing is not implemented yet; the original file is served. Pre-size large images.",
+            ],
         ],
     ]
 }

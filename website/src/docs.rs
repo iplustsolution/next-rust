@@ -14,6 +14,8 @@ pub struct Doc {
     pub slug: &'static str,
     pub title: &'static str,
     pub description: &'static str,
+    /// One sentence on when a reader needs this page, shown under the title.
+    pub when: &'static str,
     /// Builds the article body.
     pub content: fn() -> Node,
     /// Source file, relative to the repository root.
@@ -40,11 +42,12 @@ pub struct Section {
 }
 
 macro_rules! doc {
-    ($slug:literal, $module:ident, $title:literal, $description:literal) => {
+    ($slug:literal, $module:ident, $title:literal, $description:literal, $when:literal) => {
         Doc {
             slug: $slug,
             title: $title,
             description: $description,
+            when: $when,
             content: crate::content::$module::content,
             source: concat!("website/src/content/", stringify!($module), ".rs"),
         }
@@ -56,126 +59,236 @@ pub const INTRODUCTION: &str = "introduction";
 
 pub const SECTIONS: &[Section] = &[
     Section {
-        title: "Get started",
+        title: "Start",
         docs: &[
             doc!(
                 "introduction",
                 introduction,
                 "Introduction",
-                "What Next Rust is, and a quick look at how an app is put together."
+                "What Next Rust is, and a quick look at how an app is put together.",
+                "Start here if you are new: it shows what the framework does and where to go next."
             ),
             doc!(
                 "getting-started",
                 getting_started,
-                "Installation",
-                "Install Rust and the CLI, create a project and run it."
+                "Getting started",
+                "Install the CLI, create a project, add a page and ship a binary, in about five minutes.",
+                "Follow it top to bottom the first time you use Next Rust, or when adding it to an existing Cargo project."
+            ),
+            doc!(
+                "project-structure",
+                project_structure,
+                "Project structure",
+                "Every file and folder of a Next Rust project: what it is in plain words, what it does, when you touch it and what happens without it.",
+                "Read it when you open a project and wonder what a file is for, or which file to open to change something."
+            ),
+            doc!(
+                "coming-from-nextjs",
+                coming_from_nextjs,
+                "Coming from Next.js",
+                "Each Next.js App Router concept next to its Next Rust equivalent, and the differences that matter.",
+                "Read it if you already know Next.js and want to map what you know onto Rust files and functions."
             ),
         ],
     },
     Section {
-        title: "Core concepts",
+        title: "Core",
         docs: &[
             doc!(
                 "routing",
                 routing,
                 "Routing",
-                "Special files, layouts, route groups, dynamic segments, ranking, slots and interception."
+                "Special files, layouts, route groups, dynamic segments, ranking, slots and interception.",
+                "Come here whenever you add a folder under app/ and need to know which URL it gets and which layouts wrap it."
             ),
             doc!(
                 "rendering",
                 rendering,
                 "Rendering & data",
-                "SSR, static generation, ISR, streaming, errors, redirects and metadata."
+                "SSR, static generation, ISR, streaming, errors, redirects and metadata.",
+                "Read it when a page needs data, a loading or error state, a redirect, a 404 or page metadata."
             ),
-            doc!("views", views, "Views & components", "The HTML macros, escaping, lists, conditionals and images."),
-        ],
-    },
-    Section {
-        title: "Building apps",
-        docs: &[
             doc!(
-                "api-routes",
-                api_routes,
-                "API routes",
-                "Route handlers, requests and responses, cookies, server-sent events and WebSockets."
+                "views",
+                views,
+                "Views & components",
+                "The HTML macros, escaping, lists, conditionals and images.",
+                "Read it before writing markup: it explains the macro syntax every page, layout and component uses."
             ),
             doc!(
                 "middleware",
                 middleware,
                 "Middleware & auth",
-                "Middleware order, built-in middleware, authentication, sessions and CSRF."
+                "Middleware order, built-in middleware, authentication, sessions and CSRF.",
+                "You need it to run code before every request: logins, sessions, headers, rate limits or redirects."
+            ),
+            doc!(
+                "auth",
+                auth,
+                "Auth & rate limits",
+                "The optional auth kit: sealed tokens, __Host- cookies, rotating sessions, passwords, codes and limiters.",
+                "Read it when you build sign-in yourself: sessions that can be revoked, password hashing, one-time codes or per-account limits."
+            ),
+        ],
+    },
+    Section {
+        title: "Data",
+        docs: &[
+            doc!(
+                "api-routes",
+                api_routes,
+                "API routes",
+                "Route handlers, requests and responses, cookies, server-sent events and WebSockets.",
+                "Use it to serve JSON, webhooks, file downloads, event streams or WebSockets from a route.rs file."
             ),
             doc!(
                 "server-actions",
                 server_actions,
                 "Server actions & forms",
-                "Forms that call Rust functions, with validation and redirects."
+                "Forms that call Rust functions, with validation and redirects.",
+                "Read it when a form or a button has to change data on the server."
             ),
+            doc!(
+                "caching",
+                caching,
+                "Caching",
+                "The data cache, the page store, revalidation and custom stores.",
+                "You need it when pages or queries are too slow to compute on every request, or must refresh on demand."
+            ),
+            doc!(
+                "background-jobs",
+                background_jobs,
+                "Background jobs",
+                "Durable job queues with retries, cron-style scheduled tasks, the Redis backend and graceful shutdown.",
+                "Read it when work should happen outside a request: mail, webhooks, slow APIs, or anything on a schedule."
+            ),
+        ],
+    },
+    Section {
+        title: "UI",
+        docs: &[
             doc!(
                 "client",
                 client,
                 "Client & navigation",
-                "Islands, WebAssembly, the server/client boundary and client-side navigation."
+                "Islands, the server/client boundary and client-side navigation.",
+                "Read it when a page needs interactivity in the browser, or to understand how links navigate without a reload."
+            ),
+            doc!(
+                "wasm-islands",
+                wasm_islands,
+                "WebAssembly islands",
+                "Browser logic in Rust: the switches, the ABI, real sizes, delivery, CSP and what happens when it doesn't run.",
+                "Read it before turning WebAssembly on — including the part about what it is not, which is a security boundary."
             ),
             doc!(
                 "styling-and-assets",
                 styling_and_assets,
                 "Styling & assets",
-                "Global CSS, CSS modules, public files, hashed assets, images and fonts."
+                "Global CSS, CSS modules, public files, hashed assets, images and fonts.",
+                "Use it for plain CSS, CSS modules, fonts, images and files in public/. For utility classes see Tailwind CSS."
             ),
             doc!(
                 "tailwind",
                 tailwind,
                 "Tailwind CSS",
-                "Style with Tailwind classes. Built in: no Node.js, no CSS files, your theme in next-rust.toml."
+                "Style with Tailwind classes. Built in: no Node.js, no CSS files, your theme in next-rust.toml.",
+                "Read it if your project has Tailwind enabled, which is the default for new projects."
             ),
             doc!(
                 "components",
                 components,
                 "UI components",
-                "Buttons, fields, select, date picker, toggles, avatars, cards and layout, ready to use."
+                "Buttons, fields, select, date picker, toggles, avatars, cards and layout, ready to use.",
+                "Check it before hand-building a form control or a layout primitive: it probably exists already."
             ),
-            doc!("caching", caching, "Caching", "The data cache, the page store, revalidation and custom stores."),
         ],
     },
     Section {
-        title: "Shipping",
+        title: "Deploy",
         docs: &[
             doc!(
                 "configuration",
                 configuration,
                 "Configuration",
-                "The next-rust.toml reference, environment files and monorepos."
+                "The next-rust.toml reference, environment files and monorepos.",
+                "Look things up here when you change a port, a header, a rendering default or any other project-wide setting."
             ),
-            doc!("cli", cli, "CLI", "Every next-rust command and its options."),
+            doc!(
+                "cli",
+                cli,
+                "CLI",
+                "Every next-rust command and its options.",
+                "A reference for the next-rust command: look up a flag, or find the command for a job."
+            ),
             doc!(
                 "deployment",
                 deployment,
                 "Deployment",
-                "The single-binary build, VPS, Docker, Kubernetes, proxies and logging."
+                "The single-binary build, VPS, Docker, Kubernetes, proxies and logging.",
+                "Read it when you are ready to put the app on a server, in a container or behind a proxy."
             ),
-            doc!("testing", testing, "Testing", "Test pages, API routes and actions without starting a server."),
+            doc!(
+                "analytics",
+                analytics,
+                "Analytics & verification",
+                "Search Console, Bing and other site verification, Google Analytics, Tag Manager, pixels and privacy-friendly analytics, from next-rust.toml alone.",
+                "Read it before launch: to verify the site with search engines, add analytics without writing a script, keep signed-in areas out of it, or ask for consent first."
+            ),
+            doc!(
+                "testing",
+                testing,
+                "Testing",
+                "Test pages, API routes and actions without starting a server.",
+                "Use it to cover routes with cargo test, in CI or locally, without opening a port."
+            ),
+            doc!(
+                "security",
+                security,
+                "Security",
+                "What is secure by default, and what to check before you launch.",
+                "Read it once before launch, and again whenever you handle logins, uploads or user-supplied HTML."
+            ),
         ],
     },
     Section {
         title: "Reference",
         docs: &[
-            doc!("plugins", plugins, "Plugins", "Extend the build and the runtime."),
-            doc!("security", security, "Security", "What is secure by default, and what to check before you launch."),
+            doc!(
+                "diagnostics",
+                diagnostics,
+                "Diagnostics",
+                "Every error and warning code the build can report.",
+                "Come here when a build fails with an NR code and you want the cause and the fix."
+            ),
+            doc!(
+                "plugins",
+                plugins,
+                "Plugins",
+                "Extend the build and the runtime.",
+                "You need it only when you package middleware, startup hooks or build steps as a reusable crate."
+            ),
             doc!(
                 "architecture",
                 architecture,
                 "Architecture",
-                "How the crates fit together, the request pipeline and design decisions."
+                "How the crates fit together, the request pipeline and design decisions.",
+                "For contributors and the curious: read it before changing the framework itself."
             ),
             doc!(
                 "benchmarks",
                 benchmarks,
                 "Benchmarks",
-                "What is measured, how, and how to run the benchmarks yourself."
+                "What is measured, how, and how to run the benchmarks yourself.",
+                "Read it when you want numbers, or want to reproduce them on your own hardware."
             ),
-            doc!("diagnostics", diagnostics, "Diagnostics", "Every error and warning code the build can report."),
-            doc!("status", status, "Status & roadmap", "What is implemented, what has limits, and what comes next."),
+            doc!(
+                "status",
+                status,
+                "Status & roadmap",
+                "What is implemented, what has limits, and what comes next.",
+                "Check it before you depend on a feature in production."
+            ),
         ],
     },
 ];
@@ -306,7 +419,9 @@ fn sections(html: &'static str) -> Vec<(Option<Heading>, &'static str)> {
     let mut positions: Vec<(usize, Option<Heading>)> = vec![(0, None)];
     for h in heads {
         if let Some(pos) = html.find(&format!("id=\"{}\"", h.id)) {
-            positions.push((pos, Some(h)));
+            // Start after the heading's opening tag, so the snippet is text only.
+            let start = html[pos..].find('>').map_or(pos, |end| pos + end + 1);
+            positions.push((start, Some(h)));
         }
     }
     for i in 0..positions.len() {
@@ -361,6 +476,20 @@ mod tests {
     }
 
     #[test]
+    fn pages_open_with_an_introduction_and_keep_heading_order() {
+        for doc in all() {
+            assert!(doc.when.ends_with('.'), "{}: `when` is a sentence", doc.slug);
+            let html = doc.html();
+            assert!(!html.contains("<h1"), "{}: the page title is the only h1", doc.slug);
+            let mut level = 2;
+            for h in headings(html) {
+                assert!(h.level <= level + 1, "{}: #{} skips a heading level", doc.slug, h.id);
+                level = h.level;
+            }
+        }
+    }
+
+    #[test]
     fn internal_links_point_at_real_pages() {
         for doc in all() {
             for part in doc.html().split("href=\"/docs").skip(1) {
@@ -390,5 +519,6 @@ mod tests {
         assert_eq!(hits.first().map(|h| h.doc.slug), Some("routing"));
         assert!(search("x").is_empty(), "single letters are ignored");
         assert!(!search("server actions").is_empty());
+        assert!(hits.iter().all(|h| !h.snippet.contains("id=\"")), "snippets are text, not markup");
     }
 }

@@ -1,39 +1,251 @@
 name: CI
 
+# The Release workflow runs after this one succeeds on `main` (it is looked up
+# by the name above), so every job here gates a release.
+
 on:
   push:
     branches: [main]
   pull_request:
 
+# Nothing here needs more than a read-only checkout. Pull requests from forks
+# run without secrets (`pull_request`, never `pull_request_target`).
+permissions:
+  contents: read
+
+# A newer push to a pull request replaces the run before it. Runs on `main`
+# are never cancelled: each one may be followed by a release.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
+  CARGO_NET_RETRY: 10
+  RUSTUP_MAX_RETRIES: 10
+  RUST_BACKTRACE: 1
+  # Where next-rust-build keeps the Tailwind CLI it downloads (cached below).
+  NEXT_RUST_CACHE_DIR: ${{ github.workspace }}/.tailwind-cache
 
 jobs:
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy and docs
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+          components: clippy
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: lint
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The website's build script downloads the Tailwind CLI (~80 MB) from a
+      # GitHub release. Cache it per version, so only the first run of a new
+      # Tailwind version depends on that download being up.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.tailwind-cache
+          key: tailwind-${{ runner.os }}-${{ hashFiles('crates/next-rust-build/src/tailwind.rs') }}
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo doc --workspace --no-deps --all-features --locked
+        env:
+          RUSTDOCFLAGS: -D warnings
+
   test:
+    name: Test (${{ matrix.os }})
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     # Windows has not been verified yet; keep it informational until it is.
     continue-on-error: ${{ matrix.os == 'windows-latest' }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo doc --workspace --no-deps --all-features
-        env:
-          RUSTDOCFLAGS: -D warnings
-      - run: cargo test --workspace --all-features --no-fail-fast
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The website's build script downloads the Tailwind CLI (~80 MB) from a
+      # GitHub release. Cache it per version, so only the first run of a new
+      # Tailwind version depends on that download being up.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.tailwind-cache
+          key: tailwind-${{ runner.os }}-${{ hashFiles('crates/next-rust-build/src/tailwind.rs') }}
+      - run: cargo test --workspace --all-features --locked --no-fail-fast
+
+  # The Redis backends of next-rust-jobs and next-rust-auth against a real
+  # server. Everywhere else these suites skip themselves (REDIS_URL is unset).
+  redis:
+    name: Test (Redis backends)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      REDIS_URL: redis://127.0.0.1:6379
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: redis
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - run: cargo test -p next-rust-jobs -p next-rust-auth --all-features --locked --no-fail-fast
+
+  # Every feature of every published crate on its own, and none at all: a
+  # `cfg(feature)` that only compiles next to another feature shows up here.
+  features:
+    name: Feature combinations
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      # An import or function only one feature uses is a warning without it.
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@9114bf4d891761788c546334fd37538eae1bf8b3 # v2.87.16
+        with:
+          tool: cargo-hack
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: features
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The website's build script downloads the Tailwind CLI (~80 MB) from a
+      # GitHub release. Cache it per version, so only the first run of a new
+      # Tailwind version depends on that download being up.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.tailwind-cache
+          key: tailwind-${{ runner.os }}-${{ hashFiles('crates/next-rust-build/src/tailwind.rs') }}
+      - run: cargo hack check --workspace --each-feature --locked
 
   msrv:
+    name: Minimum Rust version
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.89
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo check --workspace --all-features
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - name: Install the toolchain named by rust-version
+        id: msrv
+        run: |
+          set -euo pipefail
+          msrv=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "next-rust") | .rust_version')
+          test -n "$msrv" && test "$msrv" != null
+          rustup toolchain install "$msrv" --profile minimal --no-self-update
+          echo "toolchain=$msrv" >> "$GITHUB_OUTPUT"
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: msrv-${{ steps.msrv.outputs.toolchain }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The website's build script downloads the Tailwind CLI (~80 MB) from a
+      # GitHub release. Cache it per version, so only the first run of a new
+      # Tailwind version depends on that download being up.
+      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: ${{ github.workspace }}/.tailwind-cache
+          key: tailwind-${{ runner.os }}-${{ hashFiles('crates/next-rust-build/src/tailwind.rs') }}
+      - run: cargo "+${{ steps.msrv.outputs.toolchain }}" check --workspace --all-features --locked
+
+  # What `cargo publish` does in the Release workflow, without uploading: a
+  # path-only dependency, missing metadata or a crate missing from the release
+  # list fails here instead of half-way through a release.
+  #
+  # `--no-verify`: verification compiles each package against its siblings *as
+  # published on crates.io*, and between releases a crate routinely uses an API
+  # a sibling has not released yet, which would fail here for no reason. The
+  # compile is done at release time instead, where `cargo publish` builds each
+  # package against the versions it has just published.
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # master
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: package
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: The release list matches the workspace
+        run: bash .github/scripts/release-crates.sh check
+      # Not `--workspace`: examples, benchmarks and the website are never published.
+      - name: cargo package
+        run: |
+          set -euo pipefail
+          # `mapfile`, not a `while read` loop: a loop reading from a process
+          # substitution cannot fail the step, and an empty list would silently
+          # package the default members instead.
+          mapfile -t crates < <(bash .github/scripts/release-crates.sh list)
+          [ "${#crates[@]}" -gt 0 ] || { echo "::error::empty release list"; exit 1; }
+          args=()
+          for crate in "${crates[@]}"; do args+=(-p "$crate"); done
+          cargo package --locked --no-verify "${args[@]}"
+      # Packaged crates pile up from run to run and trip the cache's cleanup.
+      - name: Drop packaging output
+        if: always()
+        run: rm -rf target/package
+
+  # Security advisories are checked by the Audit workflow instead: a new
+  # advisory against an unchanged dependency must not block a release.
+  deny:
+    name: Licenses, bans and sources
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check bans licenses sources
+          arguments: --all-features --locked

@@ -19,11 +19,15 @@ pub mod embed;
 pub mod error;
 pub mod export;
 pub mod http_date;
+pub mod inline;
 mod internal;
 pub mod jobs;
 pub mod log;
+pub mod markup;
 pub mod middleware;
+mod motion;
 mod params_de;
+mod partial;
 pub mod plugin;
 mod redirects;
 mod render;
@@ -36,6 +40,7 @@ pub mod session;
 pub mod sse;
 pub mod static_files;
 pub mod testing;
+mod tracking;
 #[cfg(feature = "websocket")]
 pub mod ws;
 
@@ -58,9 +63,10 @@ pub use middleware::{
     BoxFuture, Cors, Middleware, Next, RateLimit, RequestId, cors, csrf, protected, rate_limit, request_id,
     security_headers,
 };
+pub use partial::{Dynamic, cached, dynamic, invalidate_fragment};
 pub use request::Request;
-pub use response::{Body, Html, IntoResponse, Json, Response};
-pub use runtime::{run, run_with};
+pub use response::{Body, Html, IntoResponse, Json, Response, is_local_path};
+pub use runtime::{run, run_with, run_with_setup};
 pub use seo::{Feed, FeedEntry, Robots, RobotsRule, Sitemap, SitemapEntry};
 pub use session::{MemorySessionStore, Session, SessionStore, sessions};
 pub use sse::SseEvent;
@@ -113,9 +119,24 @@ pub struct CspNonce(pub String);
 static DEV: AtomicBool = AtomicBool::new(cfg!(debug_assertions));
 static TRUST_PROXY: AtomicBool = AtomicBool::new(false);
 
-/// Whether the process runs in development mode (detailed errors).
+tokio::task_local! {
+    /// The environment of the app answering *this* request.
+    static REQUEST_DEV: bool;
+}
+
+/// Whether detailed errors are shown: the environment of the app answering
+/// the current request, or — outside a request — the last one built.
+///
+/// A process usually serves one app, but tests and embeddings build several,
+/// and an error must not become verbose because a development app exists
+/// somewhere else in the process.
 pub fn is_dev() -> bool {
-    DEV.load(Ordering::Relaxed)
+    REQUEST_DEV.try_with(|dev| *dev).unwrap_or_else(|_| DEV.load(Ordering::Relaxed))
+}
+
+/// Run `f` with [`is_dev`] pinned to the app that is answering.
+pub(crate) fn with_dev<F: std::future::Future>(dev: bool, f: F) -> impl std::future::Future<Output = F::Output> {
+    REQUEST_DEV.scope(dev, f)
 }
 
 pub(crate) fn set_dev(v: bool) {
@@ -128,6 +149,17 @@ pub(crate) fn trust_proxy() -> bool {
 
 pub(crate) fn set_trust_proxy(v: bool) {
     TRUST_PROXY.store(v, Ordering::Relaxed);
+}
+
+static TRUSTED_PROXIES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+
+/// `[server] trusted_proxies` while `trust_proxy` is on, otherwise 0.
+pub(crate) fn trusted_proxies() -> usize {
+    if trust_proxy() { TRUSTED_PROXIES.load(Ordering::Relaxed).max(1) } else { 0 }
+}
+
+pub(crate) fn set_trusted_proxies(n: usize) {
+    TRUSTED_PROXIES.store(n, Ordering::Relaxed);
 }
 
 /// `n` random bytes from the operating system CSPRNG, hex encoded.
@@ -167,6 +199,8 @@ pub mod __private {
     };
     pub use crate::context::{Ctx, Data, FromContext};
     pub use crate::embed::{Embedded, EmbeddedFile};
+    pub use crate::inline::{InlineKind, InlineScript};
+    pub use crate::markup::Markup;
 
     /// The TOML parser handed to development builds (see `Routes::toml`).
     pub const TOML: Option<next_rust_core::config::TomlParser> = Some(next_rust_core::Config::from_toml_str);

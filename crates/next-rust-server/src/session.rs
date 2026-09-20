@@ -36,6 +36,8 @@ type StoredSession = (BTreeMap<String, Value>, Instant);
 #[derive(Default, Clone)]
 pub struct MemorySessionStore {
     inner: Arc<Mutex<HashMap<String, StoredSession>>>,
+    /// Size at which the next sweep of expired sessions happens.
+    sweep_at: Arc<Mutex<usize>>,
 }
 
 impl SessionStore for MemorySessionStore {
@@ -54,7 +56,17 @@ impl SessionStore for MemorySessionStore {
     }
 
     fn save(&self, id: &str, data: BTreeMap<String, Value>, ttl: Duration) -> BoxFuture<()> {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_owned(), (data, Instant::now() + ttl));
+        let now = Instant::now();
+        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        // Expired sessions are otherwise only removed when their id comes
+        // back, which abandoned ones never do. Sweeping each time the map
+        // doubles keeps the cost per save constant on average.
+        let mut sweep_at = self.sweep_at.lock().unwrap_or_else(|e| e.into_inner());
+        if map.len() >= (*sweep_at).max(1024) {
+            map.retain(|_, (_, exp)| *exp > now);
+            *sweep_at = map.len() * 2;
+        }
+        map.insert(id.to_owned(), (data, now + ttl));
         Box::pin(async {})
     }
 
@@ -164,5 +176,22 @@ pub fn sessions_with_ttl(store: impl SessionStore, ttl: Duration) -> impl Middle
             }
             res
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn expired_sessions_are_swept() {
+        let store = MemorySessionStore::default();
+        for i in 0..1024 {
+            store.save(&format!("dead{i}"), BTreeMap::new(), Duration::ZERO).await;
+        }
+        store.save("live", BTreeMap::new(), Duration::from_secs(60)).await;
+        store.save("live2", BTreeMap::new(), Duration::from_secs(60)).await;
+        assert!(store.inner.lock().unwrap().len() <= 2, "expired sessions were dropped");
+        assert!(store.load("live").await.is_some());
     }
 }

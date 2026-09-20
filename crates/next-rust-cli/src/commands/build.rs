@@ -30,7 +30,11 @@ pub fn run(args: &[String]) -> Result<(), String> {
     let analyzed = analyze_project(&info.config);
     let pages = analyzed.routes.iter().filter(|r| r.route.kind != RouteKind::Api).count();
     let apis = analyzed.routes.len() - pages;
-    let statics = analyzed.routes.iter().filter(|r| r.route.kind != RouteKind::Api && r.rendering == "static").count();
+    let statics = analyzed
+        .routes
+        .iter()
+        .filter(|r| r.route.kind != RouteKind::Api && matches!(r.rendering, "static" | "partial"))
+        .count();
     if analyzed.has_errors() {
         ui::LiveLine::new().fail("Routes", &ui::red("problems found"));
         eprintln!();
@@ -194,7 +198,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
         let pattern = r.route.pattern.to_fs_string();
         let (symbol, size, extra) = match (r.route.kind, r.rendering) {
             (RouteKind::Api, _) => (ui::magenta("ƒ"), String::new(), ui::dim("api")),
-            (_, "static") => {
+            (_, "static" | "partial") => {
                 let pages: Vec<&serde_json::Value> = report["pages"]
                     .as_array()
                     .map(|p| p.iter().filter(|x| x["pattern"].as_str() == Some(pattern.as_str())).collect())
@@ -205,7 +209,13 @@ pub fn run(args: &[String]) -> Result<(), String> {
                     (n, Some(s)) => ui::dim(&format!("{n} page{} · revalidate {s}s", if n == 1 { "" } else { "s" })),
                     (n, None) => ui::dim(&format!("{n} page{}", if n == 1 { "" } else { "s" })),
                 };
-                (ui::green("○"), if bytes > 0 { ui::bytes(bytes) } else { String::new() }, extra)
+                let holes: u64 = pages.iter().filter_map(|p| p["holes"].as_u64()).sum();
+                let (symbol, extra) = if r.rendering == "partial" || holes > 0 {
+                    (ui::cyan("◐"), format!("{extra}{}", ui::dim(" · shell + dynamic holes")))
+                } else {
+                    (ui::green("○"), extra)
+                };
+                (symbol, if bytes > 0 { ui::bytes(bytes) } else { String::new() }, extra)
             }
             _ => (ui::yellow("λ"), String::new(), ui::dim(r.dynamic_reason.as_deref().unwrap_or("dynamic"))),
         };
@@ -215,8 +225,9 @@ pub fn run(args: &[String]) -> Result<(), String> {
     eprintln!(
         "   {}",
         ui::dim(&format!(
-            "{}  static (pre-rendered)   {}  dynamic (server-rendered)   {}  API",
+            "{}  static (pre-rendered)   {}  partial (pre-rendered shell, per-request holes)   {}  dynamic (server-rendered)   {}  API",
             ui::green("○"),
+            ui::cyan("◐"),
             ui::yellow("λ"),
             ui::magenta("ƒ")
         ))
@@ -263,6 +274,15 @@ fn report_build(report: &next_rust_build::BuildReport) {
         }
         ui::done_step("Classes", &detail);
     }
+    if let Some(n) = &report.names {
+        let mut detail = format!("{} shortened in pages, stylesheets and scripts", plural(n.renamed, "name"));
+        if !n.kept.is_empty() {
+            // Why a name had to stay is what an author needs when one did:
+            // the full list with its reasons is in the build report file.
+            detail.push_str(&format!(" · {} keep their spelling", n.kept.len()));
+        }
+        ui::done_step("Names", &detail);
+    }
     if !report.scripts.is_empty() {
         let before: usize = report.scripts.iter().map(|s| s.bytes).sum();
         let after: usize = report.scripts.iter().map(|s| s.minified).sum();
@@ -277,6 +297,111 @@ fn report_build(report: &next_rust_build::BuildReport) {
             detail.push_str(&format!(" · {renamed} class names rewritten"));
         }
         ui::done_step("Scripts", &detail);
+    }
+    if !report.wasm.is_empty() {
+        let raw: usize = report.wasm.iter().map(|m| m.bytes).sum();
+        let br: usize = report.wasm.iter().map(|m| m.brotli.unwrap_or(m.bytes)).sum();
+        let unoptimized = report.wasm.iter().filter(|m| !m.optimized).count();
+        let mut detail = format!(
+            "{} · {} → {} brotli",
+            plural(report.wasm.len(), "module"),
+            ui::bytes(raw as u64),
+            ui::bytes(br as u64)
+        );
+        if unoptimized > 0 {
+            detail.push_str(&format!(" · {unoptimized} not run through wasm-opt"));
+        }
+        ui::done_step("WebAssembly", &detail);
+        // One line per module, under the summary's detail column: what the
+        // browser downloads, and which islands it hydrates.
+        for m in &report.wasm {
+            let size = match m.brotli {
+                Some(br) => format!("{} · {} brotli", ui::bytes(m.bytes as u64), ui::bytes(br as u64)),
+                None => ui::bytes(m.bytes as u64),
+            };
+            // The shim is downloaded with the module, so it belongs on the
+            // same line: its budget is read next to the module's size.
+            let shim = match &m.shim {
+                Some(s) => {
+                    let served = s.minified.unwrap_or(s.bytes);
+                    match s.brotli {
+                        Some(br) => format!(
+                            " · shim {} → {} · {} brotli",
+                            ui::bytes(s.bytes as u64),
+                            ui::bytes(served as u64),
+                            ui::bytes(br as u64)
+                        ),
+                        None => format!(" · shim {} → {}", ui::bytes(s.bytes as u64), ui::bytes(served as u64)),
+                    }
+                }
+                None => String::new(),
+            };
+            eprintln!("     {}  {}", ui::pad(&format!("{}.wasm", m.module), 22), ui::dim(&format!("{size}{shim}")));
+            // The wasm runtime against the JavaScript one it replaces. This
+            // is the number a project most needs before shipping `[client]
+            // runtime = "wasm"`, so it gets its own line rather than a suffix.
+            if let Some(r) = &m.runtime {
+                let times = r.wasm_brotli as f64 / r.js_brotli.max(1) as f64;
+                eprintln!(
+                    "     {}  {}",
+                    ui::pad("", 22),
+                    ui::dim(&format!(
+                        "runtime: a separate {} brotli module vs {} brotli as JavaScript ({}, {times:.0}× the \
+                         download)",
+                        ui::bytes(r.wasm_brotli as u64),
+                        ui::bytes(r.js_brotli as u64),
+                        ui::bytes(r.js_bytes as u64)
+                    ))
+                );
+            }
+            // What each island costs inside the shared module. `exclusive` is
+            // roughly what deleting it gives back; code two islands share is
+            // in neither figure's exclusive column, and string literals are
+            // in no island's at all.
+            let mut sized: Vec<&next_rust_build::report::WasmIslandReport> =
+                m.islands.iter().filter(|i| i.exclusive.is_some()).collect();
+            sized.sort_by_key(|i| std::cmp::Reverse(i.exclusive.unwrap_or(0)));
+            let names: Vec<&str> = m.islands.iter().map(|i| i.name.as_str()).collect();
+            // A module whose islands all funnel into one shared dispatcher has
+            // a few bytes exclusive to each and everything else in common. A
+            // column of ten identical rows says nothing; one line does.
+            let biggest = sized.first().and_then(|i| i.exclusive).unwrap_or(0);
+            let telling = biggest * 100 > m.bytes;
+            if sized.is_empty() || !telling {
+                if !names.is_empty() {
+                    eprintln!("     {}  {}", ui::pad("", 22), ui::dim(&ui::truncate(&names.join(", "), 72)));
+                }
+                if !sized.is_empty() {
+                    eprintln!(
+                        "     {}  {}",
+                        ui::pad("", 22),
+                        ui::dim(&format!(
+                            "no island owns more than {} of the code: they share almost all of it",
+                            ui::bytes(biggest as u64)
+                        ))
+                    );
+                }
+            } else {
+                for i in &sized {
+                    let (exclusive, reachable) = (i.exclusive.unwrap_or(0), i.reachable.unwrap_or(0));
+                    eprintln!(
+                        "     {}  {}",
+                        ui::pad("", 22),
+                        ui::dim(&format!(
+                            "{}  {} of code only it reaches · {} including shared",
+                            ui::pad(&ui::truncate(i.name.as_str(), 24), 24),
+                            ui::bytes(exclusive as u64),
+                            ui::bytes(reachable as u64)
+                        ))
+                    );
+                }
+                eprintln!(
+                    "     {}  {}",
+                    ui::pad("", 22),
+                    ui::dim("code bytes only: string literals belong to no island, and wasm-opt inlines across them")
+                );
+            }
+        }
     }
     let compressed: Vec<_> = report.files.iter().filter(|f| f.brotli.is_some()).collect();
     if !compressed.is_empty() {

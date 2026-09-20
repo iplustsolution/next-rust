@@ -3,6 +3,8 @@
 //! Every macro here expands to plain, readable Rust; see each macro's
 //! documentation for its exact expansion.
 
+#![forbid(unsafe_code)]
+
 use std::path::{Path, PathBuf};
 
 use proc_macro::TokenStream;
@@ -10,6 +12,8 @@ use proc_macro2::Span;
 use quote::{format_ident, quote};
 use syn::parse::{Parse, ParseStream};
 use syn::{FnArg, ItemFn, LitStr, Pat, parse_macro_input};
+
+mod jobs;
 
 fn manifest_dir() -> PathBuf {
     std::env::var_os("CARGO_MANIFEST_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."))
@@ -61,11 +65,35 @@ impl Parse for ClientArgs {
             return Ok(ClientArgs { module: None });
         }
         let key: syn::Ident = input.parse()?;
-        if key != "module" {
-            return Err(syn::Error::new(key.span(), "expected `module = \"/path/to/island.js\"`"));
-        }
         input.parse::<syn::Token![=]>()?;
-        Ok(ClientArgs { module: Some(input.parse()?) })
+        let value: LitStr = input.parse()?;
+        if key == "module" {
+            return Ok(ClientArgs { module: Some(value) });
+        }
+        if key == "script" {
+            // A script in `client/`, or one declared with `client_script!`.
+            let name = value.value();
+            if let Err(e) = script_name(&name) {
+                return Err(syn::Error::new(value.span(), e));
+            }
+            return Ok(ClientArgs { module: Some(LitStr::new(&format!("/_next-rust/client/{name}"), value.span())) });
+        }
+        if key == "wasm" {
+            // An island compiled from the project's `islands/` crate. The
+            // build writes a one-line glue module per island beside the
+            // shared loader and the one `.wasm` every island shares.
+            let name = value.value();
+            if let Err(e) = wasm_island_name(&name) {
+                return Err(syn::Error::new(value.span(), e));
+            }
+            return Ok(ClientArgs {
+                module: Some(LitStr::new(&format!("/_next-rust/client/__nrw/{name}.js"), value.span())),
+            });
+        }
+        Err(syn::Error::new(
+            key.span(),
+            "expected `module = \"/path/to/island.js\"`, `script = \"island.js\"` or `wasm = \"IslandName\"`",
+        ))
     }
 }
 
@@ -80,7 +108,18 @@ impl Parse for ClientArgs {
 /// (`data-nr-text`, `data-nr-on-click="increment:count"`, ...). With
 /// `#[client(module = "/_next-rust/client/islands/chart.js")]` the runtime imports
 /// that ES module (for example `wasm-bindgen` output) and calls its
-/// `hydrate(element, props)` export.
+/// `hydrate(element, props)` export. `#[client(script = "chart.js")]` is
+/// short for the module `client/chart.js`, a file or a script declared in
+/// Rust with `client_script!("chart.js", r#"…"#)`.
+///
+/// `#[client(wasm = "Chart")]` takes the island's behaviour from the
+/// project's `islands/` crate instead, which `[build] wasm_islands = true`
+/// compiles to one WebAssembly module shared by every island on the site;
+/// the name is the `hydrate_Chart` export in it. The logic then ships as a
+/// binary rather than as JavaScript, which is much harder to read — but it
+/// is **not hidden**: the module can be downloaded and disassembled, and its
+/// string literals stay readable. It is not a security boundary, so props
+/// are still public and secrets still belong on the server.
 ///
 /// Expansion (simplified):
 ///
@@ -275,6 +314,50 @@ pub fn server_action(attr: TokenStream, item: TokenStream) -> TokenStream {
         }
     }
     .into()
+}
+
+/// Declare a background job: an `async fn` with one serialisable input.
+///
+/// ```ignore
+/// #[job(queue = "mail", max_attempts = 5, timeout = "30s")]
+/// pub async fn send_welcome(input: Welcome) -> Result<(), JobError> { /* ... */ }
+///
+/// enqueue(send_welcome, Welcome { /* ... */ }).await?;          // from anywhere
+/// JobRunner::new().register(send_welcome)               // in main
+/// ```
+///
+/// Accepted signatures: no argument, one input, a `JobContext`, or
+/// `(input, JobContext)`; the return type is `()` or `Result<(), E>` where
+/// `E` converts into `JobError` (any `std::error::Error` does).
+///
+/// Arguments, all optional: `name = "…"` (the stored name, default the
+/// function name; keep it stable across deployments), `queue = "…"`,
+/// `max_attempts = n`, `priority = n` (-100..=100), `timeout = "30s"`,
+/// `backoff = "5s"` and `max_backoff = "1h"` (exponential, with jitter), and
+/// `path = "next_rust_jobs"` for crates that depend on `next-rust-jobs`
+/// directly instead of `next-rust`.
+///
+/// Expansion: a unit struct named like the function that implements
+/// `next_rust::jobs::Job`, with the function itself as `name::perform(..)`.
+#[proc_macro_attribute]
+pub fn job(attr: TokenStream, item: TokenStream) -> TokenStream {
+    jobs::job(attr.into(), item.into()).unwrap_or_else(syn::Error::into_compile_error).into()
+}
+
+/// Declare a scheduled task: `#[cron("0 */5 * * * *")] pub async fn cleanup() { /* ... */ }`,
+/// registered with `JobRunner::cron(cleanup)`.
+///
+/// The expression has five fields (`minute hour day month weekday`) or six
+/// (seconds first), or is `@hourly`, `@daily`, `@weekly`, `@monthly`,
+/// `@yearly` or `@every 5m`; times are UTC. `name = "…"` overrides the task
+/// name (default: the function name), which is also the name of the lock
+/// that keeps a tick from running on more than one instance.
+///
+/// Expansion: a unit struct named like the function that implements
+/// `next_rust::jobs::CronTask`, with the function itself as `name::perform()`.
+#[proc_macro_attribute]
+pub fn cron(attr: TokenStream, item: TokenStream) -> TokenStream {
+    jobs::cron(attr.into(), item.into()).unwrap_or_else(syn::Error::into_compile_error).into()
 }
 
 /// Reference a server action: `action!(create_user)` or
@@ -531,6 +614,112 @@ impl CssUsage {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Scripts and stylesheets written in Rust
+// ---------------------------------------------------------------------------
+
+/// A script path as `client_script!` and `asset_script!` take it: relative,
+/// `/`-separated, ending in `.js` or `.mjs`.
+fn script_name(name: &str) -> Result<(), String> {
+    let bad = name.is_empty()
+        || name.starts_with('/')
+        || name.contains('\\')
+        || name.split('/').any(|s| s.is_empty() || s == ".." || s.starts_with('.'));
+    if bad {
+        return Err(format!("`{name}` is not a script path; write it like \"islands/chart.js\""));
+    }
+    if !(name.ends_with(".js") || name.ends_with(".mjs")) {
+        return Err(format!("`{name}` must end in .js or .mjs"));
+    }
+    Ok(())
+}
+
+/// A wasm island name as `#[client(wasm = "…")]` takes it. It becomes both a
+/// URL segment and the `hydrate_<name>` export looked up in the module, so it
+/// is restricted to what is safe in both: an identifier.
+fn wasm_island_name(name: &str) -> Result<(), String> {
+    let ok = !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if ok {
+        Ok(())
+    } else {
+        Err(format!("`{name}` is not a wasm island name; write the name of a `hydrate_…` export, like \"AuthSwitch\""))
+    }
+}
+
+struct NamedSource {
+    name: LitStr,
+}
+
+impl Parse for NamedSource {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let name: LitStr = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+        let _source: LitStr = input.parse()?;
+        let _ = input.parse::<Option<syn::Token![,]>>()?;
+        if !input.is_empty() {
+            return Err(input.error("expected `(\"name.js\", r#\"source\"#)`"));
+        }
+        Ok(NamedSource { name })
+    }
+}
+
+fn declared_script(input: TokenStream) -> TokenStream {
+    let parsed = parse_macro_input!(input as NamedSource);
+    if let Err(e) = script_name(&parsed.name.value()) {
+        return error(parsed.name.span(), e);
+    }
+    // The build script reads the source out of this file; nothing of it is
+    // compiled into the crate from here.
+    quote!(
+        const _: () = ();
+    )
+    .into()
+}
+
+/// Declare a browser module in Rust instead of a file in `client/`:
+///
+/// ```ignore
+/// // src/client/chart.rs
+/// next_rust::client_script!("chart.js", r#"
+/// import { scale } from "./scale.js";
+/// export function hydrate(element, props) { /* ... */ }
+/// "#);
+/// ```
+///
+/// The build treats it exactly like the file `client/chart.js`: served at
+/// `/_next-rust/client/chart.js`, scanned for classes, rewritten with the
+/// short class names and minified in release builds, and importable from
+/// other modules by its relative path. Use it from an island with
+/// `#[client(script = "chart.js")]`. Write the macro at module level, in a
+/// file under `src/` or the app directory; a file in `client/` with the same
+/// name wins.
+#[proc_macro]
+pub fn client_script(input: TokenStream) -> TokenStream {
+    declared_script(input)
+}
+
+/// Declare a script of `assets/` in Rust: `asset_script!("js/site.js",
+/// r#"…"#)` stands for the file `assets/js/site.js`, and
+/// `asset!("js/site.js")` gives its fingerprinted URL. See `client_script!`.
+#[proc_macro]
+pub fn asset_script(input: TokenStream) -> TokenStream {
+    declared_script(input)
+}
+
+/// Declare a stylesheet in Rust: list the file that holds it in `[tailwind]
+/// stylesheets` (`stylesheets = ["src/styles/theme.rs"]`) and the CSS inside
+/// `stylesheet!(r#"…"#)` is compiled like a `.css` file listed there.
+#[proc_macro]
+pub fn stylesheet(input: TokenStream) -> TokenStream {
+    let _css = parse_macro_input!(input as LitStr);
+    quote!(
+        const _: () = ();
+    )
+    .into()
+}
+
 /// Fingerprinted URL of a file in the project's `assets/` directory,
 /// computed at compile time: `asset!("fonts/inter.woff2")` →
 /// `"/_next-rust/assets/fonts/inter.1a2b3c4d5e6f7a8b.woff2"`. Served with
@@ -543,7 +732,16 @@ pub fn asset(input: TokenStream) -> TokenStream {
     if rel.split('/').any(|s| s == ".." || s.starts_with('.')) {
         return error(lit.span(), "asset paths must stay inside assets/ and not reference hidden files");
     }
-    let path = manifest_dir().join("assets").join(rel);
+    let mut path = manifest_dir().join("assets").join(rel);
+    if !path.is_file() {
+        // A script declared with `asset_script!`: the build script wrote it out.
+        let declared = std::env::var_os("OUT_DIR")
+            .map(|out| PathBuf::from(out).join("next_rust_src").join("assets").join(rel))
+            .filter(|p| p.is_file());
+        if let Some(declared) = declared {
+            path = declared;
+        }
+    }
     let bytes = match std::fs::read(&path) {
         Ok(b) => b,
         Err(e) => return error(lit.span(), format!("cannot read {}: {e}", path.display())),

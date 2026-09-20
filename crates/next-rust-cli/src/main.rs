@@ -1,5 +1,7 @@
 //! `next-rust` — the Next Rust command-line interface.
 
+#![forbid(unsafe_code)]
+
 mod commands;
 mod project;
 mod scaffold;
@@ -8,6 +10,7 @@ mod tailwind;
 mod templates;
 mod ui;
 mod update_check;
+mod wasm;
 
 /// The Next Rust source repository.
 pub const REPO_URL: &str = "https://github.com/iplustsolution/next-rust";
@@ -31,6 +34,7 @@ COMMANDS:
     generate <kind> <route>
                         Scaffold a file: page, layout, loading, error,
                         not-found, template, api, middleware
+    generate islands    Set up WebAssembly: the islands/ crate and the keys
     doctor              Diagnose the project and toolchain
     docker              Write a production Dockerfile
     editor              Add VS Code snippets and settings to this project

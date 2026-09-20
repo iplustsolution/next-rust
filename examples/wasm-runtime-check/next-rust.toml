@@ -1,0 +1,12 @@
+# The bed for driving the WebAssembly browser runtime in a real browser.
+#
+# Everything here is a default except `[client] runtime`, which is the one
+# switch this example exists to exercise: the same behaviour as the
+# JavaScript runtime, served from `crates/next-rust-runtime` compiled to
+# WebAssembly behind the logic-free shim.
+
+[client]
+runtime = "wasm"
+
+[tailwind]
+enabled = false

@@ -19,6 +19,12 @@ compression = ["next-rust-server/compression"]
 websocket = ["next-rust-server/websocket"]
 http2 = ["next-rust-server/http2"]
 tracing = ["next-rust-server/tracing"]
+# The Redis backend of `next_rust::jobs` (the in-memory one is always there).
+jobs-redis = ["next-rust-jobs/redis"]
+# `next_rust::auth`: sealed tokens, sessions, passwords, codes, rate limits.
+auth = ["dep:next-rust-auth"]
+# ... plus its Redis limiter and grace store.
+auth-redis = ["auth", "next-rust-auth/redis"]
 
 [dependencies]
 next-rust-core.workspace = true
@@ -27,8 +33,10 @@ next-rust-view.workspace = true
 next-rust-cache.workspace = true
 next-rust-server = { workspace = true, default-features = false }
 next-rust-macros.workspace = true
+next-rust-jobs.workspace = true
 next-rust-ui.workspace = true
 next-rust-icons.workspace = true
+next-rust-auth = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 

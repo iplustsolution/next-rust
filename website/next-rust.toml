@@ -1,0 +1,27 @@
+[app]
+directory = "app"
+lang = "en"
+
+[rendering]
+default = "auto"
+streaming = true
+client_navigation = true
+
+[loader]
+enabled = true
+color = "#ff8a4c"
+
+[client]
+runtime = "wasm"
+
+[ui]
+script = "wasm"
+
+[build]
+inline_assets = true
+optimize = "size"
+minify_js = true
+drop_unused_classes = true
+wasm_islands = false
+wasm_opt = true
+wasm_keep_names = false

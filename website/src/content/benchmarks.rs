@@ -4,6 +4,45 @@ use next_rust::prelude::*;
 
 pub fn content() -> Node {
     fragment![
+        p![
+            "A benchmark runs one operation many times and measures how long it takes. The numbers on this page come from the harness in the framework's own repository; nothing here is an estimate.",
+        ],
+        div![
+            class("callout"),
+            p![
+                strong!["In plain words. "],
+                "This page answers \"how much time does the framework itself add to a request?\" The answer is measured in millionths of a second. For a real site that is rarely the number that matters: a database query or a call to another service usually takes a thousand times longer. Read these figures as proof that the framework is not the bottleneck, not as a promise about your site's speed.",
+            ],
+        ],
+        h2![id("units"), a![class("anchor"), href("#units"), "The units"]],
+        div![
+            class("table-wrap"),
+            table![
+                thead![tr![th!["unit"], th!["is"], th!["for scale"]]],
+                tbody![
+                    tr![
+                        td!["ms (millisecond)"],
+                        td!["a thousandth of a second"],
+                        td!["a blink of an eye is about 100 ms"]
+                    ],
+                    tr![td!["µs (microsecond)"], td!["a millionth of a second"], td!["1,000 µs = 1 ms"]],
+                    tr![td!["ns (nanosecond)"], td!["a billionth of a second"], td!["1,000 ns = 1 µs"]],
+                    tr![
+                        td!["k/s, M/s"],
+                        td!["thousand / million operations per second"],
+                        td!["the inverse of the time per iteration"]
+                    ],
+                ],
+            ],
+        ],
+        h2![id("running"), a![class("anchor"), href("#running"), "Running them yourself"]],
+        p![
+            "The harness is part of the framework's repository, not of an application. Clone ",
+            code!["https://github.com/iplustsolution/next-rust"],
+            " and run this from its root folder. ",
+            code!["--release"],
+            " matters: an unoptimized build is many times slower and says nothing.",
+        ],
         pre![code![
             class("language-sh"),
             r"cargo run --release -p next-rust-benchmarks            # ~30 s
@@ -22,6 +61,13 @@ cargo run --release -p next-rust-benchmarks -- --quick",
             code!["lto = \"thin\""],
             "), other applications running. These are ",
             strong!["single-machine numbers. No comparison with other frameworks was made, and none is claimed.",],
+        ],
+        p![
+            "Each row is one operation. \"Match a route\" is finding which page answers a URL; \"scan + flatten + validate\" is reading the ",
+            code!["app/"],
+            " folder at build time; ",
+            code!["render_static"],
+            " is turning a view into HTML; an \"SSR request\" is the whole path from request to rendered response, without the network.",
         ],
         div![
             class("table-wrap"),
@@ -68,6 +114,28 @@ cargo run --release -p next-rust-benchmarks -- --quick",
                 " runs the load generator in the same process and on the same machine as the server, without ",
                 code!["Accept-Encoding"],
                 " (no compression) and with request logging disabled. It measures the full hyper + framework stack, including rendering a 50-item page per request.",
+            ],
+        ],
+        h2![id("your-own-app"), a![class("anchor"), href("#your-own-app"), "Measuring your own app"]],
+        p![
+            "The numbers that matter are those of your site on your server. Build the production binary first (",
+            code!["next-rust build"],
+            ", then ",
+            code!["next-rust start"],
+            "); a development build is unoptimized and reads files from disk, so measuring it is the most common mistake. Then:",
+        ],
+        ul![
+            li![
+                code!["next-rust analyze"],
+                " reports the size of the binary and the render time of every pre-rendered page (from ",
+                code!["target/next-rust/build.json"],
+                ").",
+            ],
+            li![
+                "Point a load generator of your choice at the running binary from a second machine; on the same machine the generator competes with the server for the CPU.",
+            ],
+            li![
+                "Compare like with like: the HTTP figure above was taken without compression and without request logging.",
             ],
         ],
         h2![id("not-yet-measured"), a![class("anchor"), href("#not-yet-measured"), "Not yet measured"]],

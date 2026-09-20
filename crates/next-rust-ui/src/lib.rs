@@ -36,7 +36,11 @@
 //! back to the native control (a `<select>`, a `<dialog>`, `<details>`), so
 //! pages keep working.
 
-#![forbid(unsafe_code)]
+// `deny` rather than `forbid`: `wasm::host` declares the one imported
+// function the WebAssembly build calls the browser through, which no safe
+// Rust can express. It is the only exception in the crate, it is annotated
+// there, and nothing else may add another.
+#![deny(unsafe_code)]
 
 use std::borrow::Cow;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -46,40 +50,66 @@ use next_rust_view::{Attr, Element, Node, Part, Stylesheet, View};
 mod avatar;
 mod button;
 mod card;
+mod charts;
+mod command;
+mod data;
 mod date_picker;
 mod display;
+mod drawer;
 mod feedback;
+mod forms;
 mod icons;
 mod input;
 mod layout;
+mod menu;
 mod navigation;
 mod overlay;
 mod press;
 mod script;
+mod sections;
 mod select;
 #[doc(hidden)]
 pub mod style;
 mod table;
+mod toast;
 mod toggle;
 
-pub use avatar::{Avatar, AvatarGroup};
+pub use avatar::{Avatar, AvatarGroup, AvatarStatus};
 pub use button::{Button, ButtonGroup};
 pub use card::{Card, CardBody, CardFooter, CardHeader, Shadow};
+pub use charts::{BarChart, Donut, LineChart, Sparkline};
+pub use command::{CommandGroup, CommandItem, CommandPalette};
+pub use data::{
+    Banner, Callout, CalloutKind, ChipGroup, Code, CodeBlock, DescriptionItem, DescriptionList, Figure, List, ListItem,
+    Meter, ResultBlock, ResultStatus, SortDirection, SortHeader, TableSelect, TableSelectAll, VideoEmbed,
+};
 pub use date_picker::DatePicker;
 pub use display::{
     Alert, Badge, CircularProgress, EmptyState, Kbd, Placement, Progress, Side, Skeleton, Stat, Tooltip, Trend,
 };
+pub use drawer::{ConfirmDialog, Drawer, DrawerSide, LoadingOverlay};
 pub use feedback::{Chip, Divider, Spinner};
+pub use forms::{
+    ColorPicker, Combobox, DateRangePicker, FileUpload, FormActions, FormField, FormSection, NumberInput, PinInput,
+    Rating, SearchInput, Segment, SegmentPart, SegmentedControl, Slider, TagsInput, TimePicker,
+};
 pub use input::{Input, LabelPlacement, PasswordInput, Textarea};
 pub use layout::{Align, AppShell, Container, Grid, Justify, Navbar, NavbarItem, Sidebar, SidebarItem, Stack, Width};
+pub use menu::{ContextMenu, Dropdown, DropdownItem, DropdownSection, MenuAlign, Popover};
 pub use navigation::{
     Accordion, AccordionItem, AccordionVariant, BreadcrumbItem, Breadcrumbs, Step, StepStatus, Steps, Tab, Tabs,
     TabsVariant,
 };
 pub use overlay::{Modal, ModalBody, ModalFooter, ModalPlacement};
 pub use press::Press;
+pub use sections::{
+    AspectRatio, Bento, BentoItem, Breakpoint, Carousel, CarouselItem, Cta, Faq, FaqPart, Feature, FeatureGrid, Footer,
+    FooterColumn, FooterLink, Hero, Hide, LogoCloud, Marquee, Pagination, PricingCard, PricingFeature, PricingTable,
+    ScrollArea, Section, Show, Spacer, Sticky, Testimonial, Timeline, TimelineItem,
+};
 pub use select::{Select, SelectItem};
 pub use table::Table;
+pub use toast::{Toast, ToastPlacement, Toaster};
 pub use toggle::{Checkbox, Radio, RadioGroup, Switch};
 
 /// The component stylesheet. Components add it to the page themselves; only
@@ -94,18 +124,83 @@ pub static UI_CSS: Stylesheet = Stylesheet {
 
 pub use script::{UI_JS, UI_JS_MIN, rename_classes as rename_script_classes};
 
+/// Every value the components write into `data-nr-ui`.
+///
+/// The browser layer keys off these and nothing else, whether it is the
+/// script or the wasm module, so this list is the contract between the
+/// renderer and both of them. `tests/components.rs` checks that the markup
+/// writes no other value.
+#[doc(hidden)]
+pub const UI_WASM_KINDS: &[&str] = &[
+    "alert",
+    "avatar",
+    "banner",
+    "carousel",
+    "checkall",
+    "code",
+    "color",
+    "combobox",
+    "command",
+    "context",
+    "datepicker",
+    "dropdown",
+    "field",
+    "modal",
+    "popover",
+    "press",
+    "select",
+    "shell",
+    "slider",
+    "tabs",
+    "tags",
+    "toaster",
+    "upload",
+];
+
+/// Every class, attribute and custom property the wasm module names.
+///
+/// The module itself is the `next-rust-ui-wasm` crate; this list is the part
+/// of it the *build* has to know about.
+///
+/// A release build shortens `nr-*` classes and `data-*` attributes in the
+/// markup, the stylesheet and the scripts it can rewrite. It cannot rewrite
+/// a wasm module — the names live in a data segment whose offsets a shorter
+/// string would move — so with `[ui] script = "wasm"` the build keeps these
+/// names instead, the same way it keeps the names a file under `public/`
+/// uses. Passing the list rather than parsing the module keeps that decision
+/// reviewable.
+#[doc(hidden)]
+pub const UI_WASM_NAMES: &str = include_str!("wasm_names.txt");
+
 /// Classes the components render that no stylesheet rule starts with (hooks
 /// for the script and for your own CSS). Release builds shorten them with the
 /// stylesheet's classes; `tests/components.rs` keeps the list complete.
 #[doc(hidden)]
 pub const EXTRA_CLASSES: &[&str] = &[
+    "nr-barchart",
+    "nr-bento-2",
+    "nr-bento-c1",
+    "nr-bento-head",
+    "nr-bento-r1",
+    "nr-carousel-1",
     "nr-checkbox-label",
     "nr-cols-1",
+    "nr-combobox",
     "nr-datepicker-toggle",
+    "nr-donut",
+    "nr-footer-column",
+    "nr-footer-legal",
+    "nr-formfield-control",
+    "nr-formsection-head",
+    "nr-label-none",
     "nr-label-outside",
+    "nr-linechart",
     "nr-modal-center",
     "nr-password",
+    "nr-price-cta",
     "nr-radio-label",
+    "nr-rating-static",
+    "nr-section-inner",
     "nr-shell-with-sidebar",
     "nr-switch-label",
     "nr-tab-title",
@@ -338,6 +433,101 @@ pub(crate) fn apply(el: &mut Element, attrs: Vec<Attr>) {
         el.set_attr(a);
     }
 }
+
+/// `class="a b c"` from the non-empty names.
+pub(crate) fn class_list(classes: &[&str]) -> Attr {
+    Attr::new("class", classes.iter().filter(|c| !c.is_empty()).copied().collect::<Vec<_>>().join(" "))
+}
+
+/// `<tag class="…">` for an inner part.
+pub(crate) fn part(tag: &'static str, class: &'static str) -> Element {
+    Element::new(tag).with(Attr::new("class", class))
+}
+
+/// The first element of `nodes`, looking inside fragments (components are a
+/// stylesheet plus an element).
+pub(crate) fn first_element(nodes: &mut [Node]) -> Option<&mut Element> {
+    for node in nodes {
+        match node {
+            Node::Element(el) => return Some(el),
+            Node::Fragment(inner) => {
+                if let Some(el) = first_element(inner) {
+                    return Some(el);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// A copy of static markup (text, elements, stylesheets). Async boundaries
+/// and holes cannot be copied and are left out.
+pub(crate) fn clone_node(node: &Node) -> Node {
+    match node {
+        Node::Text(t) => Node::Text(t.clone()),
+        Node::Raw(t) => Node::Raw(t.clone()),
+        Node::Element(el) => Node::Element(Box::new(Element {
+            tag: el.tag.clone(),
+            attrs: el.attrs.clone(),
+            children: el.children.iter().map(clone_node).collect(),
+            void: el.void,
+        })),
+        Node::Fragment(nodes) => Node::Fragment(nodes.iter().map(clone_node).collect()),
+        Node::Style(sheet) => Node::Style(sheet),
+        _ => Node::Empty,
+    }
+}
+
+/// A number without a trailing `.0`.
+pub(crate) fn trim_float(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 { format!("{}", v as i64) } else { format!("{v}") }
+}
+
+/// Builder setters: `name: text` (`Option<String>`), `name: node`
+/// (`Option<Node>` from a view), `name: maybe` (`Option<String>` from
+/// [`MaybeText`]), `name: val<T>` (`T`), `name: opt<T>` (`Option<T>`).
+macro_rules! props {
+    ($( $(#[$m:meta])* $name:ident : $kind:ident $(<$ty:ty>)? ),* $(,)?) => {
+        $( $crate::props!(@one [$(#[$m])*] $name $kind $($ty)?); )*
+    };
+    (@one [$(#[$m:meta])*] $name:ident text) => {
+        $(#[$m])*
+        pub fn $name(mut self, v: impl Into<String>) -> Self {
+            self.$name = Some(v.into());
+            self
+        }
+    };
+    (@one [$(#[$m:meta])*] $name:ident maybe) => {
+        $(#[$m])*
+        pub fn $name(mut self, v: impl $crate::MaybeText) -> Self {
+            self.$name = v.into_text();
+            self
+        }
+    };
+    (@one [$(#[$m:meta])*] $name:ident node) => {
+        $(#[$m])*
+        pub fn $name(mut self, v: impl next_rust_view::View) -> Self {
+            self.$name = Some(v.into_node());
+            self
+        }
+    };
+    (@one [$(#[$m:meta])*] $name:ident val $ty:ty) => {
+        $(#[$m])*
+        pub fn $name(mut self, v: $ty) -> Self {
+            self.$name = v;
+            self
+        }
+    };
+    (@one [$(#[$m:meta])*] $name:ident opt $ty:ty) => {
+        $(#[$m])*
+        pub fn $name(mut self, v: $ty) -> Self {
+            self.$name = Some(v);
+            self
+        }
+    };
+}
+pub(crate) use props;
 
 /// The element plus the stylesheet, as a node.
 pub(crate) fn styled(el: Element) -> Node {
@@ -707,4 +897,543 @@ macro_rules! Tabs {
 #[macro_export]
 macro_rules! Tooltip {
     ($($body:tt)*) => { $crate::__ui_munch!([$crate::Tooltip::new()] $($body)*) };
+}
+
+/// Build a [`BarChart`](struct@crate::BarChart): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! BarChart {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::BarChart::new()] $($body)*) };
+}
+
+/// Build a [`Donut`](struct@crate::Donut): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Donut {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Donut::new()] $($body)*) };
+}
+
+/// Build a [`LineChart`](struct@crate::LineChart): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! LineChart {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::LineChart::new()] $($body)*) };
+}
+
+/// Build a [`Sparkline`](struct@crate::Sparkline): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Sparkline {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Sparkline::new()] $($body)*) };
+}
+
+/// Build a [`CommandGroup`](struct@crate::CommandGroup): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! CommandGroup {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::CommandGroup::new()] $($body)*) };
+}
+
+/// Build a [`CommandItem`](struct@crate::CommandItem): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! CommandItem {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::CommandItem::new()] $($body)*) };
+}
+
+/// Build a [`CommandPalette`](struct@crate::CommandPalette): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! CommandPalette {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::CommandPalette::new()] $($body)*) };
+}
+
+/// Build a [`Banner`](struct@crate::Banner): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Banner {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Banner::new()] $($body)*) };
+}
+
+/// Build a [`Callout`](struct@crate::Callout): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Callout {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Callout::new()] $($body)*) };
+}
+
+/// Build a [`ChipGroup`](struct@crate::ChipGroup): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! ChipGroup {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::ChipGroup::new()] $($body)*) };
+}
+
+/// Build a [`Code`](struct@crate::Code): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Code {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Code::new()] $($body)*) };
+}
+
+/// Build a [`CodeBlock`](struct@crate::CodeBlock): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! CodeBlock {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::CodeBlock::new()] $($body)*) };
+}
+
+/// Build a [`DescriptionItem`](struct@crate::DescriptionItem): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! DescriptionItem {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::DescriptionItem::new()] $($body)*) };
+}
+
+/// Build a [`DescriptionList`](struct@crate::DescriptionList): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! DescriptionList {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::DescriptionList::new()] $($body)*) };
+}
+
+/// Build a [`Figure`](struct@crate::Figure): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Figure {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Figure::new()] $($body)*) };
+}
+
+/// Build a [`List`](struct@crate::List): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! List {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::List::new()] $($body)*) };
+}
+
+/// Build a [`ListItem`](struct@crate::ListItem): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! ListItem {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::ListItem::new()] $($body)*) };
+}
+
+/// Build a [`Meter`](struct@crate::Meter): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Meter {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Meter::new()] $($body)*) };
+}
+
+/// Build a [`ResultBlock`](struct@crate::ResultBlock): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! ResultBlock {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::ResultBlock::new()] $($body)*) };
+}
+
+/// Build a [`SortHeader`](struct@crate::SortHeader): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! SortHeader {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::SortHeader::new()] $($body)*) };
+}
+
+/// Build a [`TableSelect`](struct@crate::TableSelect): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! TableSelect {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::TableSelect::new()] $($body)*) };
+}
+
+/// Build a [`TableSelectAll`](struct@crate::TableSelectAll): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! TableSelectAll {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::TableSelectAll::new()] $($body)*) };
+}
+
+/// Build a [`VideoEmbed`](struct@crate::VideoEmbed): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! VideoEmbed {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::VideoEmbed::new()] $($body)*) };
+}
+
+/// Build a [`ConfirmDialog`](struct@crate::ConfirmDialog): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! ConfirmDialog {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::ConfirmDialog::new()] $($body)*) };
+}
+
+/// Build a [`Drawer`](struct@crate::Drawer): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Drawer {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Drawer::new()] $($body)*) };
+}
+
+/// Build a [`LoadingOverlay`](struct@crate::LoadingOverlay): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! LoadingOverlay {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::LoadingOverlay::new()] $($body)*) };
+}
+
+/// Build a [`ColorPicker`](struct@crate::ColorPicker): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! ColorPicker {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::ColorPicker::new()] $($body)*) };
+}
+
+/// Build a [`Combobox`](struct@crate::Combobox): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Combobox {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Combobox::new()] $($body)*) };
+}
+
+/// Build a [`DateRangePicker`](struct@crate::DateRangePicker): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! DateRangePicker {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::DateRangePicker::new()] $($body)*) };
+}
+
+/// Build a [`FileUpload`](struct@crate::FileUpload): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! FileUpload {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::FileUpload::new()] $($body)*) };
+}
+
+/// Build a [`FormActions`](struct@crate::FormActions): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! FormActions {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::FormActions::new()] $($body)*) };
+}
+
+/// Build a [`FormField`](struct@crate::FormField): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! FormField {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::FormField::new()] $($body)*) };
+}
+
+/// Build a [`FormSection`](struct@crate::FormSection): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! FormSection {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::FormSection::new()] $($body)*) };
+}
+
+/// Build a [`NumberInput`](struct@crate::NumberInput): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! NumberInput {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::NumberInput::new()] $($body)*) };
+}
+
+/// Build a [`PinInput`](struct@crate::PinInput): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! PinInput {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::PinInput::new()] $($body)*) };
+}
+
+/// Build a [`Rating`](struct@crate::Rating): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Rating {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Rating::new()] $($body)*) };
+}
+
+/// Build a [`SearchInput`](struct@crate::SearchInput): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! SearchInput {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::SearchInput::new()] $($body)*) };
+}
+
+/// Build a [`Segment`](struct@crate::Segment): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Segment {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Segment::new()] $($body)*) };
+}
+
+/// Build a [`SegmentedControl`](struct@crate::SegmentedControl): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! SegmentedControl {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::SegmentedControl::new()] $($body)*) };
+}
+
+/// Build a [`Slider`](struct@crate::Slider): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Slider {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Slider::new()] $($body)*) };
+}
+
+/// Build a [`TagsInput`](struct@crate::TagsInput): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! TagsInput {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::TagsInput::new()] $($body)*) };
+}
+
+/// Build a [`TimePicker`](struct@crate::TimePicker): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! TimePicker {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::TimePicker::new()] $($body)*) };
+}
+
+/// Build a [`ContextMenu`](struct@crate::ContextMenu): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! ContextMenu {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::ContextMenu::new()] $($body)*) };
+}
+
+/// Build a [`Dropdown`](struct@crate::Dropdown): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Dropdown {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Dropdown::new()] $($body)*) };
+}
+
+/// Build a [`DropdownItem`](struct@crate::DropdownItem): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! DropdownItem {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::DropdownItem::new()] $($body)*) };
+}
+
+/// Build a [`DropdownSection`](struct@crate::DropdownSection): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! DropdownSection {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::DropdownSection::new()] $($body)*) };
+}
+
+/// Build a [`Popover`](struct@crate::Popover): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Popover {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Popover::new()] $($body)*) };
+}
+
+/// Build an [`AspectRatio`](struct@crate::AspectRatio): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! AspectRatio {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::AspectRatio::new()] $($body)*) };
+}
+
+/// Build a [`Bento`](struct@crate::Bento): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Bento {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Bento::new()] $($body)*) };
+}
+
+/// Build a [`BentoItem`](struct@crate::BentoItem): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! BentoItem {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::BentoItem::new()] $($body)*) };
+}
+
+/// Build a [`Carousel`](struct@crate::Carousel): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Carousel {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Carousel::new()] $($body)*) };
+}
+
+/// Build a [`CarouselItem`](struct@crate::CarouselItem): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! CarouselItem {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::CarouselItem::new()] $($body)*) };
+}
+
+/// Build a [`Cta`](struct@crate::Cta): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Cta {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Cta::new()] $($body)*) };
+}
+
+/// Build a [`Faq`](struct@crate::Faq): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Faq {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Faq::new()] $($body)*) };
+}
+
+/// Build a [`Feature`](struct@crate::Feature): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Feature {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Feature::new()] $($body)*) };
+}
+
+/// Build a [`FeatureGrid`](struct@crate::FeatureGrid): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! FeatureGrid {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::FeatureGrid::new()] $($body)*) };
+}
+
+/// Build a [`Footer`](struct@crate::Footer): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Footer {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Footer::new()] $($body)*) };
+}
+
+/// Build a [`FooterColumn`](struct@crate::FooterColumn): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! FooterColumn {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::FooterColumn::new()] $($body)*) };
+}
+
+/// Build a [`FooterLink`](struct@crate::FooterLink): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! FooterLink {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::FooterLink::new()] $($body)*) };
+}
+
+/// Build a [`Hero`](struct@crate::Hero): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Hero {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Hero::new()] $($body)*) };
+}
+
+/// Build a [`Hide`](struct@crate::Hide): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Hide {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Hide::new()] $($body)*) };
+}
+
+/// Build a [`LogoCloud`](struct@crate::LogoCloud): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! LogoCloud {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::LogoCloud::new()] $($body)*) };
+}
+
+/// Build a [`Marquee`](struct@crate::Marquee): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Marquee {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Marquee::new()] $($body)*) };
+}
+
+/// Build a [`Pagination`](struct@crate::Pagination): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Pagination {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Pagination::new()] $($body)*) };
+}
+
+/// Build a [`PricingCard`](struct@crate::PricingCard): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! PricingCard {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::PricingCard::new()] $($body)*) };
+}
+
+/// Build a [`PricingFeature`](struct@crate::PricingFeature): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! PricingFeature {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::PricingFeature::new()] $($body)*) };
+}
+
+/// Build a [`PricingTable`](struct@crate::PricingTable): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! PricingTable {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::PricingTable::new()] $($body)*) };
+}
+
+/// Build a [`ScrollArea`](struct@crate::ScrollArea): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! ScrollArea {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::ScrollArea::new()] $($body)*) };
+}
+
+/// Build a [`Section`](struct@crate::Section): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Section {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Section::new()] $($body)*) };
+}
+
+/// Build a [`Show`](struct@crate::Show): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Show {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Show::new()] $($body)*) };
+}
+
+/// Build a [`Spacer`](struct@crate::Spacer): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Spacer {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Spacer::new()] $($body)*) };
+}
+
+/// Build a [`Sticky`](struct@crate::Sticky): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Sticky {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Sticky::new()] $($body)*) };
+}
+
+/// Build a [`Testimonial`](struct@crate::Testimonial): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Testimonial {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Testimonial::new()] $($body)*) };
+}
+
+/// Build a [`Timeline`](struct@crate::Timeline): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Timeline {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Timeline::new()] $($body)*) };
+}
+
+/// Build a [`TimelineItem`](struct@crate::TimelineItem): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! TimelineItem {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::TimelineItem::new()] $($body)*) };
+}
+
+/// Build a [`Toast`](struct@crate::Toast): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Toast {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Toast::new()] $($body)*) };
+}
+
+/// Build a [`Toaster`](struct@crate::Toaster): `key = value` sets a property, anything else is
+/// added as an attribute or child.
+#[macro_export]
+macro_rules! Toaster {
+    ($($body:tt)*) => { $crate::__ui_munch!([$crate::Toaster::new()] $($body)*) };
 }

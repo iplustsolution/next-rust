@@ -1,14 +1,14 @@
 //! Static generation: renders static routes into a page cache.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
-use next_rust_cache::{CacheEntry, CacheKey, CacheStore};
+use next_rust_cache::{CacheKey, CacheStore};
 use next_rust_router::Params;
 use serde::Serialize;
 
-use crate::app::{AppInner, Rendering, parse_pattern};
-use crate::render::{NONCE_PLACEHOLDER, render_static_html};
+use crate::app::{AppInner, parse_pattern};
+use crate::render::{StaticRender, nonce_placeholder, render_static_html};
 
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct ExportReport {
@@ -25,6 +25,8 @@ pub struct ExportedPage {
     pub bytes: usize,
     pub millis: u128,
     pub revalidate: Option<u64>,
+    /// `dynamic` holes in the page: above zero, `bytes` is its static shell.
+    pub holes: usize,
 }
 
 pub(crate) async fn prerender(inner: &Arc<AppInner>, store: &dyn CacheStore) -> Result<ExportReport, String> {
@@ -32,7 +34,7 @@ pub(crate) async fn prerender(inner: &Arc<AppInner>, store: &dyn CacheStore) -> 
     let mut failures = Vec::new();
 
     for (index, def) in inner.routes.pages.iter().enumerate() {
-        if def.rendering != Rendering::Static || def.intercept_from.is_some() {
+        if !def.rendering.is_prerendered() || def.intercept_from.is_some() {
             continue;
         }
         let pattern = parse_pattern(def.pattern)?;
@@ -63,12 +65,11 @@ pub(crate) async fn prerender(inner: &Arc<AppInner>, store: &dyn CacheStore) -> 
             }
             let start = Instant::now();
             match render_static_html(inner, index, &path, params.clone()).await {
-                Ok((html, 200)) => {
-                    let revalidate = def.revalidate.or(inner.config.rendering.revalidate);
-                    let entry = CacheEntry::new(html.clone().into_bytes())
-                        .revalidate(revalidate.map(Duration::from_secs))
-                        .tags(def.tags.iter().copied());
-                    let bytes = html.replace(&format!(" nonce=\"{NONCE_PLACEHOLDER}\""), "").len();
+                Ok(render) if render.status == 200 => {
+                    let revalidate = render.revalidate(inner, index);
+                    let entry = render.entry(inner, index, &path);
+                    let bytes = render.html.replace(&format!(" nonce=\"{}\"", nonce_placeholder()), "").len();
+                    let holes = render.shell.as_ref().map_or(0, |s| s.holes());
                     store.set(CacheKey::page(&path), entry).await.map_err(|e| e.to_string())?;
                     report.pages.push(ExportedPage {
                         pattern: def.pattern.to_owned(),
@@ -77,9 +78,12 @@ pub(crate) async fn prerender(inner: &Arc<AppInner>, store: &dyn CacheStore) -> 
                         bytes,
                         millis: start.elapsed().as_millis(),
                         revalidate,
+                        holes,
                     });
                 }
-                Ok((_, status)) => failures.push(format!("{} ({path}): rendered with status {status}", def.source)),
+                Ok(StaticRender { status, .. }) => {
+                    failures.push(format!("{} ({path}): rendered with status {status}", def.source))
+                }
                 Err(res) => {
                     let status = res.status;
                     let text = res.into_text().await;

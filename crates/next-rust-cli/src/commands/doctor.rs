@@ -3,7 +3,7 @@ use std::process::Command;
 
 use next_rust_build::analyze_project;
 
-use crate::{Args, project, ui};
+use crate::{Args, project, ui, wasm};
 
 pub fn run(args: &[String]) -> Result<(), String> {
     if Args::new(args).flag(&["-h", "--help"]) {
@@ -96,6 +96,30 @@ pub fn run(args: &[String]) -> Result<(), String> {
         &format!("port {port} is free"),
         &format!("port {port} is in use (set PORT or [server] port)"),
     );
+
+    // WebAssembly, when this project has anything to do with it. Everything
+    // here fails silently at runtime — a page that renders, looks finished
+    // and does nothing — so it is worth a section of its own rather than a
+    // line, and the problems are the same `NR03xx` diagnostics the build
+    // script emits, rendered in full because here there is room for them.
+    if wasm::relevant(&config) {
+        eprintln!();
+        for c in wasm::checks(&config) {
+            match &c.problem {
+                None => ui::ok(&c.label),
+                Some(d) => {
+                    if c.advisory {
+                        ui::warn(&c.label);
+                    } else {
+                        ui::fail(&c.label);
+                        problems.set(problems.get() + 1);
+                    }
+                    eprintln!("{}", d.render(ui::color()));
+                }
+            }
+        }
+        eprintln!();
+    }
 
     let analyzed = analyze_project(&config);
     for d in analyzed.diagnostics.iter() {

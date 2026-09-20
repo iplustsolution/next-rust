@@ -4,17 +4,39 @@ use next_rust::prelude::*;
 
 pub fn content() -> Node {
     fragment![
+        div![
+            class("callout"),
+            p![
+                strong!["In plain words."],
+                " This page is the honest label on the box. It lists what already works and is tested, what works with known limits, and what isn't built yet, so you can check before you promise a feature to someone. A missing feature usually has a workaround, given in the notes column.",
+            ],
+        ],
         p![
             "Next Rust is pre-1.0: every push to ",
             code!["main"],
-            " is released automatically as a new ",
-            code!["0.0.x"],
-            " version, and the public API may still change.",
+            " is released automatically as a new patch version (",
+            code!["0.1.x"],
+            " at the time of writing), and the public API may still change. \"Pre-1.0\" is the usual way software says: usable, but names and behaviour can still change between versions, so read the changelog when you upgrade.",
         ],
         p![
             "Legend: ✅ implemented and covered by tests · 🟡 implemented with documented limitations · ❌ not implemented yet",
         ],
+        p![
+            strong!["Why it matters:"],
+            " a framework's feature list tells you what was attempted; this page tells you what you can rely on. Abbreviations used below: ",
+            strong!["SSR"],
+            " is server-side rendering (the HTML is produced on the server for each request), ",
+            strong!["SSG"],
+            " is static site generation (pages are produced once, at build time), ",
+            strong!["ISR"],
+            " is incremental static regeneration (a static page is refreshed in the background after a set time), ",
+            strong!["CSP"],
+            " is Content Security Policy (a browser rule that limits which scripts may run), and ",
+            strong!["WASM"],
+            " is WebAssembly (compiled code that runs in the browser).",
+        ],
         h2![id("routing"), a![class("anchor"), href("#routing"), "Routing"]],
+        p!["How addresses map to files in ", code!["app/"], ". Details in ", a![href("/docs/routing"), "Routing"], ".",],
         div![
             class("table-wrap"),
             table![
@@ -42,7 +64,11 @@ pub fn content() -> Node {
                         td!["property-tested against a brute-force definition"],
                     ],
                     tr![td!["configurable/monorepo app directory, separate API directory"], td!["✅"], td![]],
-                    tr![td!["conflict and naming diagnostics"], td!["✅"], td!["35 diagnostic codes"]],
+                    tr![
+                        td!["conflict and naming diagnostics"],
+                        td!["✅"],
+                        td!["43 diagnostic codes across routing, exports and configuration"]
+                    ],
                     tr![td!["symlink loops, Unicode, spaces"], td!["✅"], td![]],
                     tr![td!["parallel routes (", code!["@slot"], ", ", code!["default.rs"], ")"], td!["✅"], td![],],
                     tr![
@@ -55,6 +81,11 @@ pub fn content() -> Node {
             ],
         ],
         h2![id("rendering-data"), a![class("anchor"), href("#rendering-data"), "Rendering & data"]],
+        p![
+            "How pages get their data and become HTML: per request, in advance, or a mix. Details in ",
+            a![href("/docs/rendering"), "Rendering & data"],
+            ".",
+        ],
         div![
             class("table-wrap"),
             table![
@@ -73,6 +104,17 @@ pub fn content() -> Node {
                         ],
                         td!["✅"],
                         td![],
+                    ],
+                    tr![
+                        td![
+                            "partial prerendering (",
+                            code!["dynamic"],
+                            " holes in a cached static shell), fragment caching (",
+                            code!["cached"],
+                            ")",
+                        ],
+                        td!["✅"],
+                        td!["holes stream after the shell; in place for crawlers"],
                     ],
                     tr![
                         td!["streaming SSR (", code!["loading.rs"], ", ", code!["suspense"], ")"],
@@ -103,6 +145,11 @@ pub fn content() -> Node {
             ],
         ],
         h2![id("client"), a![class("anchor"), href("#client"), "Client"]],
+        p![
+            "What runs in the visitor's browser: navigation without reloads, styling, and islands (small interactive parts of a page). Details in ",
+            a![href("/docs/client"), "Client & navigation"],
+            ".",
+        ],
         div![
             class("table-wrap"),
             table![
@@ -134,11 +181,16 @@ pub fn content() -> Node {
                         td!["WASM client components"],
                         td!["🟡"],
                         td![
-                            "protocol supports wasm-bindgen output; the build pipeline (",
-                            code!["cargo build --target wasm32"],
-                            " + ",
-                            code!["wasm-bindgen"],
-                            ") is manual",
+                            code!["#[client(wasm = \"Name\")]"],
+                            " with ",
+                            code!["[build] wasm_islands = true"],
+                            " compiles the project's ",
+                            code!["islands/"],
+                            " crate to one module; that crate is ",
+                            code!["no_std"],
+                            " without dependencies, and props arrive as strings. See ",
+                            a![href("/docs/client"), "Client & navigation"],
+                            ".",
                         ],
                     ],
                     tr![td!["Rust reactive DOM library / fine-grained signals in WASM"], td!["❌"], td![]],
@@ -147,6 +199,9 @@ pub fn content() -> Node {
             ],
         ],
         h2![id("backend"), a![class("anchor"), href("#backend"), "Backend"]],
+        p![
+            "What the server does besides rendering pages: APIs, forms, sessions, background work and the HTTP layer itself.",
+        ],
         div![
             class("table-wrap"),
             table![
@@ -164,6 +219,13 @@ pub fn content() -> Node {
                         td!["✅"],
                         td!["multipart unsupported"],
                     ],
+                    tr![
+                        td![
+                            "every same-origin form sent without a page reload (GET search, POST to a route, live search)"
+                        ],
+                        td!["✅"],
+                        td!["needs the runtime; forms written with ", code!["raw_html"], " alone do not pull it in"],
+                    ],
                     tr![td!["SSE"], td!["✅"], td![]],
                     tr![
                         td!["WebSockets"],
@@ -171,9 +233,16 @@ pub fn content() -> Node {
                         td!["feature ", code!["websocket"], "; covered by compilation, not by an automated test",],
                     ],
                     tr![
-                        td!["background/scheduled jobs, in-process queue"],
-                        td!["🟡"],
-                        td!["interval and daily UTC schedules; no cron expressions or persistent queue"],
+                        td![
+                            a![href("/docs/background-jobs"), "background jobs"],
+                            ": queues, retries, dead letters, cron, graceful shutdown"
+                        ],
+                        td!["✅"],
+                        td![
+                            "in-memory and Redis (feature ",
+                            code!["jobs-redis"],
+                            ") backends, both under one test suite; at-least-once delivery; cron is UTC-only",
+                        ],
                     ],
                     tr![
                         td![
@@ -186,11 +255,22 @@ pub fn content() -> Node {
                     ],
                     tr![td!["native TLS"], td!["❌"], td!["terminate at a proxy (see deployment)"]],
                     tr![td!["HTTP/3"], td!["❌"], td!["terminate at a proxy/CDN"]],
-                    tr![td!["brotli compression"], td!["❌"], td!["gzip only"]],
+                    tr![
+                        td!["response compression"],
+                        td!["✅"],
+                        td![
+                            "Brotli when the browser accepts it, gzip otherwise; embedded files are compressed at build time"
+                        ],
+                    ],
                 ],
             ],
         ],
         h2![id("assets"), a![class("anchor"), href("#assets"), "Assets"]],
+        p![
+            "Static files, stylesheets, images and fonts. Details in ",
+            a![href("/docs/styling-and-assets"), "Styling & assets"],
+            ".",
+        ],
         div![
             class("table-wrap"),
             table![
@@ -212,7 +292,12 @@ pub fn content() -> Node {
                     tr![td!["image resizing, WebP/AVIF conversion"], td!["❌"], td!["endpoint serves originals"],],
                     tr![td![code!["LocalFont"], " (", code!["@font-face"], ", preload)"], td!["✅"], td![]],
                     tr![
-                        td!["JS minification / bundling"],
+                        td!["JS minification of ", code!["client/"], " and ", code!["assets/"], " scripts"],
+                        td!["✅"],
+                        td!["release builds, ", code!["[build] minify_js"]],
+                    ],
+                    tr![
+                        td!["JS bundling"],
                         td!["❌"],
                         td!["the framework ships one hand-written runtime; no user JS bundler"],
                     ],
@@ -221,6 +306,13 @@ pub fn content() -> Node {
             ],
         ],
         h2![id("tooling"), a![class("anchor"), href("#tooling"), "Tooling"]],
+        p![
+            "The ",
+            code!["next-rust"],
+            " command and everything around development and deployment. Details in ",
+            a![href("/docs/cli"), "CLI"],
+            ".",
+        ],
         div![
             class("table-wrap"),
             table![
@@ -286,6 +378,9 @@ pub fn content() -> Node {
             ],
         ],
         h2![id("publishing"), a![class("anchor"), href("#publishing"), "Publishing"]],
+        p![
+            "Notes for maintainers on how the crates reach crates.io, Rust's package registry. App authors can skip this section.",
+        ],
         ul![
             li![
                 "The crate names ",
@@ -335,8 +430,8 @@ pub fn content() -> Node {
             ],
         ],
         h2![id("roadmap-proposed"), a![class("anchor"), href("#roadmap-proposed"), "Roadmap (proposed)"]],
+        p!["Proposed next steps, in rough order. None of these is a promise or has a date:"],
         ol![
-            li![code!["next-rust build --wasm"], ": compile and bind WASM island crates automatically."],
             li!["Image optimizer behind an ", code!["image"], " feature (resize, WebP; AVIF optional)."],
             li!["Native TLS (rustls) behind a ", code!["tls"], " feature; HTTP/3 evaluation (quinn/h3)."],
             li!["Parallel static generation."],
